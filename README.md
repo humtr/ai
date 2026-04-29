@@ -1,6 +1,6 @@
-# ai-stack
+# ai-gate
 
-Termux AI command stack.
+Local Termux AI gateway for routing Codex, Gemini, Hermes, and bridge workflows.
 
 ## Live commands
 
@@ -36,8 +36,8 @@ Shared libs:
 
 Verified snapshots:
 
-- `~/storage/downloads/termux/ai-stack-final-*`
-- `~/storage/downloads/termux/ai-stack-final-*.tar.gz`
+- `~/storage/downloads/termux/ai-gate-final-*`
+- `~/storage/downloads/termux/ai-gate-final-*.tar.gz`
 
 ## Safety
 
