@@ -32,3 +32,13 @@ history
 
 # Android / Termux noisy files
 .DS_Store
+
+# local verified snapshots / full dumps
+snapshots/latest
+snapshots/FULL_CODE*.txt
+snapshots/*.tar
+snapshots/*.tar.gz
+snapshots/*.zip
+
+# copied local settings; keep out of remote-friendly repo
+config-safe/
