@@ -42,3 +42,8 @@ snapshots/*.zip
 
 # copied local settings; keep out of remote-friendly repo
 config-safe/
+
+# local snapshot links / full dumps
+snapshots/latest
+snapshots/FULL_CODE*.txt
+config-safe/
