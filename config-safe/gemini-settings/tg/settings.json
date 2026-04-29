@@ -1,0 +1,25 @@
+{
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    },
+    "enablePermanentToolApproval": false,
+    "toolSandboxing": false
+  },
+  "tools": {
+    "useRipgrep": false
+  },
+  "context": {
+    "includeDirectoryTree": false,
+    "fileFiltering": {
+      "enableRecursiveFileSearch": false,
+      "enableFuzzySearch": false,
+      "enableFileWatcher": false
+    }
+  },
+  "general": {
+    "defaultApprovalMode": "default",
+    "enableNotifications": false,
+    "notificationMethod": "auto"
+  }
+}

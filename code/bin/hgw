@@ -1,0 +1,731 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# hgw = Hermes Gateway Manager
+set -euo pipefail
+
+SESSION="hermes-gw"
+PROFILE_DIR="$HOME/.hermes/profiles"
+CONFIG_DIR="$HOME/.config/hgw"
+ALIASES_FILE="$CONFIG_DIR/aliases.tsv"
+BRIDGE_ENV="$CONFIG_DIR/bridge.env"
+BRIDGE_BIN="$HOME/bin/hgb"
+INTERNAL_PREFIX="hgw-"
+
+mkdir -p "$CONFIG_DIR"
+
+usage() {
+  cat <<USAGE
+hgw = Hermes Gateway Manager
+
+Usage:
+  hgw bind <profile> <alias>
+  hgw unbind <alias>
+  hgw list
+
+  hgw run <profile|alias|all>
+  hgw stop <profile|alias|all>
+  hgw restart <profile|alias|all>
+  hgw status
+  hgw web <url>
+  hgw approve <request|allow|deny|list|show|cleanup>
+  hgw auto <on|off|status|run>
+  hgw logs <profile|alias>
+  hgw view <profile|alias>
+
+  hgw bridge start
+  hgw bridge stop
+  hgw bridge restart
+  hgw bridge status
+  hgw bridge logs [N]
+  hgw bridge test [PROMPT]
+  hgw bridge config
+  hgw bridge set profile|model|port|host|public-model|session|profiles VALUE
+
+Examples:
+  hgw bind tg tg
+  hgw bind tg2 tg2
+
+  hgw run tg
+  hgw run tg2
+  hgw run all
+  hgw logs tg
+  hgw view tg2
+  hgw stop all
+
+  hgw bridge start
+  hgw bridge test "Reply with only: HGB_OK"
+  hgw bridge set model gemini-2.5-flash-lite
+USAGE
+}
+
+require_tmux() {
+  command -v tmux >/dev/null 2>&1 || {
+    echo "ERROR: tmux not found. Install with:"
+    echo "  pkg install -y tmux"
+    exit 1
+  }
+}
+
+is_profile() {
+  [ -d "$PROFILE_DIR/$1" ]
+}
+
+is_gateway_profile() {
+  local profile="$1"
+  local envfile="$PROFILE_DIR/$profile/.env"
+  [ -f "$envfile" ] || return 1
+  grep -Eq '^[[:space:]]*TELEGRAM_BOT_TOKEN=.+' "$envfile"
+}
+
+gateway_profiles() {
+  [ -d "$PROFILE_DIR" ] || return 0
+
+  find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null |
+  while IFS= read -r profile; do
+    if is_gateway_profile "$profile"; then
+      echo "$profile"
+    fi
+  done | sort
+}
+
+profile_for_alias() {
+  local alias_name="$1"
+  [ -f "$ALIASES_FILE" ] || return 1
+  awk -F '\t' -v a="$alias_name" '$1 == a { print $2; exit }' "$ALIASES_FILE"
+}
+
+alias_for_profile() {
+  local profile="$1"
+  [ -f "$ALIASES_FILE" ] || return 1
+  awk -F '\t' -v p="$profile" '$2 == p { print $1; exit }' "$ALIASES_FILE"
+}
+
+list_aliases_plain() {
+  [ -f "$ALIASES_FILE" ] || return 0
+  awk -F '\t' 'NF >= 2 { printf "  %-12s -> %s\n", $1, $2 }' "$ALIASES_FILE" | sort
+}
+
+resolve_profile() {
+  local target="$1"
+
+  if is_profile "$target"; then
+    echo "$target"
+    return 0
+  fi
+
+  local p
+  p="$(profile_for_alias "$target" 2>/dev/null || true)"
+  if [ -n "$p" ]; then
+    echo "$p"
+    return 0
+  fi
+
+  echo "ERROR: unknown profile or alias: $target" >&2
+  echo >&2
+  echo "Detected Telegram gateway profiles:" >&2
+  gateway_profiles | sed 's/^/  /' >&2 || true
+  echo >&2
+  echo "Bound aliases:" >&2
+  list_aliases_plain >&2 || true
+  exit 1
+}
+
+ensure_profile_is_gateway() {
+  local profile="$1"
+  if ! is_gateway_profile "$profile"; then
+    echo "ERROR: profile '$profile' does not look like a Telegram gateway profile."
+    echo "Missing TELEGRAM_BOT_TOKEN in:"
+    echo "  $PROFILE_DIR/$profile/.env"
+    exit 1
+  fi
+}
+
+ensure_hermes_alias() {
+  local profile="$1"
+  local alias_name="$2"
+
+  if command -v "$alias_name" >/dev/null 2>&1; then
+    echo "$alias_name"
+    return 0
+  fi
+
+  hermes profile alias "$profile" --name "$alias_name" >/dev/null
+  hash -r
+
+  command -v "$alias_name" >/dev/null 2>&1 || {
+    echo "ERROR: failed to create Hermes alias '$alias_name' for profile '$profile'."
+    echo "Check that ~/.local/bin is in PATH."
+    exit 1
+  }
+
+  echo "$alias_name"
+}
+
+exec_alias_for_profile_or_target() {
+  local profile="$1"
+  local original_target="$2"
+
+  local bound_profile
+  bound_profile="$(profile_for_alias "$original_target" 2>/dev/null || true)"
+  if [ "$bound_profile" = "$profile" ]; then
+    ensure_hermes_alias "$profile" "$original_target"
+    return 0
+  fi
+
+  local friendly
+  friendly="$(alias_for_profile "$profile" 2>/dev/null || true)"
+  if [ -n "$friendly" ]; then
+    ensure_hermes_alias "$profile" "$friendly"
+    return 0
+  fi
+
+  local internal="${INTERNAL_PREFIX}${profile}"
+  ensure_hermes_alias "$profile" "$internal"
+}
+
+# -------------------------------------------------------------------
+# Bridge management
+# -------------------------------------------------------------------
+
+load_bridge_env() {
+  [ -f "$BRIDGE_ENV" ] && . "$BRIDGE_ENV"
+
+  HGB_HOST="${HGB_HOST:-127.0.0.1}"
+  HGB_PORT="${HGB_PORT:-8787}"
+  HGB_PROFILE="${HGB_PROFILE:-tg}"
+  HGB_MODEL="${HGB_MODEL:-gemini-2.5-flash-lite}"
+  HGB_PUBLIC_MODEL="${HGB_PUBLIC_MODEL:-hgb-gemini}"
+  HGB_SESSION="${HGB_SESSION:-hgb}"
+  HGB_PROFILES="${HGB_PROFILES:-tg2}"
+}
+
+bridge_url() {
+  load_bridge_env
+  echo "http://$HGB_HOST:$HGB_PORT"
+}
+
+bridge_health() {
+  load_bridge_env
+  command -v curl >/dev/null 2>&1 || return 1
+  curl -fsS --max-time 3 "http://$HGB_HOST:$HGB_PORT/health" 2>/dev/null
+}
+
+bridge_running() {
+  load_bridge_env
+  tmux has-session -t "$HGB_SESSION" 2>/dev/null
+}
+
+bridge_status() {
+  load_bridge_env
+
+  echo "== Hermes Gemini Bridge =="
+  echo "session:      $HGB_SESSION"
+  echo "url:          http://$HGB_HOST:$HGB_PORT/v1"
+  echo "profile:      $HGB_PROFILE"
+  echo "model:        $HGB_MODEL"
+  echo "public_model: $HGB_PUBLIC_MODEL"
+  echo "profiles:     $HGB_PROFILES"
+  echo "config:       $BRIDGE_ENV"
+
+  if bridge_running; then
+    echo "tmux:         running"
+  else
+    echo "tmux:         stopped"
+  fi
+
+  local tmpbase tmp
+  tmpbase="${TMPDIR:-$HOME/tmp}"
+  mkdir -p "$tmpbase"
+  tmp="$tmpbase/hgw-bridge-health.$$"
+
+  if bridge_health > "$tmp" 2>/dev/null; then
+    echo "health:       OK"
+    cat "$tmp" 2>/dev/null
+  else
+    echo "health:       unavailable"
+  fi
+
+  rm -f "$tmp" 2>/dev/null || true
+}
+
+bridge_start() {
+  load_bridge_env
+  require_tmux
+
+  [ -x "$BRIDGE_BIN" ] || {
+    echo "ERROR: bridge binary not found or not executable:"
+    echo "  $BRIDGE_BIN"
+    exit 1
+  }
+
+  if bridge_health >/dev/null 2>&1; then
+    echo "hgb already healthy: http://$HGB_HOST:$HGB_PORT/v1"
+    return 0
+  fi
+
+  if bridge_running; then
+    echo "hgb tmux session exists but health check failed: $HGB_SESSION"
+    echo "Try: hgw bridge restart"
+    return 1
+  fi
+
+  local cmd
+  cmd=$(printf '%q serve --host %q --port %q --profile %q --model %q --public-model %q' \
+    "$BRIDGE_BIN" "$HGB_HOST" "$HGB_PORT" "$HGB_PROFILE" "$HGB_MODEL" "$HGB_PUBLIC_MODEL")
+
+  tmux new-session -d -s "$HGB_SESSION" "$cmd"
+
+  echo "started hgb: $HGB_SESSION"
+  echo "url: http://$HGB_HOST:$HGB_PORT/v1"
+
+  sleep 1
+
+  if bridge_health >/dev/null 2>&1; then
+    echo "health: OK"
+  else
+    echo "health: not ready yet"
+  fi
+}
+
+bridge_start_quiet() {
+  load_bridge_env
+  require_tmux
+
+  bridge_health >/dev/null 2>&1 && return 0
+  bridge_running && return 0
+  [ -x "$BRIDGE_BIN" ] || return 0
+
+  local cmd
+  cmd=$(printf '%q serve --host %q --port %q --profile %q --model %q --public-model %q' \
+    "$BRIDGE_BIN" "$HGB_HOST" "$HGB_PORT" "$HGB_PROFILE" "$HGB_MODEL" "$HGB_PUBLIC_MODEL")
+
+  tmux new-session -d -s "$HGB_SESSION" "$cmd" >/dev/null 2>&1 || true
+}
+
+bridge_stop() {
+  load_bridge_env
+  require_tmux
+
+  if bridge_running; then
+    tmux kill-session -t "$HGB_SESSION"
+    echo "stopped hgb: $HGB_SESSION"
+  else
+    echo "hgb already stopped"
+  fi
+}
+
+bridge_restart() {
+  bridge_stop || true
+  sleep 1
+  bridge_start
+}
+
+bridge_logs() {
+  local n="${1:-80}"
+  tail -n "$n" "${TMPDIR:-$HOME/tmp}/hgb.log" 2>/dev/null || true
+}
+
+bridge_test() {
+  load_bridge_env
+  local prompt="${1:-Reply with only: HGB_OK}"
+
+  bridge_health >/dev/null 2>&1 || {
+    echo "Bridge is not healthy. Try:"
+    echo "  hgw bridge start"
+    exit 1
+  }
+
+  curl -s "http://$HGB_HOST:$HGB_PORT/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d "$(python - "$HGB_PUBLIC_MODEL" "$prompt" <<'PY'
+import json, sys
+model = sys.argv[1]
+prompt = sys.argv[2]
+print(json.dumps({
+  "model": model,
+  "messages": [
+    {"role": "user", "content": prompt}
+  ]
+}, ensure_ascii=False))
+PY
+)" | python -m json.tool
+}
+
+bridge_config() {
+  load_bridge_env
+  echo "config file: $BRIDGE_ENV"
+  echo
+  cat "$BRIDGE_ENV" 2>/dev/null || true
+}
+
+bridge_set() {
+  local key="${1:-}"
+  local val="${2:-}"
+
+  if [ -z "$key" ] || [ -z "$val" ]; then
+    echo "Usage: hgw bridge set profile|model|port|host|public-model|session|profiles VALUE" >&2
+    exit 2
+  fi
+
+  mkdir -p "$(dirname "$BRIDGE_ENV")"
+  touch "$BRIDGE_ENV"
+
+  case "$key" in
+    profile) key="HGB_PROFILE" ;;
+    model) key="HGB_MODEL" ;;
+    port) key="HGB_PORT" ;;
+    host) key="HGB_HOST" ;;
+    public-model|public_model) key="HGB_PUBLIC_MODEL" ;;
+    session) key="HGB_SESSION" ;;
+    profiles) key="HGB_PROFILES" ;;
+    *)
+      echo "ERROR: unknown bridge setting: $key" >&2
+      exit 2
+      ;;
+  esac
+
+  if grep -q "^$key=" "$BRIDGE_ENV"; then
+    python - "$BRIDGE_ENV" "$key" "$val" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+key = sys.argv[2]
+val = sys.argv[3]
+lines = p.read_text().splitlines()
+out = []
+for line in lines:
+    if line.startswith(key + "="):
+        out.append(f'{key}="{val}"')
+    else:
+        out.append(line)
+p.write_text("\n".join(out) + "\n")
+PY
+  else
+    printf '%s="%s"\n' "$key" "$val" >> "$BRIDGE_ENV"
+  fi
+
+  echo "set $key=$val"
+}
+
+bridge_cmd() {
+  local sub="${1:-status}"
+  [ "$#" -gt 0 ] && shift || true
+
+  case "$sub" in
+    start) bridge_start ;;
+    stop) bridge_stop ;;
+    restart) bridge_restart ;;
+    status|"") bridge_status ;;
+    logs|log) bridge_logs "${1:-80}" ;;
+    test) bridge_test "${1:-Reply with only: HGB_OK}" ;;
+    config) bridge_config ;;
+    set) bridge_set "$@" ;;
+    *)
+      cat >&2 <<USAGE
+Usage:
+  hgw bridge start
+  hgw bridge stop
+  hgw bridge restart
+  hgw bridge status
+  hgw bridge logs [N]
+  hgw bridge test [PROMPT]
+  hgw bridge config
+  hgw bridge set profile|model|port|host|public-model|session|profiles VALUE
+USAGE
+      exit 2
+      ;;
+  esac
+}
+
+profile_uses_bridge() {
+  local profile="$1"
+  load_bridge_env
+
+  case " $HGB_PROFILES " in
+    *" $profile "*) return 0 ;;
+  esac
+
+  hermes profile show "$profile" 2>/dev/null | grep -q 'google-gemini-cli'
+}
+
+auto_bridge_for_profile() {
+  local profile="$1"
+
+  if profile_uses_bridge "$profile"; then
+    bridge_start_quiet || true
+  fi
+}
+
+# -------------------------------------------------------------------
+# Gateway alias / run management
+# -------------------------------------------------------------------
+
+bind_alias() {
+  local profile="${1:-}"
+  local alias_name="${2:-}"
+
+  [ -n "$profile" ] && [ -n "$alias_name" ] || {
+    echo "Usage: hgw bind <profile> <alias>"
+    exit 1
+  }
+
+  is_profile "$profile" || {
+    echo "ERROR: profile not found: $profile"
+    exit 1
+  }
+
+  ensure_profile_is_gateway "$profile"
+
+  echo "Binding Hermes gateway alias:"
+  echo "  profile: $profile"
+  echo "  alias:   $alias_name"
+  echo
+
+  ensure_hermes_alias "$profile" "$alias_name" >/dev/null
+
+  touch "$ALIASES_FILE"
+
+  awk -F '\t' -v a="$alias_name" -v p="$profile" '
+    $1 != a && $2 != p { print }
+  ' "$ALIASES_FILE" > "$ALIASES_FILE.tmp" 2>/dev/null || true
+
+  printf "%s\t%s\n" "$alias_name" "$profile" >> "$ALIASES_FILE.tmp"
+  mv "$ALIASES_FILE.tmp" "$ALIASES_FILE"
+
+  echo "Bound: $alias_name -> $profile"
+}
+
+unbind_alias() {
+  local alias_name="${1:-}"
+
+  [ -n "$alias_name" ] || {
+    echo "Usage: hgw unbind <alias>"
+    exit 1
+  }
+
+  if [ -f "$ALIASES_FILE" ]; then
+    awk -F '\t' -v a="$alias_name" '$1 != a { print }' "$ALIASES_FILE" > "$ALIASES_FILE.tmp" || true
+    mv "$ALIASES_FILE.tmp" "$ALIASES_FILE"
+  fi
+
+  echo "Unbound from hgw: $alias_name"
+  echo "Note: Hermes alias executable itself was not removed."
+}
+
+window_exists() {
+  local profile="$1"
+  tmux has-session -t "$SESSION" 2>/dev/null || return 1
+  tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$profile"
+}
+
+run_one() {
+  local target="$1"
+  local profile alias_name
+
+  profile="$(resolve_profile "$target")"
+  ensure_profile_is_gateway "$profile"
+  auto_bridge_for_profile "$profile"
+  alias_name="$(exec_alias_for_profile_or_target "$profile" "$target")"
+
+  if window_exists "$profile"; then
+    echo "Already running or window exists: $SESSION:$profile"
+    return 0
+  fi
+
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux new-window -d -t "$SESSION" -n "$profile" "$alias_name gateway run"
+  else
+    tmux new-session -d -s "$SESSION" -n "$profile" "$alias_name gateway run"
+  fi
+
+  echo "Started: $SESSION:$profile via $alias_name"
+}
+
+stop_one() {
+  local target="$1"
+  local profile
+
+  profile="$(resolve_profile "$target")"
+
+  if window_exists "$profile"; then
+    tmux kill-window -t "$SESSION:$profile" 2>/dev/null || true
+    echo "Stopped: $SESSION:$profile"
+  else
+    echo "Not running: $SESSION:$profile"
+  fi
+}
+
+restart_one() {
+  local target="$1"
+  stop_one "$target"
+  run_one "$target"
+}
+
+logs_one() {
+  local target="$1"
+  local profile
+
+  profile="$(resolve_profile "$target")"
+
+  if ! window_exists "$profile"; then
+    echo "Not running: $SESSION:$profile"
+    echo "Start with: hgw run $target"
+    exit 1
+  fi
+
+  tmux capture-pane -t "$SESSION:$profile" -p -S -160
+}
+
+view_one() {
+  local target="$1"
+  local profile
+
+  profile="$(resolve_profile "$target")"
+
+  if ! window_exists "$profile"; then
+    echo "Not running: $SESSION:$profile"
+    echo "Start with: hgw run $target"
+    exit 1
+  fi
+
+  tmux select-window -t "$SESSION:$profile" 2>/dev/null || true
+  tmux attach -t "$SESSION"
+}
+
+run_target() {
+  local action="$1"
+  local target="$2"
+
+  if [ "$target" = "all" ]; then
+    local found=0
+    while IFS= read -r profile; do
+      [ -n "$profile" ] || continue
+      found=1
+      "${action}_one" "$profile"
+    done < <(gateway_profiles)
+
+    if [ "$found" -eq 0 ]; then
+      echo "No Telegram gateway profiles found."
+      exit 1
+    fi
+
+    return 0
+  fi
+
+  "${action}_one" "$target"
+}
+
+list_all() {
+  echo "== Telegram gateway profiles =="
+  gateway_profiles | sed 's/^/  /' || true
+
+  echo
+  echo "== Bound aliases =="
+  if [ -f "$ALIASES_FILE" ] && [ -s "$ALIASES_FILE" ]; then
+    list_aliases_plain
+  else
+    echo "  none"
+  fi
+
+  echo
+  echo "== Hermes profiles =="
+  hermes profile list 2>&1 || true
+
+  echo
+  bridge_status
+}
+
+status_all() {
+  echo "== tmux session =="
+
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux list-windows -t "$SESSION" -F '  #S:#W  pane=#{pane_current_command}'
+  else
+    echo "  no tmux session: $SESSION"
+  fi
+
+  echo
+  echo "== Telegram gateway profiles =="
+  gateway_profiles | sed 's/^/  /' || true
+
+  echo
+  echo "== Bound aliases =="
+  if [ -f "$ALIASES_FILE" ] && [ -s "$ALIASES_FILE" ]; then
+    list_aliases_plain
+  else
+    echo "  none"
+  fi
+
+  echo
+  bridge_status
+}
+
+cmd="${1:-help}"
+shift || true
+
+
+# hgw web/approve early dispatch
+# Keep this outside the main case block so it survives case layout changes.
+if [ "$cmd" = "approve" ]; then
+  "$HOME/.config/hgw/lib/approve.py" "$@"
+  exit $?
+fi
+
+if [ "$cmd" = "web" ]; then
+  [ -n "${1:-}" ] || {
+    echo "Usage: hgw web <url>"
+    exit 2
+  }
+  "$HOME/.config/hgw/lib/web_fetch.py" "$@"
+  exit $?
+fi
+
+case "$cmd" in
+  bind)
+    bind_alias "${1:-}" "${2:-}" ;;
+  unbind)
+    unbind_alias "${1:-}" ;;
+  list)
+    list_all ;;
+  run|start)
+    [ -n "${1:-}" ] || { usage; exit 1; }
+    require_tmux
+    run_target run "$1" ;;
+  stop)
+    [ -n "${1:-}" ] || { usage; exit 1; }
+    require_tmux
+    run_target stop "$1"
+    if [ "${1:-}" = "all" ]; then
+      bridge_stop >/dev/null 2>&1 || true
+      echo "Bridge stopped: all"
+    else
+      target_profile="$(resolve_profile "$1" 2>/dev/null || true)"
+      if [ -n "$target_profile" ] && profile_uses_bridge "$target_profile"; then
+        bridge_stop >/dev/null 2>&1 || true
+        echo "Bridge stopped: $target_profile uses bridge"
+      fi
+    fi
+    ;;
+  restart)
+    [ -n "${1:-}" ] || { usage; exit 1; }
+    require_tmux
+    run_target restart "$1" ;;
+  logs)
+    [ -n "${1:-}" ] || { usage; exit 1; }
+    require_tmux
+    logs_one "$1" ;;
+  view)
+    [ -n "${1:-}" ] || { usage; exit 1; }
+    require_tmux
+    view_one "$1" ;;
+  status)
+    require_tmux
+    status_all ;;
+  bridge|br)
+    bridge_cmd "$@" ;;
+  help|-h|--help|"")
+    usage ;;
+  *)
+    echo "ERROR: unknown command: $cmd"
+    usage
+    exit 1 ;;
+esac

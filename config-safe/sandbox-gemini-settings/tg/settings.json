@@ -1,0 +1,25 @@
+{
+  "general": {
+    "defaultApprovalMode": "default",
+    "enableNotifications": false,
+    "notificationMethod": "auto"
+  },
+  "security": {
+    "enablePermanentToolApproval": false,
+    "toolSandboxing": false
+  },
+  "model": {
+    "name": ""
+  },
+  "tools": {
+    "useRipgrep": false
+  },
+  "context": {
+    "includeDirectoryTree": false,
+    "fileFiltering": {
+      "enableRecursiveFileSearch": false,
+      "enableFuzzySearch": false,
+      "enableFileWatcher": false
+    }
+  }
+}

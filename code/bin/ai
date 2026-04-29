@@ -1,0 +1,1048 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# ai = AI Manager
+set -euo pipefail
+
+CONFIG_DIR="$HOME/.config/ai"
+CONFIG_FILE="$CONFIG_DIR/config.env"
+
+AI_DEFAULT_PROVIDER="hermes"
+AI_CODEX_PROFILE="main"
+AI_GEMINI_PROFILE="main"
+AI_HERMES_PROFILE="main"
+AI_FALLBACK_ENABLED="true"
+AI_FALLBACK_PROVIDERS="hermes gemini codex"
+AI_EXPLICIT_FALLBACK="false"
+AI_ASK_TIMEOUT="180"
+AI_AUTO_START_BRIDGE="false"
+
+load_config() {
+  mkdir -p "$CONFIG_DIR"
+  [ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+
+  AI_DEFAULT_PROVIDER="${AI_DEFAULT_PROVIDER:-hermes}"
+  AI_CODEX_PROFILE="${AI_CODEX_PROFILE:-main}"
+  AI_GEMINI_PROFILE="${AI_GEMINI_PROFILE:-main}"
+  AI_HERMES_PROFILE="${AI_HERMES_PROFILE:-main}"
+  AI_FALLBACK_ENABLED="${AI_FALLBACK_ENABLED:-true}"
+  AI_FALLBACK_PROVIDERS="${AI_FALLBACK_PROVIDERS:-hermes gemini codex}"
+  AI_EXPLICIT_FALLBACK="${AI_EXPLICIT_FALLBACK:-false}"
+  AI_ASK_TIMEOUT="${AI_ASK_TIMEOUT:-180}"
+  AI_AUTO_START_BRIDGE="${AI_AUTO_START_BRIDGE:-false}"
+}
+
+usage() {
+  cat <<USAGE
+ai = AI Manager
+
+Core modes:
+  ai ask "prompt"                    -> default provider no-tool chat with fallback
+  ai chat "prompt"                   -> same as ask
+  ai task "prompt"                   -> default provider tool-capable task with fallback
+  ai plan "prompt"                   -> default provider plan-only prompt with fallback
+
+Provider-first forms:
+  ai codex ask "prompt"              -> cm chat \$AI_CODEX_PROFILE
+  ai gemini ask "prompt"             -> gm chat \$AI_GEMINI_PROFILE
+  ai hermes ask "prompt"             -> hm chat \$AI_HERMES_PROFILE
+
+  ai codex task "prompt"             -> cm task \$AI_CODEX_PROFILE
+  ai gemini task "prompt"            -> gm task \$AI_GEMINI_PROFILE
+  ai hermes task "prompt"            -> hm task \$AI_HERMES_PROFILE
+
+  ai codex plan "prompt"             -> cm plan \$AI_CODEX_PROFILE
+  ai gemini plan "prompt"            -> gm plan \$AI_GEMINI_PROFILE
+  ai hermes plan "prompt"            -> hm plan \$AI_HERMES_PROFILE
+
+Canonical provider forms:
+  ai ask codex "prompt"              -> cm chat \$AI_CODEX_PROFILE
+  ai ask gemini "prompt"             -> gm chat \$AI_GEMINI_PROFILE
+  ai ask hermes "prompt"             -> hm chat \$AI_HERMES_PROFILE
+
+  ai task codex "prompt"             -> cm task \$AI_CODEX_PROFILE
+  ai task gemini "prompt"            -> gm task \$AI_GEMINI_PROFILE
+  ai task hermes "prompt"            -> hm task \$AI_HERMES_PROFILE
+
+  ai plan codex "prompt"             -> cm plan \$AI_CODEX_PROFILE
+  ai plan gemini "prompt"            -> gm plan \$AI_GEMINI_PROFILE
+  ai plan hermes "prompt"            -> hm plan \$AI_HERMES_PROFILE
+
+Provider task shortcuts:
+  ai codex "prompt"                  -> ai task codex "prompt"
+  ai gemini "prompt"                 -> ai task gemini "prompt"
+  ai hermes "prompt"                 -> ai task hermes "prompt"
+
+Native provider commands:
+  ai codex run [profile] [args...]    -> cd ~/sb/codex/<profile>;  cm run <profile>
+  ai gemini run [profile] [args...]   -> cd ~/sb/gemini/<profile>; gm run <profile>
+  ai hermes run [profile] [args...]   -> cd ~/sb/hermes/<profile>; hm run <profile>
+
+  ai codex raw [profile] -- <args...> -> sandbox profile + cm raw passthrough
+  ai gemini raw [profile] -- <args...>-> sandbox profile + gm raw passthrough
+  ai hermes raw [profile] -- <args...>-> sandbox profile + hm raw passthrough
+
+  ai codex exec [profile] <args...>   -> sandbox profile + native codex exec passthrough
+
+Manager routers:
+  ai cm <args...>                     -> cm <args...>
+  ai gm <args...>                     -> gm <args...>
+  ai hm <args...>                     -> hm <args...>
+  ai hgw <args...>                    -> hgw <args...>
+  ai hgb <args...>                    -> hgb <args...>
+
+Plane / service control:
+  ai up                               -> hgw bridge start + hgw run all
+  ai down                             -> hgw stop all + hgw bridge stop
+  ai restart                          -> ai down + ai up
+  ai plane status                     -> hgw status + hgw bridge status
+  ai auto [on|off|status|run]          -> control hgw-auto
+  ai plane view <profile>             -> hgw view <profile>
+  ai logs <profile|bridge>            -> hgw logs / hgw bridge logs
+
+Config:
+  ai config
+  ai config set default-provider hermes
+  ai config set codex-profile main
+  ai config set gemini-profile tg
+  ai config set hermes-profile main
+  ai config set ask-timeout 180
+
+Current:
+  AI_DEFAULT_PROVIDER="$AI_DEFAULT_PROVIDER"
+  AI_CODEX_PROFILE="$AI_CODEX_PROFILE"
+  AI_GEMINI_PROFILE="$AI_GEMINI_PROFILE"
+  AI_HERMES_PROFILE="$AI_HERMES_PROFILE"
+  AI_FALLBACK_ENABLED="$AI_FALLBACK_ENABLED"
+  AI_FALLBACK_PROVIDERS="$AI_FALLBACK_PROVIDERS"
+  AI_EXPLICIT_FALLBACK="$AI_EXPLICIT_FALLBACK"
+  AI_ASK_TIMEOUT="$AI_ASK_TIMEOUT"
+  AI_AUTO_START_BRIDGE="$AI_AUTO_START_BRIDGE"
+
+Notes:
+  ask/chat = no-tool answer mode.
+  task     = tool-capable work mode.
+  plan     = plan-only mode; should not perform writes or destructive work.
+  run/raw/exec through ai automatically use the provider sandbox directory.
+  Use quotes for JSON, code, shell symbols, $, *, >, |, ;, &, parentheses,
+  command substitutions, backticks, braces, brackets, newlines, and leading dashes.
+USAGE
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "ERROR: missing command: $1" >&2
+    hint_missing_command "$1" >&2
+    return 127
+  }
+}
+
+hint_missing_command() {
+  case "$1" in
+    cm)  echo "Hint: install/restore ~/bin/cm = Codex Manager" ;;
+    gm)  echo "Hint: install/restore ~/bin/gm = Gemini Manager" ;;
+    hm)  echo "Hint: install/restore ~/bin/hm = Hermes Manager" ;;
+    hgw) echo "Hint: install/restore ~/bin/hgw = Hermes Gateway Manager" ;;
+    hgb) echo "Hint: install/restore ~/bin/hgb = Hermes Gemini Bridge" ;;
+  esac
+}
+
+profile_exists() {
+  local kind="$1"
+  local profile="$2"
+
+  case "$kind" in
+    codex)  [ -d "$HOME/.codex-homes/$profile" ] ;;
+    gemini) [ -d "$HOME/.gemini-homes/$profile" ] ;;
+    hermes) [ -d "$HOME/.hermes/profiles/$profile" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+profile_hint() {
+  local kind="$1"
+  local profile="$2"
+
+  case "$kind" in
+    codex)
+      echo "[ai] Codex profile not found or not ready: $profile" >&2
+      echo "     Try: cm profile list" >&2
+      echo "     Try: cm profile add $profile" >&2
+      echo "     Try: cm run $profile" >&2
+      ;;
+    gemini)
+      echo "[ai] Gemini profile not found or not ready: $profile" >&2
+      echo "     Try: gm profile list" >&2
+      echo "     Try: gm profile add $profile" >&2
+      echo "     Try: cd ~/sb/gemini/$profile && gm run $profile" >&2
+      ;;
+    hermes)
+      echo "[ai] Hermes profile not found or not ready: $profile" >&2
+      echo "     Try: hm profile list" >&2
+      echo "     Try: hm profile use $profile" >&2
+      echo "     Try: hermes model  # or hermes setup/auth" >&2
+      ;;
+  esac
+}
+
+failure_hint() {
+  local kind="$1"
+  local profile="$2"
+  local rc="$3"
+
+  echo "[ai] $kind/$profile failed with exit=$rc" >&2
+
+  case "$kind" in
+    codex)
+      echo "     Check: cd ~/sb/codex/$profile && cm task $profile \"Reply with only: OK\"" >&2
+      ;;
+    gemini)
+      echo "     Check: cd ~/sb/gemini/$profile && gm task $profile -- --skip-trust -p 'Reply with only: OK'" >&2
+      echo "     If trust error appears, run from ~/sb/gemini/$profile or re-run gm run $profile." >&2
+      ;;
+    hermes)
+      echo "     Check: cd ~/sb/hermes/$profile && hm task $profile \"Reply with only: OK\"" >&2
+      echo "     If provider error appears, run: hm profile use $profile && hermes model" >&2
+      echo "     If custom hgb is used, check: ai bridge status" >&2
+      ;;
+  esac
+}
+
+join_prompt() {
+  local IFS=" "
+  printf "%s" "$*"
+}
+
+ai_workdir() {
+  local kind="$1"
+  local profile="$2"
+
+  case "$kind" in
+    codex)  echo "$HOME/sb/codex/$profile" ;;
+    gemini) echo "$HOME/sb/gemini/$profile" ;;
+    hermes) echo "$HOME/sb/hermes/$profile" ;;
+    *) echo "$HOME" ;;
+  esac
+}
+
+run_with_timeout() {
+  local rc
+
+  set +e
+  if command -v timeout >/dev/null 2>&1 && [ -n "${AI_ASK_TIMEOUT:-}" ]; then
+    timeout "$AI_ASK_TIMEOUT" "$@"
+  else
+    "$@"
+  fi
+  rc=$?
+  set -e
+  return "$rc"
+}
+
+maybe_start_bridge() {
+  [ "${AI_AUTO_START_BRIDGE:-false}" = "true" ] || return 0
+  command -v hgw >/dev/null 2>&1 || return 0
+  hgw bridge start >/dev/null 2>&1 || true
+}
+
+# >>> ai provider metadata >>>
+provider_mgr() {
+  case "${1:-}" in
+    codex) echo "cm" ;;
+    gemini) echo "gm" ;;
+    hermes) echo "hm" ;;
+    *)
+      echo "ERROR: unknown provider kind: ${1:-}" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_default_profile() {
+  case "${1:-}" in
+    codex) echo "$AI_CODEX_PROFILE" ;;
+    gemini) echo "$AI_GEMINI_PROFILE" ;;
+    hermes) echo "$AI_HERMES_PROFILE" ;;
+    *)
+      echo "ERROR: unknown provider kind: ${1:-}" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_label() {
+  case "${1:-}" in
+    codex|gemini|hermes) echo "$1" ;;
+    *)
+      echo "ERROR: unknown provider kind: ${1:-}" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_prepare() {
+  local kind="$1"
+  local mgr
+  mgr="$(provider_mgr "$kind")" || return $?
+
+  need "$mgr" || return $?
+
+  case "$kind" in
+    hermes)
+      maybe_start_bridge
+      ;;
+  esac
+}
+
+provider_exec_sandbox() {
+  local kind="$1"
+  shift
+
+  case "$kind" in
+    codex)
+      exec env \
+        CM_CWD_TTY_POLICY=sandbox \
+        CM_CWD_NONTTY_POLICY=sandbox \
+        "$@"
+      ;;
+
+    gemini)
+      exec env \
+        GEMINI_CLI_TRUST_WORKSPACE=true \
+        GM_CWD_TTY_POLICY=sandbox \
+        GM_CWD_NONTTY_POLICY=sandbox \
+        "$@"
+      ;;
+
+    hermes)
+      exec env \
+        HM_CWD_TTY_POLICY=sandbox \
+        HM_CWD_NONTTY_POLICY=sandbox \
+        "$@"
+      ;;
+
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_run_sandbox_env() {
+  local kind="$1"
+  shift
+
+  case "$kind" in
+    codex)
+      env \
+        CM_CWD_TTY_POLICY=sandbox \
+        CM_CWD_NONTTY_POLICY=sandbox \
+        "$@"
+      ;;
+
+    gemini)
+      env \
+        GEMINI_CLI_TRUST_WORKSPACE=true \
+        GM_CWD_TTY_POLICY=sandbox \
+        GM_CWD_NONTTY_POLICY=sandbox \
+        "$@"
+      ;;
+
+    hermes)
+      env \
+        HM_CWD_TTY_POLICY=sandbox \
+        HM_CWD_NONTTY_POLICY=sandbox \
+        "$@"
+      ;;
+
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+# <<< ai provider metadata >>>
+
+# >>> ai provider prompt sandbox runner >>>
+provider_run_manager_sandbox() {
+  local kind="$1"
+  local mode="$2"
+  local profile="$3"
+  local workdir="$4"
+  shift 4
+
+  local mgr
+  mgr="$(provider_mgr "$kind")" || return $?
+
+  case "$kind" in
+    codex)
+      (
+        cd "$workdir" &&
+        run_with_timeout env \
+          CM_CWD_TTY_POLICY=sandbox \
+          CM_CWD_NONTTY_POLICY=sandbox \
+          "$mgr" sb "$mode" "$profile" "$@"
+      )
+      ;;
+
+    gemini)
+      (
+        cd "$workdir" &&
+        run_with_timeout env \
+          GEMINI_CLI_TRUST_WORKSPACE=true \
+          GM_CWD_TTY_POLICY=sandbox \
+          GM_CWD_NONTTY_POLICY=sandbox \
+          "$mgr" sb "$mode" "$profile" "$@"
+      )
+      ;;
+
+    hermes)
+      (
+        cd "$workdir" &&
+        run_with_timeout env \
+          HM_CWD_TTY_POLICY=sandbox \
+          HM_CWD_NONTTY_POLICY=sandbox \
+          "$mgr" sb "$mode" "$profile" "$@"
+      )
+      ;;
+
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+# <<< ai provider prompt sandbox runner >>>
+
+provider_mode_cmd() {
+  local kind="$1"
+  local mode="$2"
+  shift 2
+
+  local profile label workdir prompt
+
+  provider_prepare "$kind" || return $?
+
+  profile="$(provider_default_profile "$kind")" || return $?
+  label="$(provider_label "$kind")" || return $?
+
+  [ "$#" -gt 0 ] || {
+    echo "Usage: ai $mode $label [profile] PROMPT" >&2
+    return 2
+  }
+
+  # Optional explicit profile.
+  # Critical: check $# before touching $1.
+  if [ "$#" -gt 0 ] && profile_exists "$kind" "$1"; then
+    profile="$1"
+    shift
+  fi
+
+  profile_exists "$kind" "$profile" || {
+    profile_hint "$kind" "$profile"
+    return 127
+  }
+
+  [ "$#" -gt 0 ] || {
+    echo "Usage: ai $mode $label [profile] PROMPT" >&2
+    return 2
+  }
+
+  workdir="$(ai_workdir "$kind" "$profile")"
+  mkdir -p "$workdir"
+
+  if [ "${1:-}" = "-" ] || [ "${1:-}" = "--" ]; then
+    provider_run_manager_sandbox "$kind" "$mode" "$profile" "$workdir" "$@"
+    return $?
+  fi
+
+  prompt="$(join_prompt "$@")"
+  provider_run_manager_sandbox "$kind" "$mode" "$profile" "$workdir" "$prompt"
+}
+
+
+# Provider alias normalization.
+# Keep this as the only place that maps public provider aliases to canonical kinds.
+provider_alias_kind() {
+  case "${1:-}" in
+    codex|cm|c) echo "codex" ;;
+    gemini|gm|g) echo "gemini" ;;
+    hermes|hm|h) echo "hermes" ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+provider_mode_dispatch() {
+  local mode="$1"
+  local provider="$2"
+  shift 2
+
+  local kind
+  kind="$(provider_alias_kind "$provider")" || {
+    echo "ERROR: unknown provider: $provider" >&2
+    return 2
+  }
+
+  case "$mode" in
+    task|chat|plan)
+      provider_mode_cmd "$kind" "$mode" "$@"
+      ;;
+    *)
+      echo "ERROR: unknown provider mode: $mode" >&2
+      return 2
+      ;;
+  esac
+}
+
+task_provider() {
+  local provider="$1"
+  shift
+  provider_mode_dispatch task "$provider" "$@"
+}
+
+chat_provider() {
+  local provider="$1"
+  shift
+  provider_mode_dispatch chat "$provider" "$@"
+}
+
+plan_provider() {
+  local provider="$1"
+  shift
+  provider_mode_dispatch plan "$provider" "$@"
+}
+
+default_mode() {
+  local mode="$1"
+  shift
+
+  if [ "${AI_FALLBACK_ENABLED:-true}" != "true" ]; then
+    provider_mode_dispatch "$mode" "$AI_DEFAULT_PROVIDER" "$@"
+    return $?
+  fi
+
+  local provider rc last_rc=1
+
+  for provider in $(provider_order); do
+    echo "[ai] trying provider: $provider ($mode)" >&2
+    provider_mode_dispatch "$mode" "$provider" "$@"
+    rc=$?
+
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+
+    last_rc="$rc"
+
+    case "$provider" in
+      codex|cm|c) failure_hint codex "$AI_CODEX_PROFILE" "$rc" ;;
+      gemini|gm|g) failure_hint gemini "$AI_GEMINI_PROFILE" "$rc" ;;
+      hermes|hm|h) failure_hint hermes "$AI_HERMES_PROFILE" "$rc" ;;
+    esac
+
+    echo "[ai] fallback: next provider" >&2
+    echo >&2
+  done
+
+  echo "[ai] all fallback providers failed" >&2
+  return "$last_rc"
+}
+
+task_default()  { default_mode task "$@"; }
+chat_default() { default_mode chat "$@"; }
+plan_default() { default_mode plan "$@"; }
+
+task_cmd() {
+  [ "$#" -gt 0 ] || {
+    echo "Usage: ai task [codex|gemini|hermes] [profile] PROMPT" >&2
+    return 2
+  }
+
+  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
+    local provider="$1"
+    shift
+    task_provider "$provider" "$@"
+  else
+    task_default "$@"
+  fi
+}
+
+chat_cmd() {
+  [ "$#" -gt 0 ] || {
+    echo "Usage: ai ask [codex|gemini|hermes] [profile] PROMPT" >&2
+    return 2
+  }
+
+  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
+    local provider="$1"
+    shift
+    chat_provider "$provider" "$@"
+  else
+    chat_default "$@"
+  fi
+}
+
+plan_cmd() {
+  [ "$#" -gt 0 ] || {
+    echo "Usage: ai plan [codex|gemini|hermes] [profile] PROMPT" >&2
+    return 2
+  }
+
+  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
+    local provider="$1"
+    shift
+    plan_provider "$provider" "$@"
+  else
+    plan_default "$@"
+  fi
+}
+
+provider_native_subcommands() {
+  case "${1:-}" in
+    codex)
+      echo "profile run ask task chat plan exec raw status doctor update help -h --help sb sandbox here"
+      ;;
+
+    gemini)
+      echo "profile run ask task chat plan raw status doctor backup update logs lag help -h --help sb sandbox here"
+      ;;
+
+    hermes)
+      echo "profile run ask task chat plan raw gateway gw status doctor backup update logs help -h --help sb sandbox here"
+      ;;
+
+    *)
+      return 1
+      ;;
+  esac
+}
+
+provider_is_native_subcommand() {
+  local kind="${1:-}"
+  local sub="${2:-}"
+  local allowed
+
+  [ -n "$kind" ] && [ -n "$sub" ] || return 1
+
+  allowed="$(provider_native_subcommands "$kind")" || return 1
+
+  case " $allowed " in
+    *" $sub "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# >>> ai sandbox native subcommand metadata >>>
+provider_sandbox_native_subcommands() {
+  case "${1:-}" in
+    codex)
+      echo "run raw exec"
+      ;;
+
+    gemini)
+      echo "run raw"
+      ;;
+
+    hermes)
+      echo "run raw"
+      ;;
+
+    *)
+      return 1
+      ;;
+  esac
+}
+
+provider_is_sandbox_native_subcommand() {
+  local kind="${1:-}"
+  local sub="${2:-}"
+  local allowed
+
+  [ -n "$kind" ] && [ -n "$sub" ] || return 1
+
+  allowed="$(provider_sandbox_native_subcommands "$kind")" || return 1
+
+  case " $allowed " in
+    *" $sub "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# <<< ai sandbox native subcommand metadata >>>
+
+# >>> ai provider native passthrough >>>
+provider_native_passthrough() {
+  local kind="$1"
+  local mgr="$2"
+  local default_profile="$3"
+  local sub="$4"
+  shift 4 || true
+
+  local profile="$default_profile"
+  local workdir
+
+  case "$sub" in
+    run|raw|exec)
+      # Optional explicit profile:
+      #   ai codex run lab
+      #   ai gemini raw tg -- --version
+      #
+      # Critical: check $# before touching $1.
+      if [ "$#" -gt 0 ] && profile_exists "$kind" "$1"; then
+        profile="$1"
+        shift
+      fi
+
+      profile_exists "$kind" "$profile" || {
+        profile_hint "$kind" "$profile"
+        return 127
+      }
+
+      workdir="$(ai_workdir "$kind" "$profile")"
+      mkdir -p "$workdir"
+      cd "$workdir" || return 1
+
+      if provider_is_sandbox_native_subcommand "$kind" "$sub"; then
+        provider_exec_sandbox "$kind" "$mgr" "$sub" "$profile" "$@"
+      else
+        exec "$mgr" "$sub" "$profile" "$@"
+      fi
+      ;;
+
+    *)
+      # status/help/profile/list/update/logs/etc. stay plain native passthrough.
+      exec "$mgr" "$sub" "$@"
+      ;;
+  esac
+}
+# <<< ai provider native passthrough >>>
+
+provider_or_router() {
+  local provider="$1"
+  shift
+
+  local kind mgr first mode rc default_profile
+
+  kind="$(provider_alias_kind "$provider")" || {
+    echo "ERROR: unknown provider: $provider" >&2
+    return 2
+  }
+
+  mgr="$(provider_mgr "$kind")" || return $?
+  default_profile="$(provider_default_profile "$kind")" || return $?
+
+  provider_prepare "$kind" || return $?
+
+  [ "$#" -gt 0 ] || exec "$mgr"
+
+  first="${1:-}"
+  mode=""
+
+  # Provider-first normalized forms.
+  # These MUST run before native manager passthrough.
+  case "$first" in
+    ask|chat)
+      mode="chat"
+      shift
+      provider_mode_dispatch "$mode" "$kind" "$@"
+      rc=$?
+      ;;
+    task)
+      mode="task"
+      shift
+      provider_mode_dispatch "$mode" "$kind" "$@"
+      rc=$?
+      ;;
+    plan)
+      mode="plan"
+      shift
+      provider_mode_dispatch "$mode" "$kind" "$@"
+      rc=$?
+      ;;
+    *)
+      if provider_is_native_subcommand "$kind" "$first"; then
+        provider_native_passthrough "$kind" "$mgr" "$default_profile" "$@"
+      fi
+
+      # Historical provider shortcut:
+      #   ai gemini PROMPT -> ai task gemini PROMPT
+      mode="task"
+      provider_mode_dispatch "$mode" "$kind" "$@"
+      rc=$?
+      ;;
+  esac
+
+  if [ "$rc" -ne 0 ] && [ "${AI_EXPLICIT_FALLBACK:-false}" = "true" ]; then
+    echo "[ai] explicit provider failed; fallback enabled" >&2
+    default_mode "$mode" "$@"
+    return $?
+  fi
+
+  return "$rc"
+}
+
+config_cmd() {
+  local sub="${1:-show}"
+  [ "$#" -gt 0 ] && shift || true
+
+  mkdir -p "$CONFIG_DIR"
+  touch "$CONFIG_FILE"
+
+  case "$sub" in
+    show|"")
+      echo "config: $CONFIG_FILE"
+      echo
+      cat "$CONFIG_FILE"
+      ;;
+    path)
+      echo "$CONFIG_FILE"
+      ;;
+    edit)
+      "${EDITOR:-nano}" "$CONFIG_FILE"
+      ;;
+    set)
+      local key="${1:-}"
+      local val="${2:-}"
+
+      [ -n "$key" ] && [ -n "$val" ] || {
+        echo "Usage: ai config set KEY VALUE" >&2
+        return 2
+      }
+
+      case "$key" in
+        default-provider) key="AI_DEFAULT_PROVIDER" ;;
+        codex-profile) key="AI_CODEX_PROFILE" ;;
+        gemini-profile) key="AI_GEMINI_PROFILE" ;;
+        hermes-profile) key="AI_HERMES_PROFILE" ;;
+        fallback-enabled) key="AI_FALLBACK_ENABLED" ;;
+        fallback-providers) key="AI_FALLBACK_PROVIDERS" ;;
+        explicit-fallback) key="AI_EXPLICIT_FALLBACK" ;;
+        ask-timeout) key="AI_ASK_TIMEOUT" ;;
+        auto-start-bridge) key="AI_AUTO_START_BRIDGE" ;;
+      esac
+
+      case "$key" in
+        AI_DEFAULT_PROVIDER|AI_CODEX_PROFILE|AI_GEMINI_PROFILE|AI_HERMES_PROFILE|AI_FALLBACK_ENABLED|AI_FALLBACK_PROVIDERS|AI_EXPLICIT_FALLBACK|AI_ASK_TIMEOUT|AI_AUTO_START_BRIDGE) ;;
+        *)
+          echo "ERROR: unknown config key: $key" >&2
+          return 2
+          ;;
+      esac
+
+      python - "$CONFIG_FILE" "$key" "$val" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+key = sys.argv[2]
+val = sys.argv[3]
+
+lines = p.read_text().splitlines() if p.exists() else []
+out = []
+done = False
+
+for line in lines:
+    if line.startswith(key + "="):
+        out.append(f'{key}="{val}"')
+        done = True
+    else:
+        out.append(line)
+
+if not done:
+    out.append(f'{key}="{val}"')
+
+p.write_text("\n".join(out) + "\n")
+PY
+      echo "set $key=$val"
+      ;;
+    *)
+      echo "Usage: ai config [show|path|edit|set KEY VALUE]" >&2
+      return 2
+      ;;
+  esac
+}
+
+up_cmd() {
+  need hgw || return $?
+  hgw bridge start || true
+  hgw run all
+  echo
+  hgw status || true
+  echo
+  hgw bridge status || true
+}
+
+down_cmd() {
+  need hgw || return $?
+  hgw-auto off >/dev/null 2>&1 || true
+  hgw stop all || true
+  hgw bridge stop || true
+}
+
+restart_cmd() {
+  down_cmd || true
+  up_cmd
+}
+
+plane_cmd() {
+  local sub="${1:-status}"
+  [ "$#" -gt 0 ] && shift || true
+
+  need hgw || return $?
+
+  case "$sub" in
+    status|"")
+      hgw status || true
+      echo
+      hgw bridge status || true
+      ;;
+    view)
+      [ -n "${1:-}" ] || { echo "Usage: ai plane view <profile>" >&2; return 2; }
+      exec hgw view "$1"
+      ;;
+    logs)
+      if [ "${1:-}" = "bridge" ] || [ "${1:-}" = "hgb" ]; then
+        hgw bridge logs "${2:-120}"
+      else
+        [ -n "${1:-}" ] || { echo "Usage: ai plane logs <profile|bridge>" >&2; return 2; }
+        hgw logs "$1"
+      fi
+      ;;
+    *)
+      echo "Usage: ai plane [status|view|logs]" >&2
+      return 2
+      ;;
+  esac
+}
+
+logs_cmd() {
+  need hgw || return $?
+  local target="${1:-bridge}"
+
+  if [ "$target" = "bridge" ] || [ "$target" = "hgb" ]; then
+    hgw bridge logs "${2:-120}"
+  else
+    hgw logs "$target"
+  fi
+}
+
+auto_cmd() {
+  local sub="${1:-status}"
+  shift 2>/dev/null || true
+
+  command -v hgw-auto >/dev/null 2>&1 || {
+    echo "ERROR: hgw-auto not found" >&2
+    return 127
+  }
+
+  case "$sub" in
+    on|enable)
+      hgw-auto on
+      ;;
+    off|disable)
+      hgw-auto off
+      ;;
+    run|start)
+      hgw-auto run
+      ;;
+    status|"")
+      hgw-auto status
+      ;;
+    logs|log)
+      hgw-auto logs "${1:-80}"
+      ;;
+    *)
+      echo "Usage: ai auto [on|off|status|run|logs]" >&2
+      return 2
+      ;;
+  esac
+}
+
+status_cmd() {
+  echo "== ai config =="
+  echo "AI_DEFAULT_PROVIDER=$AI_DEFAULT_PROVIDER"
+  echo "AI_CODEX_PROFILE=$AI_CODEX_PROFILE"
+  echo "AI_GEMINI_PROFILE=$AI_GEMINI_PROFILE"
+  echo "AI_HERMES_PROFILE=$AI_HERMES_PROFILE"
+  echo "AI_FALLBACK_ENABLED=$AI_FALLBACK_ENABLED"
+  echo "AI_FALLBACK_PROVIDERS=$AI_FALLBACK_PROVIDERS"
+  echo "AI_EXPLICIT_FALLBACK=$AI_EXPLICIT_FALLBACK"
+  echo "AI_ASK_TIMEOUT=$AI_ASK_TIMEOUT"
+  echo "AI_AUTO_START_BRIDGE=$AI_AUTO_START_BRIDGE"
+
+  echo
+  echo "== commands =="
+  for c in cm gm hm hgw hgb; do
+    printf "%-4s " "$c"
+    command -v "$c" 2>/dev/null || echo "missing"
+  done
+
+  echo
+  echo "== hgw/hgb =="
+  hgw status 2>/dev/null || true
+  echo
+  hgw bridge status 2>/dev/null || true
+}
+
+check_cmd() {
+  echo "== syntax/path check =="
+  for c in cm gm hm hgw hgb; do
+    printf "%-4s " "$c"
+    command -v "$c" 2>/dev/null || { echo "missing"; continue; }
+    p="$(command -v "$c")"
+    if head -n 1 "$p" | grep -q 'python'; then
+      python -m py_compile "$p" >/dev/null && echo "OK"
+    else
+      bash -n "$p" >/dev/null && echo "OK"
+    fi
+  done
+
+  echo
+  echo "== default profiles =="
+  for item in "codex:$AI_CODEX_PROFILE" "gemini:$AI_GEMINI_PROFILE" "hermes:$AI_HERMES_PROFILE"; do
+    kind="${item%%:*}"
+    profile="${item#*:}"
+    printf "%-8s %-12s " "$kind" "$profile"
+    if profile_exists "$kind" "$profile"; then echo "OK"; else echo "missing"; fi
+  done
+
+  echo
+  echo "== bridge =="
+  hgw bridge status 2>/dev/null || true
+}
+
+load_config
+
+cmd="${1:-help}"
+[ "$#" -gt 0 ] && shift || true
+
+case "$cmd" in
+  cm|c) need cm && exec cm "$@" ;;
+  gm|g) need gm && exec gm "$@" ;;
+  hm|h) need hm && exec hm "$@" ;;
+
+  codex) provider_or_router codex "$@" ;;
+  gemini) provider_or_router gemini "$@" ;;
+  hermes) provider_or_router hermes "$@" ;;
+
+  hgw|gateway|gw) need hgw && exec hgw "$@" ;;
+  hgb) need hgb && exec hgb "$@" ;;
+  bridge|br) need hgw && exec hgw bridge "$@" ;;
+
+  ask|chat) chat_cmd "$@" ;;
+  task) task_cmd "$@" ;;
+  plan) plan_cmd "$@" ;;
+
+  up|start) up_cmd ;;
+  down|stop) down_cmd ;;
+  auto) auto_cmd "$@" ;;
+  restart) restart_cmd ;;
+  plane|planes) plane_cmd "$@" ;;
+  logs|log) logs_cmd "$@" ;;
+
+  config|cfg) config_cmd "$@" ;;
+  status) status_cmd ;;
+  check|doctor) check_cmd ;;
+  help|-h|--help|"") usage ;;
+
+  *) chat_default "$cmd" "$@" ;;
+esac

@@ -1,0 +1,36 @@
+{
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    },
+    "enablePermanentToolApproval": true,
+    "toolSandboxing": true
+  },
+  "general": {
+    "plan": {},
+    "vimMode": false,
+    "defaultApprovalMode": "auto_edit",
+    "enableNotifications": true
+  },
+  "ui": {
+    "inlineThinkingMode": "full",
+    "showStatusInTitle": true,
+    "footer": {
+      "hideContextPercentage": false
+    },
+    "showMemoryUsage": true,
+    "showCitations": true,
+    "showModelInfoInChat": true
+  },
+  "billing": {
+    "overageStrategy": "ask"
+  },
+  "experimental": {
+    "directWebFetch": true,
+    "contextManagement": true,
+    "modelSteering": true,
+    "memoryManager": true,
+    "generalistProfile": true,
+    "topicUpdateNarration": true
+  }
+}

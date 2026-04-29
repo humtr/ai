@@ -1,0 +1,4613 @@
+
+============================================================
+FILE: bin/ai
+PATH: /data/data/com.termux/files/home/bin/ai
+============================================================
+
+     1	#!/data/data/com.termux/files/usr/bin/bash
+     2	# ai = AI Manager
+     3	set -euo pipefail
+     4	
+     5	CONFIG_DIR="$HOME/.config/ai"
+     6	CONFIG_FILE="$CONFIG_DIR/config.env"
+     7	
+     8	AI_DEFAULT_PROVIDER="hermes"
+     9	AI_CODEX_PROFILE="main"
+    10	AI_GEMINI_PROFILE="main"
+    11	AI_HERMES_PROFILE="main"
+    12	AI_FALLBACK_ENABLED="true"
+    13	AI_FALLBACK_PROVIDERS="hermes gemini codex"
+    14	AI_EXPLICIT_FALLBACK="false"
+    15	AI_ASK_TIMEOUT="180"
+    16	AI_AUTO_START_BRIDGE="false"
+    17	
+    18	load_config() {
+    19	  mkdir -p "$CONFIG_DIR"
+    20	  [ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+    21	
+    22	  AI_DEFAULT_PROVIDER="${AI_DEFAULT_PROVIDER:-hermes}"
+    23	  AI_CODEX_PROFILE="${AI_CODEX_PROFILE:-main}"
+    24	  AI_GEMINI_PROFILE="${AI_GEMINI_PROFILE:-main}"
+    25	  AI_HERMES_PROFILE="${AI_HERMES_PROFILE:-main}"
+    26	  AI_FALLBACK_ENABLED="${AI_FALLBACK_ENABLED:-true}"
+    27	  AI_FALLBACK_PROVIDERS="${AI_FALLBACK_PROVIDERS:-hermes gemini codex}"
+    28	  AI_EXPLICIT_FALLBACK="${AI_EXPLICIT_FALLBACK:-false}"
+    29	  AI_ASK_TIMEOUT="${AI_ASK_TIMEOUT:-180}"
+    30	  AI_AUTO_START_BRIDGE="${AI_AUTO_START_BRIDGE:-false}"
+    31	}
+    32	
+    33	usage() {
+    34	  cat <<USAGE
+    35	ai = AI Manager
+    36	
+    37	Core modes:
+    38	  ai ask "prompt"                    -> default provider no-tool chat with fallback
+    39	  ai chat "prompt"                   -> same as ask
+    40	  ai task "prompt"                   -> default provider tool-capable task with fallback
+    41	  ai plan "prompt"                   -> default provider plan-only prompt with fallback
+    42	
+    43	Provider-first forms:
+    44	  ai codex ask "prompt"              -> cm chat \$AI_CODEX_PROFILE
+    45	  ai gemini ask "prompt"             -> gm chat \$AI_GEMINI_PROFILE
+    46	  ai hermes ask "prompt"             -> hm chat \$AI_HERMES_PROFILE
+    47	
+    48	  ai codex task "prompt"             -> cm task \$AI_CODEX_PROFILE
+    49	  ai gemini task "prompt"            -> gm task \$AI_GEMINI_PROFILE
+    50	  ai hermes task "prompt"            -> hm task \$AI_HERMES_PROFILE
+    51	
+    52	  ai codex plan "prompt"             -> cm plan \$AI_CODEX_PROFILE
+    53	  ai gemini plan "prompt"            -> gm plan \$AI_GEMINI_PROFILE
+    54	  ai hermes plan "prompt"            -> hm plan \$AI_HERMES_PROFILE
+    55	
+    56	Canonical provider forms:
+    57	  ai ask codex "prompt"              -> cm chat \$AI_CODEX_PROFILE
+    58	  ai ask gemini "prompt"             -> gm chat \$AI_GEMINI_PROFILE
+    59	  ai ask hermes "prompt"             -> hm chat \$AI_HERMES_PROFILE
+    60	
+    61	  ai task codex "prompt"             -> cm task \$AI_CODEX_PROFILE
+    62	  ai task gemini "prompt"            -> gm task \$AI_GEMINI_PROFILE
+    63	  ai task hermes "prompt"            -> hm task \$AI_HERMES_PROFILE
+    64	
+    65	  ai plan codex "prompt"             -> cm plan \$AI_CODEX_PROFILE
+    66	  ai plan gemini "prompt"            -> gm plan \$AI_GEMINI_PROFILE
+    67	  ai plan hermes "prompt"            -> hm plan \$AI_HERMES_PROFILE
+    68	
+    69	Provider task shortcuts:
+    70	  ai codex "prompt"                  -> ai task codex "prompt"
+    71	  ai gemini "prompt"                 -> ai task gemini "prompt"
+    72	  ai hermes "prompt"                 -> ai task hermes "prompt"
+    73	
+    74	Native provider commands:
+    75	  ai codex run [profile] [args...]    -> cd ~/sb/codex/<profile>;  cm run <profile>
+    76	  ai gemini run [profile] [args...]   -> cd ~/sb/gemini/<profile>; gm run <profile>
+    77	  ai hermes run [profile] [args...]   -> cd ~/sb/hermes/<profile>; hm run <profile>
+    78	
+    79	  ai codex raw [profile] -- <args...> -> sandbox profile + cm raw passthrough
+    80	  ai gemini raw [profile] -- <args...>-> sandbox profile + gm raw passthrough
+    81	  ai hermes raw [profile] -- <args...>-> sandbox profile + hm raw passthrough
+    82	
+    83	  ai codex exec [profile] <args...>   -> sandbox profile + native codex exec passthrough
+    84	
+    85	Manager routers:
+    86	  ai cm <args...>                     -> cm <args...>
+    87	  ai gm <args...>                     -> gm <args...>
+    88	  ai hm <args...>                     -> hm <args...>
+    89	  ai hgw <args...>                    -> hgw <args...>
+    90	  ai hgb <args...>                    -> hgb <args...>
+    91	
+    92	Plane / service control:
+    93	  ai up                               -> hgw bridge start + hgw run all
+    94	  ai down                             -> hgw stop all + hgw bridge stop
+    95	  ai restart                          -> ai down + ai up
+    96	  ai plane status                     -> hgw status + hgw bridge status
+    97	  ai auto [on|off|status|run]          -> control hgw-auto
+    98	  ai plane view <profile>             -> hgw view <profile>
+    99	  ai logs <profile|bridge>            -> hgw logs / hgw bridge logs
+   100	
+   101	Config:
+   102	  ai config
+   103	  ai config set default-provider hermes
+   104	  ai config set codex-profile main
+   105	  ai config set gemini-profile tg
+   106	  ai config set hermes-profile main
+   107	  ai config set ask-timeout 180
+   108	
+   109	Current:
+   110	  AI_DEFAULT_PROVIDER="$AI_DEFAULT_PROVIDER"
+   111	  AI_CODEX_PROFILE="$AI_CODEX_PROFILE"
+   112	  AI_GEMINI_PROFILE="$AI_GEMINI_PROFILE"
+   113	  AI_HERMES_PROFILE="$AI_HERMES_PROFILE"
+   114	  AI_FALLBACK_ENABLED="$AI_FALLBACK_ENABLED"
+   115	  AI_FALLBACK_PROVIDERS="$AI_FALLBACK_PROVIDERS"
+   116	  AI_EXPLICIT_FALLBACK="$AI_EXPLICIT_FALLBACK"
+   117	  AI_ASK_TIMEOUT="$AI_ASK_TIMEOUT"
+   118	  AI_AUTO_START_BRIDGE="$AI_AUTO_START_BRIDGE"
+   119	
+   120	Notes:
+   121	  ask/chat = no-tool answer mode.
+   122	  task     = tool-capable work mode.
+   123	  plan     = plan-only mode; should not perform writes or destructive work.
+   124	  run/raw/exec through ai automatically use the provider sandbox directory.
+   125	  Use quotes for JSON, code, shell symbols, $, *, >, |, ;, &, parentheses,
+   126	  command substitutions, backticks, braces, brackets, newlines, and leading dashes.
+   127	USAGE
+   128	}
+   129	
+   130	need() {
+   131	  command -v "$1" >/dev/null 2>&1 || {
+   132	    echo "ERROR: missing command: $1" >&2
+   133	    hint_missing_command "$1" >&2
+   134	    return 127
+   135	  }
+   136	}
+   137	
+   138	hint_missing_command() {
+   139	  case "$1" in
+   140	    cm)  echo "Hint: install/restore ~/bin/cm = Codex Manager" ;;
+   141	    gm)  echo "Hint: install/restore ~/bin/gm = Gemini Manager" ;;
+   142	    hm)  echo "Hint: install/restore ~/bin/hm = Hermes Manager" ;;
+   143	    hgw) echo "Hint: install/restore ~/bin/hgw = Hermes Gateway Manager" ;;
+   144	    hgb) echo "Hint: install/restore ~/bin/hgb = Hermes Gemini Bridge" ;;
+   145	  esac
+   146	}
+   147	
+   148	profile_exists() {
+   149	  local kind="$1"
+   150	  local profile="$2"
+   151	
+   152	  case "$kind" in
+   153	    codex)  [ -d "$HOME/.codex-homes/$profile" ] ;;
+   154	    gemini) [ -d "$HOME/.gemini-homes/$profile" ] ;;
+   155	    hermes) [ -d "$HOME/.hermes/profiles/$profile" ] ;;
+   156	    *) return 1 ;;
+   157	  esac
+   158	}
+   159	
+   160	profile_hint() {
+   161	  local kind="$1"
+   162	  local profile="$2"
+   163	
+   164	  case "$kind" in
+   165	    codex)
+   166	      echo "[ai] Codex profile not found or not ready: $profile" >&2
+   167	      echo "     Try: cm profile list" >&2
+   168	      echo "     Try: cm profile add $profile" >&2
+   169	      echo "     Try: cm run $profile" >&2
+   170	      ;;
+   171	    gemini)
+   172	      echo "[ai] Gemini profile not found or not ready: $profile" >&2
+   173	      echo "     Try: gm profile list" >&2
+   174	      echo "     Try: gm profile add $profile" >&2
+   175	      echo "     Try: cd ~/sb/gemini/$profile && gm run $profile" >&2
+   176	      ;;
+   177	    hermes)
+   178	      echo "[ai] Hermes profile not found or not ready: $profile" >&2
+   179	      echo "     Try: hm profile list" >&2
+   180	      echo "     Try: hm profile use $profile" >&2
+   181	      echo "     Try: hermes model  # or hermes setup/auth" >&2
+   182	      ;;
+   183	  esac
+   184	}
+   185	
+   186	failure_hint() {
+   187	  local kind="$1"
+   188	  local profile="$2"
+   189	  local rc="$3"
+   190	
+   191	  echo "[ai] $kind/$profile failed with exit=$rc" >&2
+   192	
+   193	  case "$kind" in
+   194	    codex)
+   195	      echo "     Check: cd ~/sb/codex/$profile && cm task $profile \"Reply with only: OK\"" >&2
+   196	      ;;
+   197	    gemini)
+   198	      echo "     Check: cd ~/sb/gemini/$profile && gm task $profile -- --skip-trust -p 'Reply with only: OK'" >&2
+   199	      echo "     If trust error appears, run from ~/sb/gemini/$profile or re-run gm run $profile." >&2
+   200	      ;;
+   201	    hermes)
+   202	      echo "     Check: cd ~/sb/hermes/$profile && hm task $profile \"Reply with only: OK\"" >&2
+   203	      echo "     If provider error appears, run: hm profile use $profile && hermes model" >&2
+   204	      echo "     If custom hgb is used, check: ai bridge status" >&2
+   205	      ;;
+   206	  esac
+   207	}
+   208	
+   209	join_prompt() {
+   210	  local IFS=" "
+   211	  printf "%s" "$*"
+   212	}
+   213	
+   214	ai_workdir() {
+   215	  local kind="$1"
+   216	  local profile="$2"
+   217	
+   218	  case "$kind" in
+   219	    codex)  echo "$HOME/sb/codex/$profile" ;;
+   220	    gemini) echo "$HOME/sb/gemini/$profile" ;;
+   221	    hermes) echo "$HOME/sb/hermes/$profile" ;;
+   222	    *) echo "$HOME" ;;
+   223	  esac
+   224	}
+   225	
+   226	run_with_timeout() {
+   227	  local rc
+   228	
+   229	  set +e
+   230	  if command -v timeout >/dev/null 2>&1 && [ -n "${AI_ASK_TIMEOUT:-}" ]; then
+   231	    timeout "$AI_ASK_TIMEOUT" "$@"
+   232	  else
+   233	    "$@"
+   234	  fi
+   235	  rc=$?
+   236	  set -e
+   237	  return "$rc"
+   238	}
+   239	
+   240	maybe_start_bridge() {
+   241	  [ "${AI_AUTO_START_BRIDGE:-false}" = "true" ] || return 0
+   242	  command -v hgw >/dev/null 2>&1 || return 0
+   243	  hgw bridge start >/dev/null 2>&1 || true
+   244	}
+   245	
+   246	# >>> ai provider metadata >>>
+   247	provider_mgr() {
+   248	  case "${1:-}" in
+   249	    codex) echo "cm" ;;
+   250	    gemini) echo "gm" ;;
+   251	    hermes) echo "hm" ;;
+   252	    *)
+   253	      echo "ERROR: unknown provider kind: ${1:-}" >&2
+   254	      return 2
+   255	      ;;
+   256	  esac
+   257	}
+   258	
+   259	provider_default_profile() {
+   260	  case "${1:-}" in
+   261	    codex) echo "$AI_CODEX_PROFILE" ;;
+   262	    gemini) echo "$AI_GEMINI_PROFILE" ;;
+   263	    hermes) echo "$AI_HERMES_PROFILE" ;;
+   264	    *)
+   265	      echo "ERROR: unknown provider kind: ${1:-}" >&2
+   266	      return 2
+   267	      ;;
+   268	  esac
+   269	}
+   270	
+   271	provider_label() {
+   272	  case "${1:-}" in
+   273	    codex|gemini|hermes) echo "$1" ;;
+   274	    *)
+   275	      echo "ERROR: unknown provider kind: ${1:-}" >&2
+   276	      return 2
+   277	      ;;
+   278	  esac
+   279	}
+   280	
+   281	provider_prepare() {
+   282	  local kind="$1"
+   283	  local mgr
+   284	  mgr="$(provider_mgr "$kind")" || return $?
+   285	
+   286	  need "$mgr" || return $?
+   287	
+   288	  case "$kind" in
+   289	    hermes)
+   290	      maybe_start_bridge
+   291	      ;;
+   292	  esac
+   293	}
+   294	
+   295	provider_exec_sandbox() {
+   296	  local kind="$1"
+   297	  shift
+   298	
+   299	  case "$kind" in
+   300	    codex)
+   301	      exec env \
+   302	        CM_CWD_TTY_POLICY=sandbox \
+   303	        CM_CWD_NONTTY_POLICY=sandbox \
+   304	        "$@"
+   305	      ;;
+   306	
+   307	    gemini)
+   308	      exec env \
+   309	        GEMINI_CLI_TRUST_WORKSPACE=true \
+   310	        GM_CWD_TTY_POLICY=sandbox \
+   311	        GM_CWD_NONTTY_POLICY=sandbox \
+   312	        "$@"
+   313	      ;;
+   314	
+   315	    hermes)
+   316	      exec env \
+   317	        HM_CWD_TTY_POLICY=sandbox \
+   318	        HM_CWD_NONTTY_POLICY=sandbox \
+   319	        "$@"
+   320	      ;;
+   321	
+   322	    *)
+   323	      echo "ERROR: unknown provider kind: $kind" >&2
+   324	      return 2
+   325	      ;;
+   326	  esac
+   327	}
+   328	
+   329	provider_run_sandbox_env() {
+   330	  local kind="$1"
+   331	  shift
+   332	
+   333	  case "$kind" in
+   334	    codex)
+   335	      env \
+   336	        CM_CWD_TTY_POLICY=sandbox \
+   337	        CM_CWD_NONTTY_POLICY=sandbox \
+   338	        "$@"
+   339	      ;;
+   340	
+   341	    gemini)
+   342	      env \
+   343	        GEMINI_CLI_TRUST_WORKSPACE=true \
+   344	        GM_CWD_TTY_POLICY=sandbox \
+   345	        GM_CWD_NONTTY_POLICY=sandbox \
+   346	        "$@"
+   347	      ;;
+   348	
+   349	    hermes)
+   350	      env \
+   351	        HM_CWD_TTY_POLICY=sandbox \
+   352	        HM_CWD_NONTTY_POLICY=sandbox \
+   353	        "$@"
+   354	      ;;
+   355	
+   356	    *)
+   357	      echo "ERROR: unknown provider kind: $kind" >&2
+   358	      return 2
+   359	      ;;
+   360	  esac
+   361	}
+   362	# <<< ai provider metadata >>>
+   363	
+   364	# >>> ai provider prompt sandbox runner >>>
+   365	provider_run_manager_sandbox() {
+   366	  local kind="$1"
+   367	  local mode="$2"
+   368	  local profile="$3"
+   369	  local workdir="$4"
+   370	  shift 4
+   371	
+   372	  local mgr
+   373	  mgr="$(provider_mgr "$kind")" || return $?
+   374	
+   375	  case "$kind" in
+   376	    codex)
+   377	      (
+   378	        cd "$workdir" &&
+   379	        run_with_timeout env \
+   380	          CM_CWD_TTY_POLICY=sandbox \
+   381	          CM_CWD_NONTTY_POLICY=sandbox \
+   382	          "$mgr" sb "$mode" "$profile" "$@"
+   383	      )
+   384	      ;;
+   385	
+   386	    gemini)
+   387	      (
+   388	        cd "$workdir" &&
+   389	        run_with_timeout env \
+   390	          GEMINI_CLI_TRUST_WORKSPACE=true \
+   391	          GM_CWD_TTY_POLICY=sandbox \
+   392	          GM_CWD_NONTTY_POLICY=sandbox \
+   393	          "$mgr" sb "$mode" "$profile" "$@"
+   394	      )
+   395	      ;;
+   396	
+   397	    hermes)
+   398	      (
+   399	        cd "$workdir" &&
+   400	        run_with_timeout env \
+   401	          HM_CWD_TTY_POLICY=sandbox \
+   402	          HM_CWD_NONTTY_POLICY=sandbox \
+   403	          "$mgr" sb "$mode" "$profile" "$@"
+   404	      )
+   405	      ;;
+   406	
+   407	    *)
+   408	      echo "ERROR: unknown provider kind: $kind" >&2
+   409	      return 2
+   410	      ;;
+   411	  esac
+   412	}
+   413	# <<< ai provider prompt sandbox runner >>>
+   414	
+   415	provider_mode_cmd() {
+   416	  local kind="$1"
+   417	  local mode="$2"
+   418	  shift 2
+   419	
+   420	  local profile label workdir prompt
+   421	
+   422	  provider_prepare "$kind" || return $?
+   423	
+   424	  profile="$(provider_default_profile "$kind")" || return $?
+   425	  label="$(provider_label "$kind")" || return $?
+   426	
+   427	  [ "$#" -gt 0 ] || {
+   428	    echo "Usage: ai $mode $label [profile] PROMPT" >&2
+   429	    return 2
+   430	  }
+   431	
+   432	  # Optional explicit profile.
+   433	  # Critical: check $# before touching $1.
+   434	  if [ "$#" -gt 0 ] && profile_exists "$kind" "$1"; then
+   435	    profile="$1"
+   436	    shift
+   437	  fi
+   438	
+   439	  profile_exists "$kind" "$profile" || {
+   440	    profile_hint "$kind" "$profile"
+   441	    return 127
+   442	  }
+   443	
+   444	  [ "$#" -gt 0 ] || {
+   445	    echo "Usage: ai $mode $label [profile] PROMPT" >&2
+   446	    return 2
+   447	  }
+   448	
+   449	  workdir="$(ai_workdir "$kind" "$profile")"
+   450	  mkdir -p "$workdir"
+   451	
+   452	  if [ "${1:-}" = "-" ] || [ "${1:-}" = "--" ]; then
+   453	    provider_run_manager_sandbox "$kind" "$mode" "$profile" "$workdir" "$@"
+   454	    return $?
+   455	  fi
+   456	
+   457	  prompt="$(join_prompt "$@")"
+   458	  provider_run_manager_sandbox "$kind" "$mode" "$profile" "$workdir" "$prompt"
+   459	}
+   460	
+   461	
+   462	# Provider alias normalization.
+   463	# Keep this as the only place that maps public provider aliases to canonical kinds.
+   464	provider_alias_kind() {
+   465	  case "${1:-}" in
+   466	    codex|cm|c) echo "codex" ;;
+   467	    gemini|gm|g) echo "gemini" ;;
+   468	    hermes|hm|h) echo "hermes" ;;
+   469	    *)
+   470	      return 1
+   471	      ;;
+   472	  esac
+   473	}
+   474	
+   475	provider_mode_dispatch() {
+   476	  local mode="$1"
+   477	  local provider="$2"
+   478	  shift 2
+   479	
+   480	  local kind
+   481	  kind="$(provider_alias_kind "$provider")" || {
+   482	    echo "ERROR: unknown provider: $provider" >&2
+   483	    return 2
+   484	  }
+   485	
+   486	  case "$mode" in
+   487	    task|chat|plan)
+   488	      provider_mode_cmd "$kind" "$mode" "$@"
+   489	      ;;
+   490	    *)
+   491	      echo "ERROR: unknown provider mode: $mode" >&2
+   492	      return 2
+   493	      ;;
+   494	  esac
+   495	}
+   496	
+   497	task_provider() {
+   498	  local provider="$1"
+   499	  shift
+   500	  provider_mode_dispatch task "$provider" "$@"
+   501	}
+   502	
+   503	chat_provider() {
+   504	  local provider="$1"
+   505	  shift
+   506	  provider_mode_dispatch chat "$provider" "$@"
+   507	}
+   508	
+   509	plan_provider() {
+   510	  local provider="$1"
+   511	  shift
+   512	  provider_mode_dispatch plan "$provider" "$@"
+   513	}
+   514	
+   515	default_mode() {
+   516	  local mode="$1"
+   517	  shift
+   518	
+   519	  if [ "${AI_FALLBACK_ENABLED:-true}" != "true" ]; then
+   520	    provider_mode_dispatch "$mode" "$AI_DEFAULT_PROVIDER" "$@"
+   521	    return $?
+   522	  fi
+   523	
+   524	  local provider rc last_rc=1
+   525	
+   526	  for provider in $(provider_order); do
+   527	    echo "[ai] trying provider: $provider ($mode)" >&2
+   528	    provider_mode_dispatch "$mode" "$provider" "$@"
+   529	    rc=$?
+   530	
+   531	    if [ "$rc" -eq 0 ]; then
+   532	      return 0
+   533	    fi
+   534	
+   535	    last_rc="$rc"
+   536	
+   537	    case "$provider" in
+   538	      codex|cm|c) failure_hint codex "$AI_CODEX_PROFILE" "$rc" ;;
+   539	      gemini|gm|g) failure_hint gemini "$AI_GEMINI_PROFILE" "$rc" ;;
+   540	      hermes|hm|h) failure_hint hermes "$AI_HERMES_PROFILE" "$rc" ;;
+   541	    esac
+   542	
+   543	    echo "[ai] fallback: next provider" >&2
+   544	    echo >&2
+   545	  done
+   546	
+   547	  echo "[ai] all fallback providers failed" >&2
+   548	  return "$last_rc"
+   549	}
+   550	
+   551	task_default()  { default_mode task "$@"; }
+   552	chat_default() { default_mode chat "$@"; }
+   553	plan_default() { default_mode plan "$@"; }
+   554	
+   555	task_cmd() {
+   556	  [ "$#" -gt 0 ] || {
+   557	    echo "Usage: ai task [codex|gemini|hermes] [profile] PROMPT" >&2
+   558	    return 2
+   559	  }
+   560	
+   561	  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
+   562	    local provider="$1"
+   563	    shift
+   564	    task_provider "$provider" "$@"
+   565	  else
+   566	    task_default "$@"
+   567	  fi
+   568	}
+   569	
+   570	chat_cmd() {
+   571	  [ "$#" -gt 0 ] || {
+   572	    echo "Usage: ai ask [codex|gemini|hermes] [profile] PROMPT" >&2
+   573	    return 2
+   574	  }
+   575	
+   576	  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
+   577	    local provider="$1"
+   578	    shift
+   579	    chat_provider "$provider" "$@"
+   580	  else
+   581	    chat_default "$@"
+   582	  fi
+   583	}
+   584	
+   585	plan_cmd() {
+   586	  [ "$#" -gt 0 ] || {
+   587	    echo "Usage: ai plan [codex|gemini|hermes] [profile] PROMPT" >&2
+   588	    return 2
+   589	  }
+   590	
+   591	  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
+   592	    local provider="$1"
+   593	    shift
+   594	    plan_provider "$provider" "$@"
+   595	  else
+   596	    plan_default "$@"
+   597	  fi
+   598	}
+   599	
+   600	provider_native_subcommands() {
+   601	  case "${1:-}" in
+   602	    codex)
+   603	      echo "profile run ask task chat plan exec raw status doctor update help -h --help sb sandbox here"
+   604	      ;;
+   605	
+   606	    gemini)
+   607	      echo "profile run ask task chat plan raw status doctor backup update logs lag help -h --help sb sandbox here"
+   608	      ;;
+   609	
+   610	    hermes)
+   611	      echo "profile run ask task chat plan raw gateway gw status doctor backup update logs help -h --help sb sandbox here"
+   612	      ;;
+   613	
+   614	    *)
+   615	      return 1
+   616	      ;;
+   617	  esac
+   618	}
+   619	
+   620	provider_is_native_subcommand() {
+   621	  local kind="${1:-}"
+   622	  local sub="${2:-}"
+   623	  local allowed
+   624	
+   625	  [ -n "$kind" ] && [ -n "$sub" ] || return 1
+   626	
+   627	  allowed="$(provider_native_subcommands "$kind")" || return 1
+   628	
+   629	  case " $allowed " in
+   630	    *" $sub "*) return 0 ;;
+   631	    *) return 1 ;;
+   632	  esac
+   633	}
+   634	
+   635	# >>> ai sandbox native subcommand metadata >>>
+   636	provider_sandbox_native_subcommands() {
+   637	  case "${1:-}" in
+   638	    codex)
+   639	      echo "run raw exec"
+   640	      ;;
+   641	
+   642	    gemini)
+   643	      echo "run raw"
+   644	      ;;
+   645	
+   646	    hermes)
+   647	      echo "run raw"
+   648	      ;;
+   649	
+   650	    *)
+   651	      return 1
+   652	      ;;
+   653	  esac
+   654	}
+   655	
+   656	provider_is_sandbox_native_subcommand() {
+   657	  local kind="${1:-}"
+   658	  local sub="${2:-}"
+   659	  local allowed
+   660	
+   661	  [ -n "$kind" ] && [ -n "$sub" ] || return 1
+   662	
+   663	  allowed="$(provider_sandbox_native_subcommands "$kind")" || return 1
+   664	
+   665	  case " $allowed " in
+   666	    *" $sub "*) return 0 ;;
+   667	    *) return 1 ;;
+   668	  esac
+   669	}
+   670	# <<< ai sandbox native subcommand metadata >>>
+   671	
+   672	# >>> ai provider native passthrough >>>
+   673	provider_native_passthrough() {
+   674	  local kind="$1"
+   675	  local mgr="$2"
+   676	  local default_profile="$3"
+   677	  local sub="$4"
+   678	  shift 4 || true
+   679	
+   680	  local profile="$default_profile"
+   681	  local workdir
+   682	
+   683	  case "$sub" in
+   684	    run|raw|exec)
+   685	      # Optional explicit profile:
+   686	      #   ai codex run lab
+   687	      #   ai gemini raw tg -- --version
+   688	      #
+   689	      # Critical: check $# before touching $1.
+   690	      if [ "$#" -gt 0 ] && profile_exists "$kind" "$1"; then
+   691	        profile="$1"
+   692	        shift
+   693	      fi
+   694	
+   695	      profile_exists "$kind" "$profile" || {
+   696	        profile_hint "$kind" "$profile"
+   697	        return 127
+   698	      }
+   699	
+   700	      workdir="$(ai_workdir "$kind" "$profile")"
+   701	      mkdir -p "$workdir"
+   702	      cd "$workdir" || return 1
+   703	
+   704	      if provider_is_sandbox_native_subcommand "$kind" "$sub"; then
+   705	        provider_exec_sandbox "$kind" "$mgr" "$sub" "$profile" "$@"
+   706	      else
+   707	        exec "$mgr" "$sub" "$profile" "$@"
+   708	      fi
+   709	      ;;
+   710	
+   711	    *)
+   712	      # status/help/profile/list/update/logs/etc. stay plain native passthrough.
+   713	      exec "$mgr" "$sub" "$@"
+   714	      ;;
+   715	  esac
+   716	}
+   717	# <<< ai provider native passthrough >>>
+   718	
+   719	provider_or_router() {
+   720	  local provider="$1"
+   721	  shift
+   722	
+   723	  local kind mgr first mode rc default_profile
+   724	
+   725	  kind="$(provider_alias_kind "$provider")" || {
+   726	    echo "ERROR: unknown provider: $provider" >&2
+   727	    return 2
+   728	  }
+   729	
+   730	  mgr="$(provider_mgr "$kind")" || return $?
+   731	  default_profile="$(provider_default_profile "$kind")" || return $?
+   732	
+   733	  provider_prepare "$kind" || return $?
+   734	
+   735	  [ "$#" -gt 0 ] || exec "$mgr"
+   736	
+   737	  first="${1:-}"
+   738	  mode=""
+   739	
+   740	  # Provider-first normalized forms.
+   741	  # These MUST run before native manager passthrough.
+   742	  case "$first" in
+   743	    ask|chat)
+   744	      mode="chat"
+   745	      shift
+   746	      provider_mode_dispatch "$mode" "$kind" "$@"
+   747	      rc=$?
+   748	      ;;
+   749	    task)
+   750	      mode="task"
+   751	      shift
+   752	      provider_mode_dispatch "$mode" "$kind" "$@"
+   753	      rc=$?
+   754	      ;;
+   755	    plan)
+   756	      mode="plan"
+   757	      shift
+   758	      provider_mode_dispatch "$mode" "$kind" "$@"
+   759	      rc=$?
+   760	      ;;
+   761	    *)
+   762	      if provider_is_native_subcommand "$kind" "$first"; then
+   763	        provider_native_passthrough "$kind" "$mgr" "$default_profile" "$@"
+   764	      fi
+   765	
+   766	      # Historical provider shortcut:
+   767	      #   ai gemini PROMPT -> ai task gemini PROMPT
+   768	      mode="task"
+   769	      provider_mode_dispatch "$mode" "$kind" "$@"
+   770	      rc=$?
+   771	      ;;
+   772	  esac
+   773	
+   774	  if [ "$rc" -ne 0 ] && [ "${AI_EXPLICIT_FALLBACK:-false}" = "true" ]; then
+   775	    echo "[ai] explicit provider failed; fallback enabled" >&2
+   776	    default_mode "$mode" "$@"
+   777	    return $?
+   778	  fi
+   779	
+   780	  return "$rc"
+   781	}
+   782	
+   783	config_cmd() {
+   784	  local sub="${1:-show}"
+   785	  [ "$#" -gt 0 ] && shift || true
+   786	
+   787	  mkdir -p "$CONFIG_DIR"
+   788	  touch "$CONFIG_FILE"
+   789	
+   790	  case "$sub" in
+   791	    show|"")
+   792	      echo "config: $CONFIG_FILE"
+   793	      echo
+   794	      cat "$CONFIG_FILE"
+   795	      ;;
+   796	    path)
+   797	      echo "$CONFIG_FILE"
+   798	      ;;
+   799	    edit)
+   800	      "${EDITOR:-nano}" "$CONFIG_FILE"
+   801	      ;;
+   802	    set)
+   803	      local key="${1:-}"
+   804	      local val="${2:-}"
+   805	
+   806	      [ -n "$key" ] && [ -n "$val" ] || {
+   807	        echo "Usage: ai config set KEY VALUE" >&2
+   808	        return 2
+   809	      }
+   810	
+   811	      case "$key" in
+   812	        default-provider) key="AI_DEFAULT_PROVIDER" ;;
+   813	        codex-profile) key="AI_CODEX_PROFILE" ;;
+   814	        gemini-profile) key="AI_GEMINI_PROFILE" ;;
+   815	        hermes-profile) key="AI_HERMES_PROFILE" ;;
+   816	        fallback-enabled) key="AI_FALLBACK_ENABLED" ;;
+   817	        fallback-providers) key="AI_FALLBACK_PROVIDERS" ;;
+   818	        explicit-fallback) key="AI_EXPLICIT_FALLBACK" ;;
+   819	        ask-timeout) key="AI_ASK_TIMEOUT" ;;
+   820	        auto-start-bridge) key="AI_AUTO_START_BRIDGE" ;;
+   821	      esac
+   822	
+   823	      case "$key" in
+   824	        AI_DEFAULT_PROVIDER|AI_CODEX_PROFILE|AI_GEMINI_PROFILE|AI_HERMES_PROFILE|AI_FALLBACK_ENABLED|AI_FALLBACK_PROVIDERS|AI_EXPLICIT_FALLBACK|AI_ASK_TIMEOUT|AI_AUTO_START_BRIDGE) ;;
+   825	        *)
+   826	          echo "ERROR: unknown config key: $key" >&2
+   827	          return 2
+   828	          ;;
+   829	      esac
+   830	
+   831	      python - "$CONFIG_FILE" "$key" "$val" <<'PY'
+   832	from pathlib import Path
+   833	import sys
+   834	
+   835	p = Path(sys.argv[1])
+   836	key = sys.argv[2]
+   837	val = sys.argv[3]
+   838	
+   839	lines = p.read_text().splitlines() if p.exists() else []
+   840	out = []
+   841	done = False
+   842	
+   843	for line in lines:
+   844	    if line.startswith(key + "="):
+   845	        out.append(f'{key}="{val}"')
+   846	        done = True
+   847	    else:
+   848	        out.append(line)
+   849	
+   850	if not done:
+   851	    out.append(f'{key}="{val}"')
+   852	
+   853	p.write_text("\n".join(out) + "\n")
+   854	PY
+   855	      echo "set $key=$val"
+   856	      ;;
+   857	    *)
+   858	      echo "Usage: ai config [show|path|edit|set KEY VALUE]" >&2
+   859	      return 2
+   860	      ;;
+   861	  esac
+   862	}
+   863	
+   864	up_cmd() {
+   865	  need hgw || return $?
+   866	  hgw bridge start || true
+   867	  hgw run all
+   868	  echo
+   869	  hgw status || true
+   870	  echo
+   871	  hgw bridge status || true
+   872	}
+   873	
+   874	down_cmd() {
+   875	  need hgw || return $?
+   876	  hgw-auto off >/dev/null 2>&1 || true
+   877	  hgw stop all || true
+   878	  hgw bridge stop || true
+   879	}
+   880	
+   881	restart_cmd() {
+   882	  down_cmd || true
+   883	  up_cmd
+   884	}
+   885	
+   886	plane_cmd() {
+   887	  local sub="${1:-status}"
+   888	  [ "$#" -gt 0 ] && shift || true
+   889	
+   890	  need hgw || return $?
+   891	
+   892	  case "$sub" in
+   893	    status|"")
+   894	      hgw status || true
+   895	      echo
+   896	      hgw bridge status || true
+   897	      ;;
+   898	    view)
+   899	      [ -n "${1:-}" ] || { echo "Usage: ai plane view <profile>" >&2; return 2; }
+   900	      exec hgw view "$1"
+   901	      ;;
+   902	    logs)
+   903	      if [ "${1:-}" = "bridge" ] || [ "${1:-}" = "hgb" ]; then
+   904	        hgw bridge logs "${2:-120}"
+   905	      else
+   906	        [ -n "${1:-}" ] || { echo "Usage: ai plane logs <profile|bridge>" >&2; return 2; }
+   907	        hgw logs "$1"
+   908	      fi
+   909	      ;;
+   910	    *)
+   911	      echo "Usage: ai plane [status|view|logs]" >&2
+   912	      return 2
+   913	      ;;
+   914	  esac
+   915	}
+   916	
+   917	logs_cmd() {
+   918	  need hgw || return $?
+   919	  local target="${1:-bridge}"
+   920	
+   921	  if [ "$target" = "bridge" ] || [ "$target" = "hgb" ]; then
+   922	    hgw bridge logs "${2:-120}"
+   923	  else
+   924	    hgw logs "$target"
+   925	  fi
+   926	}
+   927	
+   928	auto_cmd() {
+   929	  local sub="${1:-status}"
+   930	  shift 2>/dev/null || true
+   931	
+   932	  command -v hgw-auto >/dev/null 2>&1 || {
+   933	    echo "ERROR: hgw-auto not found" >&2
+   934	    return 127
+   935	  }
+   936	
+   937	  case "$sub" in
+   938	    on|enable)
+   939	      hgw-auto on
+   940	      ;;
+   941	    off|disable)
+   942	      hgw-auto off
+   943	      ;;
+   944	    run|start)
+   945	      hgw-auto run
+   946	      ;;
+   947	    status|"")
+   948	      hgw-auto status
+   949	      ;;
+   950	    logs|log)
+   951	      hgw-auto logs "${1:-80}"
+   952	      ;;
+   953	    *)
+   954	      echo "Usage: ai auto [on|off|status|run|logs]" >&2
+   955	      return 2
+   956	      ;;
+   957	  esac
+   958	}
+   959	
+   960	status_cmd() {
+   961	  echo "== ai config =="
+   962	  echo "AI_DEFAULT_PROVIDER=$AI_DEFAULT_PROVIDER"
+   963	  echo "AI_CODEX_PROFILE=$AI_CODEX_PROFILE"
+   964	  echo "AI_GEMINI_PROFILE=$AI_GEMINI_PROFILE"
+   965	  echo "AI_HERMES_PROFILE=$AI_HERMES_PROFILE"
+   966	  echo "AI_FALLBACK_ENABLED=$AI_FALLBACK_ENABLED"
+   967	  echo "AI_FALLBACK_PROVIDERS=$AI_FALLBACK_PROVIDERS"
+   968	  echo "AI_EXPLICIT_FALLBACK=$AI_EXPLICIT_FALLBACK"
+   969	  echo "AI_ASK_TIMEOUT=$AI_ASK_TIMEOUT"
+   970	  echo "AI_AUTO_START_BRIDGE=$AI_AUTO_START_BRIDGE"
+   971	
+   972	  echo
+   973	  echo "== commands =="
+   974	  for c in cm gm hm hgw hgb; do
+   975	    printf "%-4s " "$c"
+   976	    command -v "$c" 2>/dev/null || echo "missing"
+   977	  done
+   978	
+   979	  echo
+   980	  echo "== hgw/hgb =="
+   981	  hgw status 2>/dev/null || true
+   982	  echo
+   983	  hgw bridge status 2>/dev/null || true
+   984	}
+   985	
+   986	check_cmd() {
+   987	  echo "== syntax/path check =="
+   988	  for c in cm gm hm hgw hgb; do
+   989	    printf "%-4s " "$c"
+   990	    command -v "$c" 2>/dev/null || { echo "missing"; continue; }
+   991	    p="$(command -v "$c")"
+   992	    if head -n 1 "$p" | grep -q 'python'; then
+   993	      python -m py_compile "$p" >/dev/null && echo "OK"
+   994	    else
+   995	      bash -n "$p" >/dev/null && echo "OK"
+   996	    fi
+   997	  done
+   998	
+   999	  echo
+  1000	  echo "== default profiles =="
+  1001	  for item in "codex:$AI_CODEX_PROFILE" "gemini:$AI_GEMINI_PROFILE" "hermes:$AI_HERMES_PROFILE"; do
+  1002	    kind="${item%%:*}"
+  1003	    profile="${item#*:}"
+  1004	    printf "%-8s %-12s " "$kind" "$profile"
+  1005	    if profile_exists "$kind" "$profile"; then echo "OK"; else echo "missing"; fi
+  1006	  done
+  1007	
+  1008	  echo
+  1009	  echo "== bridge =="
+  1010	  hgw bridge status 2>/dev/null || true
+  1011	}
+  1012	
+  1013	load_config
+  1014	
+  1015	cmd="${1:-help}"
+  1016	[ "$#" -gt 0 ] && shift || true
+  1017	
+  1018	case "$cmd" in
+  1019	  cm|c) need cm && exec cm "$@" ;;
+  1020	  gm|g) need gm && exec gm "$@" ;;
+  1021	  hm|h) need hm && exec hm "$@" ;;
+  1022	
+  1023	  codex) provider_or_router codex "$@" ;;
+  1024	  gemini) provider_or_router gemini "$@" ;;
+  1025	  hermes) provider_or_router hermes "$@" ;;
+  1026	
+  1027	  hgw|gateway|gw) need hgw && exec hgw "$@" ;;
+  1028	  hgb) need hgb && exec hgb "$@" ;;
+  1029	  bridge|br) need hgw && exec hgw bridge "$@" ;;
+  1030	
+  1031	  ask|chat) chat_cmd "$@" ;;
+  1032	  task) task_cmd "$@" ;;
+  1033	  plan) plan_cmd "$@" ;;
+  1034	
+  1035	  up|start) up_cmd ;;
+  1036	  down|stop) down_cmd ;;
+  1037	  auto) auto_cmd "$@" ;;
+  1038	  restart) restart_cmd ;;
+  1039	  plane|planes) plane_cmd "$@" ;;
+  1040	  logs|log) logs_cmd "$@" ;;
+  1041	
+  1042	  config|cfg) config_cmd "$@" ;;
+  1043	  status) status_cmd ;;
+  1044	  check|doctor) check_cmd ;;
+  1045	  help|-h|--help|"") usage ;;
+  1046	
+  1047	  *) chat_default "$cmd" "$@" ;;
+  1048	esac
+
+============================================================
+FILE: bin/gm
+PATH: /data/data/com.termux/files/home/bin/gm
+============================================================
+
+     1	#!/data/data/com.termux/files/usr/bin/bash
+     2	# gm = Gemini Manager
+     3	set -euo pipefail
+     4	
+     5	# >>> gm cwd policy >>>
+     6	# Shared cwd policy loaded from:
+     7	#   ~/.config/ai/lib/manager_cwd_policy.sh
+     8	#
+     9	# Environment overrides:
+    10	#   GM_CWD_TTY_POLICY=ask|cwd|sandbox
+    11	#   GM_CWD_NONTTY_POLICY=cwd|sandbox
+    12	#   GM_CWD_ASK_DEFAULT=cwd|sandbox
+    13	
+    14	__mgr_name="gm"
+    15	__mgr_profile_home="$HOME/.gemini-homes"
+    16	__mgr_sb_root="$HOME/sb/gemini"
+    17	__mgr_tty_policy="${GM_CWD_TTY_POLICY:-ask}"
+    18	__mgr_non_tty_policy="${GM_CWD_NONTTY_POLICY:-sandbox}"
+    19	__mgr_ask_default="${GM_CWD_ASK_DEFAULT:-sandbox}"
+    20	__mgr_force_policy=""
+    21	
+    22	if [ "${1:-}" = "sb" ] || [ "${1:-}" = "sandbox" ]; then
+    23	  __mgr_force_policy="sandbox"
+    24	  shift
+    25	fi
+    26	
+    27	__mgr_cmd="${1:-}"
+    28	__mgr_profile="${2:-}"
+    29	
+    30	# shellcheck source=/dev/null
+    31	. "$HOME/.config/ai/lib/manager_cwd_policy.sh"
+    32	
+    33	__mgr_rc=0
+    34	ai_mgr_maybe_cd \
+    35	  "$__mgr_name" \
+    36	  "$__mgr_profile_home" \
+    37	  "$__mgr_sb_root" \
+    38	  "$__mgr_cmd" \
+    39	  "$__mgr_profile" \
+    40	  "$__mgr_force_policy" \
+    41	  "$__mgr_tty_policy" \
+    42	  "$__mgr_non_tty_policy" \
+    43	  "$__mgr_ask_default" \
+    44	  "ask task chat plan run raw" || __mgr_rc=$?
+    45	
+    46	unset -f ai_mgr_maybe_cd
+    47	unset __mgr_name __mgr_profile_home __mgr_sb_root __mgr_tty_policy __mgr_non_tty_policy __mgr_ask_default __mgr_force_policy __mgr_cmd __mgr_profile
+    48	
+    49	if [ "$__mgr_rc" -ne 0 ]; then
+    50	  exit "$__mgr_rc"
+    51	fi
+    52	unset __mgr_rc
+    53	# <<< gm cwd policy <<<
+    54	
+    55	
+    56	# >>> gm throttle after Gemini prompt calls >>>
+    57	# Default throttle between completed Gemini prompt calls.
+    58	# Disable per-call with:
+    59	#   GM_THROTTLE_SEC=0 gm ...
+    60	GM_THROTTLE_SEC="${GM_THROTTLE_SEC:-2}"
+    61	
+    62	gm_throttle_sleep() {
+    63	  local sec="${GM_THROTTLE_SEC:-0}"
+    64	  case "$sec" in
+    65	    ""|0|0.0|0.00) return 0 ;;
+    66	  esac
+    67	  sleep "$sec"
+    68	}
+    69	
+    70	gm_has_prompt_arg() {
+    71	  local a
+    72	  for a in "$@"; do
+    73	    case "$a" in
+    74	      -p|--prompt|--prompt=*)
+    75	        return 0
+    76	        ;;
+    77	    esac
+    78	  done
+    79	  return 1
+    80	}
+    81	
+    82	gm_run_gemini_prompt() {
+    83	  local run_home="$1"
+    84	  local prompt="$2"
+    85	  local rc old_errexit=0
+    86	
+    87	  case "$-" in *e*) old_errexit=1; set +e ;; esac
+    88	  HOME="$run_home" gemini --skip-trust -p "$prompt" < /dev/null
+    89	  rc=$?
+    90	  [ "$old_errexit" = 1 ] && set -e
+    91	
+    92	  gm_throttle_sleep
+    93	  return "$rc"
+    94	}
+    95	
+    96	gm_run_gemini_native() {
+    97	  local run_home="$1"
+    98	  shift
+    99	
+   100	  local rc old_errexit=0
+   101	  case "$-" in *e*) old_errexit=1; set +e ;; esac
+   102	  HOME="$run_home" gemini "$@"
+   103	  rc=$?
+   104	  [ "$old_errexit" = 1 ] && set -e
+   105	
+   106	  if gm_has_prompt_arg "$@"; then
+   107	    gm_throttle_sleep
+   108	  fi
+   109	
+   110	  return "$rc"
+   111	}
+   112	# <<< gm throttle after Gemini prompt calls >>>
+   113	
+   114	
+   115	
+   116	
+   117	
+   118	BASE="$HOME/.gemini-homes"
+   119	ACTIVE_LINK="$HOME/.gemini"
+   120	DELETED="$HOME/.gemini-homes.deleted"
+   121	
+   122	mkdir -p "$BASE"
+   123	
+   124	usage() {
+   125	  cat <<USAGE
+   126	gm = Gemini Manager
+   127	
+   128	Profiles:
+   129	  gm profile [list]
+   130	  gm profile show <profile>
+   131	  gm profile add <profile>
+   132	  gm profile use <profile>
+   133	  gm profile edit <profile>
+   134	  gm profile rename <old> <new>
+   135	  gm profile clone <source> <target> [--without-auth]
+   136	  gm profile delete <profile>
+   137	
+   138	Execution:
+   139	  gm run [profile] [-- gemini args...]          # interactive Gemini CLI
+   140	  gm ask [profile] [PROMPT...]                  # no-tool chat
+   141	  gm chat [profile] [PROMPT...]                 # same as ask
+   142	  gm task [profile] [PROMPT...]                 # tool-capable Gemini task
+   143	  gm plan [profile] [PROMPT...]                 # plan-only prompt
+   144	  gm raw [profile] [-- gemini args...]          # native Gemini passthrough
+   145	
+   146	Input:
+   147	  gm ask tg "hi"
+   148	  gm chat tg "explain this"
+   149	  gm task tg "read files and summarize"
+   150	  gm plan tg "plan the fix only"
+   151	  gm task tg - < prompt.md
+   152	  cat README.md | gm task tg "Summarize this"
+   153	
+   154	Native passthrough:
+   155	  gm raw tg -- --version
+   156	  gm raw tg -- -p "Reply with only: OK"
+   157	  gm task tg -- -p "Return JSON only" --output-format json
+   158	
+   159	CWD policy:
+   160	  gm sb <command> <profile> ...                 # force ~/sb/gemini/<profile>
+   161	  gm sandbox <command> <profile> ...            # same as sb
+   162	  GM_CWD_TTY_POLICY=ask|cwd|sandbox
+   163	  GM_CWD_NONTTY_POLICY=cwd|sandbox
+   164	
+   165	Throttle:
+   166	  GM_THROTTLE_SEC=2 is the default for Gemini prompt calls.
+   167	  GM_THROTTLE_SEC=0 gm ... disables it for one call.
+   168	
+   169	Notes:
+   170	  ask/chat = no-tool answer mode.
+   171	  task     = tool-capable mode.
+   172	  plan     = plan-only mode.
+   173	  raw      = exact native Gemini CLI passthrough.
+   174	USAGE
+   175	}
+   176	
+   177	valid_name() {
+   178	  case "$1" in
+   179	    ""|.*|*/*|*" "*) return 1 ;;
+   180	    *) return 0 ;;
+   181	  esac
+   182	}
+   183	
+   184	profile_path() {
+   185	  echo "$BASE/$1"
+   186	}
+   187	
+   188	active_profile() {
+   189	  local resolved
+   190	  resolved="$(readlink -f "$ACTIVE_LINK" 2>/dev/null || true)"
+   191	
+   192	  if [ -n "$resolved" ]; then
+   193	    find "$BASE" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null |
+   194	    while IFS= read -r p; do
+   195	      if [ "$(readlink -f "$(profile_path "$p")")" = "$resolved" ]; then
+   196	        echo "$p"
+   197	        return 0
+   198	      fi
+   199	    done
+   200	  fi
+   201	}
+   202	
+   203	default_profile() {
+   204	  local active
+   205	  active="$(active_profile || true)"
+   206	  if [ -n "$active" ]; then
+   207	    echo "$active"
+   208	  else
+   209	    echo "main"
+   210	  fi
+   211	}
+   212	
+   213	require_profile() {
+   214	  local p="$1"
+   215	  [ -d "$(profile_path "$p")" ] || {
+   216	    echo "ERROR: Gemini profile not found: $p" >&2
+   217	    echo >&2
+   218	    echo "Available profiles:" >&2
+   219	    find "$BASE" -mindepth 1 -maxdepth 1 -type d -printf '  %f\n' 2>/dev/null | sort >&2
+   220	    exit 1
+   221	  }
+   222	}
+   223	
+   224	profile_from_cwd() {
+   225	  local cur rel prof
+   226	  cur="$(pwd -P 2>/dev/null || pwd)"
+   227	
+   228	  case "$cur" in
+   229	    "$HOME/sb/gemini"/*)
+   230	      rel="${cur#"$HOME/sb/gemini"/}"
+   231	      prof="${rel%%/*}"
+   232	
+   233	      if [ -n "$prof" ] && [ -d "$(profile_path "$prof")" ]; then
+   234	        echo "$prof"
+   235	        return 0
+   236	      fi
+   237	      ;;
+   238	  esac
+   239	
+   240	  return 1
+   241	}
+   242	
+   243	parse_profile_first() {
+   244	  # Explicit profile always wins:
+   245	  #   gm task tg "prompt"
+   246	  if [ -n "${1:-}" ] && [ -d "$(profile_path "$1")" ]; then
+   247	    echo "$1"
+   248	    return 0
+   249	  fi
+   250	
+   251	  # If invoked from a profile sandbox, use that profile:
+   252	  #   cd ~/sb/gemini/tg
+   253	  #   gm task "prompt"  -> tg
+   254	  local cwd_profile
+   255	  cwd_profile="$(profile_from_cwd 2>/dev/null || true)"
+   256	  if [ -n "$cwd_profile" ]; then
+   257	    echo "$cwd_profile"
+   258	    return 0
+   259	  fi
+   260	
+   261	  default_profile
+   262	}
+   263	
+   264	list_profiles() {
+   265	  local active
+   266	  active="$(active_profile || true)"
+   267	
+   268	  echo "== Gemini profiles =="
+   269	
+   270	  find "$BASE" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort |
+   271	  while IFS= read -r p; do
+   272	    local home marker oauth accounts settings trusted
+   273	    home="$(profile_path "$p")"
+   274	    marker=" "
+   275	    [ "$p" = "$active" ] && marker="◆"
+   276	
+   277	    oauth="no-oauth"
+   278	    [ -f "$home/oauth_creds.json" ] && oauth="oauth"
+   279	
+   280	    accounts="no-accounts"
+   281	    [ -f "$home/google_accounts.json" ] && accounts="accounts"
+   282	
+   283	    settings="no-settings"
+   284	    [ -f "$home/settings.json" ] && settings="settings"
+   285	
+   286	    trusted="no-trusted"
+   287	    [ -f "$home/trustedFolders.json" ] && trusted="trusted"
+   288	
+   289	    printf " %s %-12s %-10s %-12s %-12s %-12s %s\n" \
+   290	      "$marker" "$p" "$oauth" "$accounts" "$settings" "$trusted" "$home"
+   291	  done
+   292	
+   293	  echo
+   294	  echo "Active: ${active:-none}"
+   295	  echo "Resolved ~/.gemini: $(readlink -f "$ACTIVE_LINK" 2>/dev/null || true)"
+   296	}
+   297	
+   298	show_profile() {
+   299	  local p="$1"
+   300	  require_profile "$p"
+   301	
+   302	  local home
+   303	  home="$(profile_path "$p")"
+   304	
+   305	  echo "Profile:  $p"
+   306	  echo "Path:     $home"
+   307	  [ -f "$home/oauth_creds.json" ] && echo "OAuth:    exists" || echo "OAuth:    missing"
+   308	  [ -f "$home/google_accounts.json" ] && echo "Account:  exists" || echo "Account:  missing"
+   309	  [ -f "$home/settings.json" ] && echo "Settings: exists" || echo "Settings: missing"
+   310	  [ -f "$home/trustedFolders.json" ] && echo "Trusted:  exists" || echo "Trusted:  missing"
+   311	}
+   312	
+   313	add_profile() {
+   314	  local p="$1"
+   315	
+   316	  valid_name "$p" || {
+   317	    echo "ERROR: invalid profile name: $p" >&2
+   318	    exit 1
+   319	  }
+   320	
+   321	  if [ -e "$(profile_path "$p")" ]; then
+   322	    echo "Already exists: $p"
+   323	  else
+   324	    mkdir -p "$(profile_path "$p")"
+   325	    echo "Created Gemini profile: $p"
+   326	  fi
+   327	}
+   328	
+   329	use_profile() {
+   330	  local p="$1"
+   331	  require_profile "$p"
+   332	
+   333	  if [ -e "$ACTIVE_LINK" ] && [ ! -L "$ACTIVE_LINK" ]; then
+   334	    local ts
+   335	    ts="$(date +%Y%m%d-%H%M%S)"
+   336	    echo "Backing up existing real ~/.gemini to ~/.gemini.backup.$ts"
+   337	    mv "$ACTIVE_LINK" "$HOME/.gemini.backup.$ts"
+   338	  fi
+   339	
+   340	  ln -sfn "$(profile_path "$p")" "$ACTIVE_LINK"
+   341	
+   342	  echo "Gemini profile active: $p"
+   343	  echo "~/.gemini -> $(readlink -f "$ACTIVE_LINK")"
+   344	}
+   345	
+   346	edit_profile() {
+   347	  local p="$1"
+   348	  require_profile "$p"
+   349	
+   350	  local file editor
+   351	  file="$(profile_path "$p")/settings.json"
+   352	
+   353	  if [ ! -f "$file" ]; then
+   354	    printf '{}\n' > "$file"
+   355	  fi
+   356	
+   357	  editor="${VISUAL:-${EDITOR:-vi}}"
+   358	  "$editor" "$file"
+   359	}
+   360	
+   361	rename_profile() {
+   362	  local old="$1"
+   363	  local new="$2"
+   364	
+   365	  require_profile "$old"
+   366	
+   367	  valid_name "$new" || {
+   368	    echo "ERROR: invalid new profile name: $new" >&2
+   369	    exit 1
+   370	  }
+   371	
+   372	  if [ -e "$(profile_path "$new")" ]; then
+   373	    echo "ERROR: target already exists: $new" >&2
+   374	    exit 1
+   375	  fi
+   376	
+   377	  local active_old
+   378	  active_old=""
+   379	  if [ "$(readlink -f "$ACTIVE_LINK" 2>/dev/null || true)" = "$(readlink -f "$(profile_path "$old")" 2>/dev/null || true)" ]; then
+   380	    active_old="yes"
+   381	  fi
+   382	
+   383	  mv "$(profile_path "$old")" "$(profile_path "$new")"
+   384	
+   385	  if [ "$active_old" = "yes" ]; then
+   386	    ln -sfn "$(profile_path "$new")" "$ACTIVE_LINK"
+   387	  fi
+   388	
+   389	  echo "Renamed Gemini profile: $old -> $new"
+   390	}
+   391	
+   392	clone_profile() {
+   393	  local src="$1"
+   394	  local dst="$2"
+   395	  local mode="${3:-}"
+   396	
+   397	  require_profile "$src"
+   398	
+   399	  valid_name "$dst" || {
+   400	    echo "ERROR: invalid target profile name: $dst" >&2
+   401	    exit 1
+   402	  }
+   403	
+   404	  if [ -e "$(profile_path "$dst")" ]; then
+   405	    echo "ERROR: target already exists: $dst" >&2
+   406	    exit 1
+   407	  fi
+   408	
+   409	  mkdir -p "$(profile_path "$dst")"
+   410	  cp -a "$(profile_path "$src")/." "$(profile_path "$dst")/"
+   411	
+   412	  if [ "$mode" = "--without-auth" ]; then
+   413	    rm -f "$(profile_path "$dst")/oauth_creds.json"
+   414	    rm -f "$(profile_path "$dst")/google_accounts.json"
+   415	    rm -f "$(profile_path "$dst")/state.json"
+   416	  fi
+   417	
+   418	  echo "Cloned Gemini profile: $src -> $dst"
+   419	  [ "$mode" = "--without-auth" ] && echo "OAuth/account files removed from target."
+   420	}
+   421	
+   422	delete_profile() {
+   423	  local p="$1"
+   424	  require_profile "$p"
+   425	
+   426	  local active
+   427	  active="$(active_profile || true)"
+   428	
+   429	  if [ "$p" = "$active" ]; then
+   430	    echo "ERROR: cannot delete active profile: $p" >&2
+   431	    echo "Switch first: gm profile use main" >&2
+   432	    exit 1
+   433	  fi
+   434	
+   435	  local ts
+   436	  ts="$(date +%Y%m%d-%H%M%S)"
+   437	  mkdir -p "$DELETED"
+   438	
+   439	  mv "$(profile_path "$p")" "$DELETED/$p.$ts"
+   440	  echo "Moved deleted Gemini profile to:"
+   441	  echo "  $DELETED/$p.$ts"
+   442	}
+   443	
+   444	run_home_for_profile() {
+   445	  local p="$1"
+   446	  local run_home
+   447	  run_home="$HOME/.cache/gm/direct-home-$p"
+   448	  mkdir -p "$run_home"
+   449	  ln -sfn "$(profile_path "$p")" "$run_home/.gemini"
+   450	  echo "$run_home"
+   451	}
+   452	
+   453	load_profile_env() {
+   454	  local p="$1"
+   455	  local f="$HOME/.config/gm/env/$p"
+   456	  if [ -f "$f" ]; then
+   457	    # shellcheck disable=SC1090
+   458	    . "$f"
+   459	  fi
+   460	}
+   461	
+   462	run_profile() {
+   463	  local p
+   464	  p="$(parse_profile_first "${1:-}")"
+   465	
+   466	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   467	    shift
+   468	  fi
+   469	
+   470	  if [ "${1:-}" = "--" ]; then
+   471	    shift
+   472	  fi
+   473	
+   474	  use_profile "$p" >/dev/null
+   475	
+   476	  echo "Gemini profile: $p"
+   477	  echo "~/.gemini -> $(readlink -f "$ACTIVE_LINK")"
+   478	  echo
+   479	
+   480	  exec gemini "$@"
+   481	}
+   482	
+   483	
+   484	gm_task_guard_prefix() {
+   485	  cat <<'EOF'
+   486	도구 사용 가능 작업 모드다.
+   487	단, 실제로 제공된 도구만 사용하고, 존재하지 않는 도구명이나 API를 만들지 마라.
+   488	도구가 필요 없는 요청이면 도구를 사용하지 말고 바로 답하라.
+   489	사용자가 "정확히", "토큰만", "한 문장만" 같은 출력 제약을 주면 그 출력 제약을 최우선으로 지켜라.
+   490	EOF
+   491	}
+   492	
+   493	task_profile() {
+   494	  local p
+   495	  p="$(parse_profile_first "${1:-}")"
+   496	
+   497	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   498	    shift
+   499	  fi
+   500	
+   501	  require_profile "$p"
+   502	
+   503	  local run_home
+   504	  run_home="$(run_home_for_profile "$p")"
+   505	  load_profile_env "$p"
+   506	
+   507	  # Native passthrough mode.
+   508	  # Everything after -- is passed to gemini exactly.
+   509	  #
+   510	  # Examples:
+   511	  #   gm task tg -- -p "prompt" --output-format json
+   512	  #   gm task tg -- --skip-trust -p "prompt"
+   513	  if [ "${1:-}" = "--" ]; then
+   514	    shift
+   515	    gm_run_gemini_native "$run_home" "$@"; exit "$?"
+   516	  fi
+   517	
+   518	  # Friendly prompt mode.
+   519	  #
+   520	  # Examples:
+   521	  #   gm task tg "prompt"
+   522	  #   gm task tg -
+   523	  #   cat README.md | gm task tg "Summarize this"
+   524	  #
+   525	  # No automatic --skip-trust here. Trust policy is Gemini-native.
+   526	  if [ "$#" -eq 0 ]; then
+   527	    if [ -t 0 ]; then
+   528	      echo "Usage:" >&2
+   529	      echo "  gm task [profile] PROMPT" >&2
+   530	      echo "  gm task [profile] - < prompt.md" >&2
+   531	      echo "  gm task [profile] -- <gemini native args...>" >&2
+   532	      exit 2
+   533	    fi
+   534	    HOME="$run_home" exec gemini
+   535	  fi
+   536	
+   537	  case "$1" in
+   538	    -)
+   539	      local prompt
+   540	      prompt="$(cat)"
+   541	      local guarded_prompt
+   542	      guarded_prompt="$(gm_task_guard_prefix)
+   543	
+   544	$prompt"
+   545	      gm_run_gemini_prompt "$run_home" "$guarded_prompt"; exit "$?"
+   546	      ;;
+   547	    -*)
+   548	      echo "ERROR: Gemini native flags must come after --" >&2
+   549	      echo >&2
+   550	      echo "Examples:" >&2
+   551	      echo "  gm task tg -- -p \"prompt\" --output-format json" >&2
+   552	      echo "  gm task tg -- --skip-trust -p \"prompt\"" >&2
+   553	      exit 2
+   554	      ;;
+   555	    *)
+   556	      local prompt
+   557	      prompt="$*"
+   558	      local guarded_prompt
+   559	      guarded_prompt="$(gm_task_guard_prefix)
+   560	
+   561	$prompt"
+   562	      gm_run_gemini_prompt "$run_home" "$guarded_prompt"; exit "$?"
+   563	      ;;
+   564	  esac
+   565	}
+   566	
+   567	raw_profile() {
+   568	  local p
+   569	  p="$(parse_profile_first "${1:-}")"
+   570	
+   571	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   572	    shift
+   573	  fi
+   574	
+   575	  if [ "${1:-}" = "--" ]; then
+   576	    shift
+   577	  fi
+   578	
+   579	  local run_home
+   580	  run_home="$(run_home_for_profile "$p")"
+   581	  load_profile_env "$p"
+   582	
+   583	  gm_run_gemini_native "$run_home" "$@"; exit "$?"
+   584	}
+   585	
+   586	status_cmd() {
+   587	  list_profiles
+   588	
+   589	  echo
+   590	  echo "== Gemini binary =="
+   591	  command -v gemini 2>/dev/null || true
+   592	  gemini --version 2>/dev/null || true
+   593	}
+   594	
+   595	doctor_cmd() {
+   596	  echo "== Gemini doctor =="
+   597	
+   598	  echo
+   599	  echo "Paths:"
+   600	  command -v gemini 2>/dev/null || true
+   601	  command -v node 2>/dev/null || true
+   602	  command -v npm 2>/dev/null || true
+   603	
+   604	  echo
+   605	  echo "Versions:"
+   606	  gemini --version 2>/dev/null || true
+   607	  node -v 2>/dev/null || true
+   608	  npm -v 2>/dev/null || true
+   609	
+   610	  echo
+   611	  echo "Global packages:"
+   612	  npm list -g --depth=0 2>/dev/null | grep -E 'gemini|google' || true
+   613	
+   614	  echo
+   615	  list_profiles
+   616	}
+   617	
+   618	update_cmd() {
+   619	  echo "== Gemini CLI update =="
+   620	  npm install -g @google/gemini-cli@latest
+   621	  hash -r
+   622	
+   623	  echo
+   624	  gemini --version
+   625	  npm list -g --depth=0 2>/dev/null | grep -E 'gemini|google' || true
+   626	}
+   627	
+   628	profile_cmd() {
+   629	  local sub="${1:-list}"
+   630	  [ "$#" -gt 0 ] && shift || true
+   631	
+   632	  case "$sub" in
+   633	    list|"")
+   634	      list_profiles ;;
+   635	    show)
+   636	      [ -n "${1:-}" ] || { usage; exit 1; }
+   637	      show_profile "$1" ;;
+   638	    add|create)
+   639	      [ -n "${1:-}" ] || { usage; exit 1; }
+   640	      add_profile "$1" ;;
+   641	    use)
+   642	      [ -n "${1:-}" ] || { usage; exit 1; }
+   643	      use_profile "$1" ;;
+   644	    edit)
+   645	      [ -n "${1:-}" ] || { usage; exit 1; }
+   646	      edit_profile "$1" ;;
+   647	    rename)
+   648	      [ -n "${1:-}" ] && [ -n "${2:-}" ] || { usage; exit 1; }
+   649	      rename_profile "$1" "$2" ;;
+   650	    clone)
+   651	      [ -n "${1:-}" ] && [ -n "${2:-}" ] || { usage; exit 1; }
+   652	      clone_profile "$1" "$2" "${3:-}" ;;
+   653	    delete|del|rm)
+   654	      [ -n "${1:-}" ] || { usage; exit 1; }
+   655	      delete_profile "$1" ;;
+   656	    *)
+   657	      echo "ERROR: unknown profile command: $sub" >&2
+   658	      usage
+   659	      exit 1 ;;
+   660	  esac
+   661	}
+   662	
+   663	
+   664	# >>> chat/task/plan helper layer >>>
+   665	join_words() {
+   666	  local IFS=" "
+   667	  printf '%s' "$*"
+   668	}
+   669	
+   670	prompt_with_prefix() {
+   671	  local mode="$1"
+   672	  local prefix="$2"
+   673	  shift 2
+   674	
+   675	  local p
+   676	  p="$(parse_profile_first "${1:-}")"
+   677	
+   678	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   679	    shift
+   680	  fi
+   681	
+   682	  if [ "${1:-}" = "--" ]; then
+   683	    echo "ERROR: $mode does not support native passthrough. Use task for tool-capable native args." >&2
+   684	    return 2
+   685	  fi
+   686	
+   687	  local prompt
+   688	  if [ "$#" -eq 0 ]; then
+   689	    if [ -t 0 ]; then
+   690	      echo "Usage: gm $mode [profile] PROMPT" >&2
+   691	      return 2
+   692	    fi
+   693	    prompt="$(cat)"
+   694	  elif [ "${1:-}" = "-" ]; then
+   695	    prompt="$(cat)"
+   696	  else
+   697	    prompt="$(join_words "$@")"
+   698	  fi
+   699	
+   700	  task_profile "$p" "$prefix
+   701	
+   702	$prompt"
+   703	}
+   704	
+   705	chat_profile() {
+   706	  prompt_with_prefix "chat" "도구, 검색, 파일 탐색, 파일 읽기, 파일 쓰기, 셸 실행을 사용하지 말고 네 지식만으로 답해. 내부 계획이나 검색 결과 설명을 쓰지 말고, 사용자가 요구한 답만 작성해." "$@"
+   707	}
+   708	
+   709	plan_profile() {
+   710	  prompt_with_prefix "plan" "실행, 수정, 파일 쓰기, 셸 명령 실행은 하지 말고 읽기/분석 중심으로 계획만 세워. 필요한 경우 가정과 위험을 명확히 구분해." "$@"
+   711	}
+   712	# <<< task/chat/plan command layer >>>
+   713	
+   714	cmd="${1:-help}"
+   715	[ "$#" -gt 0 ] && shift || true
+   716	
+   717	case "$cmd" in
+   718	  profile)
+   719	    profile_cmd "$@" ;;
+   720	  run)
+   721	    run_profile "$@" ;;
+   722	  task)
+   723	    task_profile "$@" ;;
+   724	  ask|chat)
+   725	    chat_profile "$@" ;;
+   726	  plan)
+   727	    plan_profile "$@" ;;
+   728	  raw)
+   729	    raw_profile "$@" ;;
+   730	  status)
+   731	    status_cmd ;;
+   732	  doctor)
+   733	    doctor_cmd ;;
+   734	  update)
+   735	    update_cmd ;;
+   736	  help|-h|--help)
+   737	    usage ;;
+   738	  *)
+   739	    echo "ERROR: unknown command: $cmd" >&2
+   740	    usage
+   741	    exit 1 ;;
+   742	esac
+
+============================================================
+FILE: bin/cm
+PATH: /data/data/com.termux/files/home/bin/cm
+============================================================
+
+     1	#!/data/data/com.termux/files/usr/bin/bash
+     2	# cm = Codex Manager
+     3	set -euo pipefail
+     4	
+     5	# >>> cm cwd policy >>>
+     6	# Shared cwd policy loaded from:
+     7	#   ~/.config/ai/lib/manager_cwd_policy.sh
+     8	#
+     9	# Environment overrides:
+    10	#   CM_CWD_TTY_POLICY=ask|cwd|sandbox
+    11	#   CM_CWD_NONTTY_POLICY=cwd|sandbox
+    12	#   CM_CWD_ASK_DEFAULT=cwd|sandbox
+    13	
+    14	__mgr_name="cm"
+    15	__mgr_profile_home="$HOME/.codex-homes"
+    16	__mgr_sb_root="$HOME/sb/codex"
+    17	__mgr_tty_policy="${CM_CWD_TTY_POLICY:-ask}"
+    18	__mgr_non_tty_policy="${CM_CWD_NONTTY_POLICY:-cwd}"
+    19	__mgr_ask_default="${CM_CWD_ASK_DEFAULT:-cwd}"
+    20	__mgr_force_policy=""
+    21	
+    22	if [ "${1:-}" = "sb" ] || [ "${1:-}" = "sandbox" ]; then
+    23	  __mgr_force_policy="sandbox"
+    24	  shift
+    25	fi
+    26	
+    27	__mgr_cmd="${1:-}"
+    28	__mgr_profile="${2:-}"
+    29	
+    30	# shellcheck source=/dev/null
+    31	. "$HOME/.config/ai/lib/manager_cwd_policy.sh"
+    32	
+    33	__mgr_rc=0
+    34	ai_mgr_maybe_cd \
+    35	  "$__mgr_name" \
+    36	  "$__mgr_profile_home" \
+    37	  "$__mgr_sb_root" \
+    38	  "$__mgr_cmd" \
+    39	  "$__mgr_profile" \
+    40	  "$__mgr_force_policy" \
+    41	  "$__mgr_tty_policy" \
+    42	  "$__mgr_non_tty_policy" \
+    43	  "$__mgr_ask_default" \
+    44	  "ask task chat plan run exec raw" || __mgr_rc=$?
+    45	
+    46	unset -f ai_mgr_maybe_cd
+    47	unset __mgr_name __mgr_profile_home __mgr_sb_root __mgr_tty_policy __mgr_non_tty_policy __mgr_ask_default __mgr_force_policy __mgr_cmd __mgr_profile
+    48	
+    49	if [ "$__mgr_rc" -ne 0 ]; then
+    50	  exit "$__mgr_rc"
+    51	fi
+    52	unset __mgr_rc
+    53	# <<< cm cwd policy <<<
+    54	
+    55	
+    56	
+    57	
+    58	BASE="$HOME/.codex-homes"
+    59	CONFIG="$HOME/.config/cm"
+    60	CURRENT="$CONFIG/current"
+    61	DELETED="$HOME/.codex-homes.deleted"
+    62	
+    63	mkdir -p "$BASE" "$CONFIG"
+    64	
+    65	usage() {
+    66	  cat <<USAGE
+    67	cm = Codex Manager
+    68	
+    69	Profiles:
+    70	  cm profile [list]
+    71	  cm profile show <profile>
+    72	  cm profile add <profile>
+    73	  cm profile use <profile>
+    74	  cm profile edit <profile>
+    75	  cm profile rename <old> <new>
+    76	  cm profile clone <source> <target> [--without-auth]
+    77	  cm profile delete <profile>
+    78	
+    79	Execution:
+    80	  cm run [profile] [-- codex args...]           # interactive Codex CLI
+    81	  cm ask [profile] [PROMPT...]                  # no-tool chat
+    82	  cm chat [profile] [PROMPT...]                 # same as ask
+    83	  cm task [profile] [PROMPT...]                 # tool-capable Codex task
+    84	  cm plan [profile] [PROMPT...]                 # plan-only prompt
+    85	  cm exec [profile] [codex exec args...]        # native codex exec passthrough
+    86	  cm raw [profile] [-- codex args...]           # native Codex passthrough
+    87	
+    88	Input:
+    89	  cm ask main "hi"
+    90	  cm chat main "explain this"
+    91	  cm task main "inspect files and fix"
+    92	  cm plan main "plan the refactor only"
+    93	  cm task main - < prompt.md
+    94	  cat README.md | cm task main "Summarize this"
+    95	
+    96	Native passthrough:
+    97	  cm raw main -- --version
+    98	  cm exec main --json "Native codex exec prompt"
+    99	  cm exec main -- --json "Native codex exec prompt"
+   100	  cm task main -- --json "Tool-capable task"
+   101	
+   102	CWD policy:
+   103	  cm sb <command> <profile> ...                 # force ~/sb/codex/<profile>
+   104	  cm sandbox <command> <profile> ...            # same as sb
+   105	  CM_CWD_TTY_POLICY=ask|cwd|sandbox
+   106	  CM_CWD_NONTTY_POLICY=cwd|sandbox
+   107	
+   108	Notes:
+   109	  ask/chat = no-tool answer mode.
+   110	  task     = tool-capable mode.
+   111	  plan     = plan-only mode.
+   112	  exec     = native codex exec passthrough.
+   113	  raw      = exact native Codex CLI passthrough.
+   114	USAGE
+   115	}
+   116	
+   117	valid_name() {
+   118	  case "$1" in
+   119	    ""|.*|*/*|*" "*) return 1 ;;
+   120	    *) return 0 ;;
+   121	  esac
+   122	}
+   123	
+   124	profile_path() {
+   125	  echo "$BASE/$1"
+   126	}
+   127	
+   128	active_profile() {
+   129	  if [ -f "$CURRENT" ]; then
+   130	    cat "$CURRENT"
+   131	  else
+   132	    echo "main"
+   133	  fi
+   134	}
+   135	
+   136	require_profile() {
+   137	  local p="$1"
+   138	  [ -d "$(profile_path "$p")" ] || {
+   139	    echo "ERROR: Codex profile not found: $p" >&2
+   140	    echo >&2
+   141	    echo "Available profiles:" >&2
+   142	    find "$BASE" -mindepth 1 -maxdepth 1 -type d -printf '  %f\n' 2>/dev/null | sort >&2
+   143	    exit 1
+   144	  }
+   145	}
+   146	
+   147	parse_profile_first() {
+   148	  if [ -n "${1:-}" ] && [ -d "$(profile_path "$1")" ]; then
+   149	    echo "$1"
+   150	  else
+   151	    active_profile
+   152	  fi
+   153	}
+   154	
+   155	list_profiles() {
+   156	  local active
+   157	  active="$(active_profile)"
+   158	
+   159	  echo "== Codex profiles =="
+   160	
+   161	  find "$BASE" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort |
+   162	  while IFS= read -r p; do
+   163	    local home marker auth config hist logs
+   164	    home="$(profile_path "$p")"
+   165	    marker=" "
+   166	    [ "$p" = "$active" ] && marker="◆"
+   167	
+   168	    auth="no-auth"
+   169	    [ -f "$home/auth.json" ] && auth="auth"
+   170	
+   171	    config="no-config"
+   172	    [ -f "$home/config.toml" ] && config="config"
+   173	
+   174	    hist="no-history"
+   175	    [ -f "$home/history.jsonl" ] && hist="history"
+   176	
+   177	    logs="no-log"
+   178	    [ -d "$home/log" ] && logs="log"
+   179	
+   180	    printf " %s %-10s %-9s %-10s %-11s %-8s %s\n" \
+   181	      "$marker" "$p" "$auth" "$config" "$hist" "$logs" "$home"
+   182	  done
+   183	
+   184	  echo
+   185	  echo "Active: $active"
+   186	}
+   187	
+   188	show_profile() {
+   189	  local p="$1"
+   190	  require_profile "$p"
+   191	
+   192	  local home
+   193	  home="$(profile_path "$p")"
+   194	
+   195	  echo "Profile: $p"
+   196	  echo "Path:    $home"
+   197	  [ -f "$home/auth.json" ] && echo "Auth:    exists" || echo "Auth:    missing"
+   198	  [ -f "$home/config.toml" ] && echo "Config:  exists" || echo "Config:  missing"
+   199	  [ -f "$home/history.jsonl" ] && echo "History: exists" || echo "History: missing"
+   200	  [ -d "$home/log" ] && echo "Logs:    exists" || echo "Logs:    missing"
+   201	}
+   202	
+   203	add_profile() {
+   204	  local p="$1"
+   205	
+   206	  valid_name "$p" || {
+   207	    echo "ERROR: invalid profile name: $p" >&2
+   208	    exit 1
+   209	  }
+   210	
+   211	  if [ -e "$(profile_path "$p")" ]; then
+   212	    echo "Already exists: $p"
+   213	  else
+   214	    mkdir -p "$(profile_path "$p")"
+   215	    echo "Created Codex profile: $p"
+   216	  fi
+   217	}
+   218	
+   219	use_profile() {
+   220	  local p="$1"
+   221	  require_profile "$p"
+   222	
+   223	  printf '%s\n' "$p" > "$CURRENT"
+   224	
+   225	  echo "Codex profile active: $p"
+   226	  echo "CODEX_HOME=$(profile_path "$p")"
+   227	}
+   228	
+   229	edit_profile() {
+   230	  local p="$1"
+   231	  require_profile "$p"
+   232	
+   233	  local file editor
+   234	  file="$(profile_path "$p")/config.toml"
+   235	  touch "$file"
+   236	
+   237	  editor="${VISUAL:-${EDITOR:-vi}}"
+   238	  "$editor" "$file"
+   239	}
+   240	
+   241	rename_profile() {
+   242	  local old="$1"
+   243	  local new="$2"
+   244	
+   245	  require_profile "$old"
+   246	
+   247	  valid_name "$new" || {
+   248	    echo "ERROR: invalid new profile name: $new" >&2
+   249	    exit 1
+   250	  }
+   251	
+   252	  if [ -e "$(profile_path "$new")" ]; then
+   253	    echo "ERROR: target already exists: $new" >&2
+   254	    exit 1
+   255	  fi
+   256	
+   257	  mv "$(profile_path "$old")" "$(profile_path "$new")"
+   258	
+   259	  if [ "$(active_profile)" = "$old" ]; then
+   260	    printf '%s\n' "$new" > "$CURRENT"
+   261	  fi
+   262	
+   263	  echo "Renamed Codex profile: $old -> $new"
+   264	}
+   265	
+   266	clone_profile() {
+   267	  local src="$1"
+   268	  local dst="$2"
+   269	  local mode="${3:-}"
+   270	
+   271	  require_profile "$src"
+   272	
+   273	  valid_name "$dst" || {
+   274	    echo "ERROR: invalid target profile name: $dst" >&2
+   275	    exit 1
+   276	  }
+   277	
+   278	  if [ -e "$(profile_path "$dst")" ]; then
+   279	    echo "ERROR: target already exists: $dst" >&2
+   280	    exit 1
+   281	  fi
+   282	
+   283	  mkdir -p "$(profile_path "$dst")"
+   284	  cp -a "$(profile_path "$src")/." "$(profile_path "$dst")/"
+   285	
+   286	  if [ "$mode" = "--without-auth" ]; then
+   287	    rm -f "$(profile_path "$dst")/auth.json"
+   288	  fi
+   289	
+   290	  echo "Cloned Codex profile: $src -> $dst"
+   291	  [ "$mode" = "--without-auth" ] && echo "Auth removed from target."
+   292	}
+   293	
+   294	delete_profile() {
+   295	  local p="$1"
+   296	  require_profile "$p"
+   297	
+   298	  local active
+   299	  active="$(active_profile)"
+   300	
+   301	  if [ "$p" = "$active" ]; then
+   302	    echo "ERROR: cannot delete active profile: $p" >&2
+   303	    echo "Switch first: cm profile use main" >&2
+   304	    exit 1
+   305	  fi
+   306	
+   307	  local ts
+   308	  ts="$(date +%Y%m%d-%H%M%S)"
+   309	  mkdir -p "$DELETED"
+   310	
+   311	  mv "$(profile_path "$p")" "$DELETED/$p.$ts"
+   312	  echo "Moved deleted Codex profile to:"
+   313	  echo "  $DELETED/$p.$ts"
+   314	}
+   315	
+   316	with_codex_home() {
+   317	  local p="$1"
+   318	  shift
+   319	
+   320	  require_profile "$p"
+   321	  export CODEX_HOME
+   322	  CODEX_HOME="$(profile_path "$p")"
+   323	
+   324	  exec "$@"
+   325	}
+   326	
+   327	run_profile() {
+   328	  local p
+   329	  p="$(parse_profile_first "${1:-}")"
+   330	
+   331	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   332	    shift
+   333	  fi
+   334	
+   335	  if [ "${1:-}" = "--" ]; then
+   336	    shift
+   337	  fi
+   338	
+   339	  echo "Codex profile: $p"
+   340	  echo "CODEX_HOME=$(profile_path "$p")"
+   341	  echo
+   342	
+   343	  with_codex_home "$p" codex "$@"
+   344	}
+   345	
+   346	task_profile() {
+   347	  local p
+   348	  p="$(parse_profile_first "${1:-}")"
+   349	
+   350	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   351	    shift
+   352	  fi
+   353	
+   354	  require_profile "$p"
+   355	  export CODEX_HOME
+   356	  CODEX_HOME="$(profile_path "$p")"
+   357	
+   358	  # Native passthrough mode.
+   359	  #
+   360	  # Everything after -- is passed to `codex exec` exactly as provided.
+   361	  # No stderr suppression, no injected flags, no output filtering.
+   362	  #
+   363	  # Examples:
+   364	  #   cm task -- --json "prompt"
+   365	  #   cm task main -- --output-schema schema.json -o result.json "prompt"
+   366	  if [ "${1:-}" = "--" ]; then
+   367	    shift
+   368	    exec codex exec "$@"
+   369	  fi
+   370	
+   371	  # Friendly prompt mode.
+   372	  #
+   373	  # Manager convenience mode:
+   374	  #   - adds --skip-git-repo-check
+   375	  #   - hides Codex progress/banner stderr
+   376	  #   - preserves final stdout
+   377	  #
+   378	  # Examples:
+   379	  #   cm task "prompt"
+   380	  #   cm task main "prompt"
+   381	  #   cat prompt.md | cm task main -
+   382	  local skip_git_flag
+   383	  skip_git_flag="--skip-git-repo-check"
+   384	
+   385	  if [ "$#" -eq 0 ]; then
+   386	    if [ -t 0 ]; then
+   387	      echo "Usage:" >&2
+   388	      echo "  cm task [profile] PROMPT" >&2
+   389	      echo "  cm task [profile] - < prompt.md" >&2
+   390	      echo "  cm task [profile] -- <codex exec native args...>" >&2
+   391	      exit 2
+   392	    fi
+   393	    codex exec "$skip_git_flag" - 2>/dev/null
+   394	    exit $?
+   395	  fi
+   396	
+   397	  case "$1" in
+   398	    -)
+   399	      codex exec "$skip_git_flag" - 2>/dev/null
+   400	      exit $?
+   401	      ;;
+   402	    -*)
+   403	      echo "ERROR: Codex native flags must come after --" >&2
+   404	      echo >&2
+   405	      echo "Examples:" >&2
+   406	      echo "  cm task -- --json \"prompt\"" >&2
+   407	      echo "  cm task main -- --skip-git-repo-check --json \"prompt\"" >&2
+   408	      echo "  cm task main -- --output-schema schema.json -o result.json \"prompt\"" >&2
+   409	      exit 2
+   410	      ;;
+   411	    *)
+   412	      local prompt
+   413	      prompt="$*"
+   414	      codex exec "$skip_git_flag" "$prompt" 2>/dev/null
+   415	      exit $?
+   416	      ;;
+   417	  esac
+   418	}
+   419	
+   420	
+   421	exec_profile() {
+   422	  local p
+   423	  p="$(parse_profile_first "${1:-}")"
+   424	
+   425	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   426	    shift
+   427	  fi
+   428	
+   429	  require_profile "$p"
+   430	  export CODEX_HOME
+   431	  CODEX_HOME="$(profile_path "$p")"
+   432	
+   433	  # Native passthrough mode for codex exec.
+   434	  # Optional separator is accepted:
+   435	  #   cm exec main --json "prompt"
+   436	  #   cm exec main -- --json "prompt"
+   437	  if [ "${1:-}" = "--" ]; then
+   438	    shift
+   439	  fi
+   440	
+   441	  exec codex exec "$@"
+   442	}
+   443	
+   444	raw_profile() {
+   445	  local p
+   446	  p="$(parse_profile_first "${1:-}")"
+   447	
+   448	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   449	    shift
+   450	  fi
+   451	
+   452	  if [ "${1:-}" = "--" ]; then
+   453	    shift
+   454	  fi
+   455	
+   456	  with_codex_home "$p" codex "$@"
+   457	}
+   458	
+   459	status_cmd() {
+   460	  list_profiles
+   461	
+   462	  echo
+   463	  echo "== Codex binary =="
+   464	  command -v codex 2>/dev/null || true
+   465	  codex --version 2>/dev/null || true
+   466	
+   467	  echo
+   468	  echo "== Active login status =="
+   469	  local p
+   470	  p="$(active_profile)"
+   471	  if [ -d "$(profile_path "$p")" ]; then
+   472	    CODEX_HOME="$(profile_path "$p")" codex login status 2>&1 || true
+   473	  fi
+   474	}
+   475	
+   476	doctor_cmd() {
+   477	  echo "== Codex doctor =="
+   478	
+   479	  echo
+   480	  echo "Paths:"
+   481	  command -v codex 2>/dev/null || true
+   482	  command -v node 2>/dev/null || true
+   483	  command -v npm 2>/dev/null || true
+   484	
+   485	  echo
+   486	  echo "Versions:"
+   487	  codex --version 2>/dev/null || true
+   488	  node -v 2>/dev/null || true
+   489	  npm -v 2>/dev/null || true
+   490	
+   491	  echo
+   492	  echo "Global packages:"
+   493	  npm list -g --depth=0 2>/dev/null | grep -E 'codex|mmmbuto|openai' || true
+   494	
+   495	  echo
+   496	  list_profiles
+   497	
+   498	  echo
+   499	  echo "Login status by profile:"
+   500	  find "$BASE" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort |
+   501	  while IFS= read -r p; do
+   502	    echo "-- $p --"
+   503	    CODEX_HOME="$(profile_path "$p")" codex login status 2>&1 | sed -n '1,8p' || true
+   504	  done
+   505	}
+   506	
+   507	update_cmd() {
+   508	  local ver="${1:-latest}"
+   509	
+   510	  echo "== Codex Termux fork update =="
+   511	  echo "Package: @mmmbuto/codex-cli-termux"
+   512	  echo "Target: $ver"
+   513	  echo
+   514	
+   515	  npm install -g "@mmmbuto/codex-cli-termux@$ver"
+   516	  hash -r
+   517	
+   518	  echo
+   519	  codex --version
+   520	  npm list -g --depth=0 2>/dev/null | grep -E 'codex|mmmbuto|openai' || true
+   521	}
+   522	
+   523	profile_cmd() {
+   524	  local sub="${1:-list}"
+   525	  [ "$#" -gt 0 ] && shift || true
+   526	
+   527	  case "$sub" in
+   528	    list|"")
+   529	      list_profiles ;;
+   530	    show)
+   531	      [ -n "${1:-}" ] || { usage; exit 1; }
+   532	      show_profile "$1" ;;
+   533	    add|create)
+   534	      [ -n "${1:-}" ] || { usage; exit 1; }
+   535	      add_profile "$1" ;;
+   536	    use)
+   537	      [ -n "${1:-}" ] || { usage; exit 1; }
+   538	      use_profile "$1" ;;
+   539	    edit)
+   540	      [ -n "${1:-}" ] || { usage; exit 1; }
+   541	      edit_profile "$1" ;;
+   542	    rename)
+   543	      [ -n "${1:-}" ] && [ -n "${2:-}" ] || { usage; exit 1; }
+   544	      rename_profile "$1" "$2" ;;
+   545	    clone)
+   546	      [ -n "${1:-}" ] && [ -n "${2:-}" ] || { usage; exit 1; }
+   547	      clone_profile "$1" "$2" "${3:-}" ;;
+   548	    delete|del|rm)
+   549	      [ -n "${1:-}" ] || { usage; exit 1; }
+   550	      delete_profile "$1" ;;
+   551	    *)
+   552	      echo "ERROR: unknown profile command: $sub" >&2
+   553	      usage
+   554	      exit 1 ;;
+   555	  esac
+   556	}
+   557	
+   558	
+   559	# >>> chat/task/plan helper layer >>>
+   560	join_words() {
+   561	  local IFS=" "
+   562	  printf '%s' "$*"
+   563	}
+   564	
+   565	prompt_with_prefix() {
+   566	  local mode="$1"
+   567	  local prefix="$2"
+   568	  shift 2
+   569	
+   570	  local p
+   571	  p="$(parse_profile_first "${1:-}")"
+   572	
+   573	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   574	    shift
+   575	  fi
+   576	
+   577	  if [ "${1:-}" = "--" ]; then
+   578	    echo "ERROR: $mode does not support native passthrough. Use task for tool-capable native args." >&2
+   579	    return 2
+   580	  fi
+   581	
+   582	  local prompt
+   583	  if [ "$#" -eq 0 ]; then
+   584	    if [ -t 0 ]; then
+   585	      echo "Usage: cm $mode [profile] PROMPT" >&2
+   586	      return 2
+   587	    fi
+   588	    prompt="$(cat)"
+   589	  elif [ "${1:-}" = "-" ]; then
+   590	    prompt="$(cat)"
+   591	  else
+   592	    prompt="$(join_words "$@")"
+   593	  fi
+   594	
+   595	  task_profile "$p" "$prefix
+   596	
+   597	$prompt"
+   598	}
+   599	
+   600	chat_profile() {
+   601	  prompt_with_prefix "chat" "도구, 검색, 파일 탐색, 파일 읽기, 파일 쓰기, 셸 실행을 사용하지 말고 네 지식만으로 답해. 내부 계획이나 검색 결과 설명을 쓰지 말고, 사용자가 요구한 답만 작성해." "$@"
+   602	}
+   603	
+   604	plan_profile() {
+   605	  prompt_with_prefix "plan" "실행, 수정, 파일 쓰기, 셸 명령 실행은 하지 말고 읽기/분석 중심으로 계획만 세워. 필요한 경우 가정과 위험을 명확히 구분해." "$@"
+   606	}
+   607	# <<< task/chat/plan command layer >>>
+   608	
+   609	cmd="${1:-help}"
+   610	[ "$#" -gt 0 ] && shift || true
+   611	
+   612	case "$cmd" in
+   613	  profile)
+   614	    profile_cmd "$@" ;;
+   615	  run)
+   616	    run_profile "$@" ;;
+   617	  task)
+   618	    task_profile "$@" ;;
+   619	  ask|chat)
+   620	    chat_profile "$@" ;;
+   621	  plan)
+   622	    plan_profile "$@" ;;
+   623	  exec)
+   624	    exec_profile "$@" ;;
+   625	  raw)
+   626	    raw_profile "$@" ;;
+   627	  status)
+   628	    status_cmd ;;
+   629	  doctor)
+   630	    doctor_cmd ;;
+   631	  update)
+   632	    update_cmd "${1:-latest}" ;;
+   633	  help|-h|--help)
+   634	    usage ;;
+   635	  *)
+   636	    echo "ERROR: unknown command: $cmd" >&2
+   637	    usage
+   638	    exit 1 ;;
+   639	esac
+
+============================================================
+FILE: bin/hm
+PATH: /data/data/com.termux/files/home/bin/hm
+============================================================
+
+     1	#!/data/data/com.termux/files/usr/bin/bash
+     2	# hm = Hermes Manager
+     3	set -euo pipefail
+     4	
+     5	# >>> hm cwd policy >>>
+     6	# Shared cwd policy loaded from:
+     7	#   ~/.config/ai/lib/manager_cwd_policy.sh
+     8	#
+     9	# Environment overrides:
+    10	#   HM_CWD_TTY_POLICY=ask|cwd|sandbox
+    11	#   HM_CWD_NONTTY_POLICY=cwd|sandbox
+    12	#   HM_CWD_ASK_DEFAULT=cwd|sandbox
+    13	
+    14	__mgr_name="hm"
+    15	__mgr_profile_home="$HOME/.hermes/profiles"
+    16	__mgr_sb_root="$HOME/sb/hermes"
+    17	__mgr_tty_policy="${HM_CWD_TTY_POLICY:-ask}"
+    18	__mgr_non_tty_policy="${HM_CWD_NONTTY_POLICY:-sandbox}"
+    19	__mgr_ask_default="${HM_CWD_ASK_DEFAULT:-sandbox}"
+    20	__mgr_force_policy=""
+    21	
+    22	if [ "${1:-}" = "sb" ] || [ "${1:-}" = "sandbox" ]; then
+    23	  __mgr_force_policy="sandbox"
+    24	  shift
+    25	fi
+    26	
+    27	__mgr_cmd="${1:-}"
+    28	__mgr_profile="${2:-}"
+    29	
+    30	# shellcheck source=/dev/null
+    31	. "$HOME/.config/ai/lib/manager_cwd_policy.sh"
+    32	
+    33	__mgr_rc=0
+    34	ai_mgr_maybe_cd \
+    35	  "$__mgr_name" \
+    36	  "$__mgr_profile_home" \
+    37	  "$__mgr_sb_root" \
+    38	  "$__mgr_cmd" \
+    39	  "$__mgr_profile" \
+    40	  "$__mgr_force_policy" \
+    41	  "$__mgr_tty_policy" \
+    42	  "$__mgr_non_tty_policy" \
+    43	  "$__mgr_ask_default" \
+    44	  "ask task chat plan run raw" || __mgr_rc=$?
+    45	
+    46	unset -f ai_mgr_maybe_cd
+    47	unset __mgr_name __mgr_profile_home __mgr_sb_root __mgr_tty_policy __mgr_non_tty_policy __mgr_ask_default __mgr_force_policy __mgr_cmd __mgr_profile
+    48	
+    49	if [ "$__mgr_rc" -ne 0 ]; then
+    50	  exit "$__mgr_rc"
+    51	fi
+    52	unset __mgr_rc
+    53	# <<< hm cwd policy <<<
+    54	
+    55	
+    56	
+    57	
+    58	usage() {
+    59	  cat <<USAGE
+    60	hm = Hermes Manager
+    61	
+    62	Profiles:
+    63	  hm profile [list]
+    64	  hm profile show <profile>
+    65	  hm profile use <profile>
+    66	  hm profile edit <profile>
+    67	
+    68	Execution:
+    69	  hm run [profile] [-- hermes args...]          # interactive Hermes Agent
+    70	  hm ask [profile] [PROMPT...]                  # no-tool chat
+    71	  hm chat [profile] [PROMPT...]                 # same as ask
+    72	  hm task [profile] [PROMPT...]                 # tool-capable Hermes task
+    73	  hm plan [profile] [PROMPT...]                 # plan-only prompt
+    74	  hm raw [profile] [-- hermes args...]          # native Hermes passthrough
+    75	  hm gateway|gw <args...>                       # hgw passthrough
+    76	
+    77	Input:
+    78	  hm ask main "hi"
+    79	  hm chat main "explain this"
+    80	  hm task main "inspect files and fix"
+    81	  hm plan main "plan the refactor only"
+    82	  hm task main - < prompt.md
+    83	
+    84	Native passthrough:
+    85	  hm raw main -- --version
+    86	  hm task main -- -z "Reply with only: OK"
+    87	  hm task main -- --ignore-rules -z "Reply with only: OK"
+    88	
+    89	CWD policy:
+    90	  hm sb <command> <profile> ...                 # force ~/sb/hermes/<profile>
+    91	  hm sandbox <command> <profile> ...            # same as sb
+    92	  HM_CWD_TTY_POLICY=ask|cwd|sandbox
+    93	  HM_CWD_NONTTY_POLICY=cwd|sandbox
+    94	
+    95	Notes:
+    96	  ask/chat = no-tool answer mode.
+    97	  task     = tool-capable mode.
+    98	  plan     = plan-only mode.
+    99	  raw      = exact native Hermes passthrough.
+   100	  gateway  = hgw passthrough.
+   101	USAGE
+   102	}
+   103	
+   104	is_profile() {
+   105	  [ -n "${1:-}" ] && [ -d "$HOME/.hermes/profiles/$1" ]
+   106	}
+   107	
+   108	parse_profile_first() {
+   109	  if is_profile "${1:-}"; then
+   110	    echo "$1"
+   111	  else
+   112	    echo ""
+   113	  fi
+   114	}
+   115	
+   116	use_if_profile() {
+   117	  local p="$1"
+   118	  if [ -n "$p" ]; then
+   119	    hermes profile use "$p" >/dev/null
+   120	  fi
+   121	}
+   122	
+   123	run_profile() {
+   124	  local p
+   125	  p="$(parse_profile_first "${1:-}")"
+   126	
+   127	  if [ -n "$p" ]; then
+   128	    shift
+   129	    use_if_profile "$p"
+   130	    echo "Hermes profile active: $p"
+   131	    echo
+   132	  fi
+   133	
+   134	  if [ "${1:-}" = "--" ]; then
+   135	    shift
+   136	  fi
+   137	
+   138	  exec hermes "$@"
+   139	}
+   140	
+   141	task_profile() {
+   142	  local p
+   143	  p="$(parse_profile_first "${1:-}")"
+   144	
+   145	  if [ -n "$p" ]; then
+   146	    shift
+   147	    use_if_profile "$p"
+   148	  fi
+   149	
+   150	  # Native passthrough mode:
+   151	  #   hm task main -- -z "prompt"
+   152	  #   hm task main -- --ignore-rules -z "prompt"
+   153	  # Everything after -- is passed to hermes exactly.
+   154	  if [ "${1:-}" = "--" ]; then
+   155	    shift
+   156	    exec hermes "$@"
+   157	  fi
+   158	
+   159	  # Friendly prompt mode:
+   160	  #   hm task main "prompt"
+   161	  #   hm task main -
+   162	  if [ "$#" -eq 0 ]; then
+   163	    if [ -t 0 ]; then
+   164	      echo "Usage:" >&2
+   165	      echo "  hm task [profile] PROMPT" >&2
+   166	      echo "  hm task [profile] - < prompt.md" >&2
+   167	      echo "  hm task [profile] -- <hermes native args...>" >&2
+   168	      exit 2
+   169	    fi
+   170	    local stdin_prompt
+   171	    stdin_prompt="$(cat)"
+   172	    exec hermes -z "$stdin_prompt"
+   173	  fi
+   174	
+   175	  case "$1" in
+   176	    -)
+   177	      local prompt
+   178	      prompt="$(cat)"
+   179	      exec hermes -z "$prompt"
+   180	      ;;
+   181	    -*)
+   182	      echo "ERROR: Hermes native flags must come after --" >&2
+   183	      echo >&2
+   184	      echo "Examples:" >&2
+   185	      echo "  hm task main -- -z \"prompt\"" >&2
+   186	      echo "  hm task main -- --ignore-rules -z \"prompt\"" >&2
+   187	      exit 2
+   188	      ;;
+   189	    *)
+   190	      local prompt
+   191	      prompt="$*"
+   192	      exec hermes -z "$prompt"
+   193	      ;;
+   194	  esac
+   195	}
+   196	
+   197	raw_profile() {
+   198	  local p
+   199	  p="$(parse_profile_first "${1:-}")"
+   200	
+   201	  if [ -n "$p" ]; then
+   202	    shift
+   203	    use_if_profile "$p"
+   204	  fi
+   205	
+   206	  if [ "${1:-}" = "--" ]; then
+   207	    shift
+   208	  fi
+   209	
+   210	  exec hermes "$@"
+   211	}
+   212	
+   213	backup_cmd() {
+   214	  local mode="${1:-quick}"
+   215	  local ts
+   216	  ts="$(date +%Y%m%d-%H%M%S)"
+   217	  mkdir -p "$HOME/bak/hermes"
+   218	
+   219	  case "$mode" in
+   220	    quick)
+   221	      hermes backup --quick \
+   222	        --label "hm-quick-$ts" \
+   223	        --output "$HOME/bak/hermes/hermes-quick-$ts.zip"
+   224	      ;;
+   225	    full)
+   226	      hermes backup \
+   227	        --output "$HOME/bak/hermes/hermes-full-$ts.zip"
+   228	      ;;
+   229	    *)
+   230	      echo "ERROR: unknown backup mode: $mode" >&2
+   231	      echo "Use: hm backup quick|full" >&2
+   232	      exit 1
+   233	      ;;
+   234	  esac
+   235	}
+   236	
+   237	
+   238	# >>> chat/task/plan helper layer >>>
+   239	join_words() {
+   240	  local IFS=" "
+   241	  printf '%s' "$*"
+   242	}
+   243	
+   244	prompt_with_prefix() {
+   245	  local mode="$1"
+   246	  local prefix="$2"
+   247	  shift 2
+   248	
+   249	  local p
+   250	  p="$(parse_profile_first "${1:-}")"
+   251	
+   252	  if [ -n "${1:-}" ] && [ "$1" = "$p" ]; then
+   253	    shift
+   254	  fi
+   255	
+   256	  if [ "${1:-}" = "--" ]; then
+   257	    echo "ERROR: $mode does not support native passthrough. Use task for tool-capable native args." >&2
+   258	    return 2
+   259	  fi
+   260	
+   261	  local prompt
+   262	  if [ "$#" -eq 0 ]; then
+   263	    if [ -t 0 ]; then
+   264	      echo "Usage: hm $mode [profile] PROMPT" >&2
+   265	      return 2
+   266	    fi
+   267	    prompt="$(cat)"
+   268	  elif [ "${1:-}" = "-" ]; then
+   269	    prompt="$(cat)"
+   270	  else
+   271	    prompt="$(join_words "$@")"
+   272	  fi
+   273	
+   274	  task_profile "$p" "$prefix
+   275	
+   276	$prompt"
+   277	}
+   278	
+   279	chat_profile() {
+   280	  prompt_with_prefix "chat" "도구, 검색, 파일 탐색, 파일 읽기, 파일 쓰기, 셸 실행을 사용하지 말고 네 지식만으로 답해. 내부 계획이나 검색 결과 설명을 쓰지 말고, 사용자가 요구한 답만 작성해." "$@"
+   281	}
+   282	
+   283	plan_profile() {
+   284	  prompt_with_prefix "plan" "실행, 수정, 파일 쓰기, 셸 명령 실행은 하지 말고 읽기/분석 중심으로 계획만 세워. 필요한 경우 가정과 위험을 명확히 구분해." "$@"
+   285	}
+   286	# <<< task/chat/plan command layer >>>
+   287	
+   288	cmd="${1:-help}"
+   289	[ "$#" -gt 0 ] && shift || true
+   290	
+   291	case "$cmd" in
+   292	  profile)
+   293	    hermes profile "$@" ;;
+   294	  run)
+   295	    run_profile "$@" ;;
+   296	  task)
+   297	    task_profile "$@" ;;
+   298	  ask|chat)
+   299	    chat_profile "$@" ;;
+   300	  plan)
+   301	    plan_profile "$@" ;;
+   302	  raw)
+   303	    raw_profile "$@" ;;
+   304	  gateway|gw)
+   305	    exec hgw "$@" ;;
+   306	  status)
+   307	    hermes status ;;
+   308	  doctor)
+   309	    hermes doctor "$@" ;;
+   310	  backup)
+   311	    backup_cmd "${1:-quick}" ;;
+   312	  update)
+   313	    hermes update "$@" ;;
+   314	  logs)
+   315	    hermes logs "$@" ;;
+   316	  help|-h|--help)
+   317	    usage ;;
+   318	  *)
+   319	    echo "ERROR: unknown command: $cmd" >&2
+   320	    usage
+   321	    exit 1 ;;
+   322	esac
+
+============================================================
+FILE: bin/hgw
+PATH: /data/data/com.termux/files/home/bin/hgw
+============================================================
+
+     1	#!/data/data/com.termux/files/usr/bin/bash
+     2	# hgw = Hermes Gateway Manager
+     3	set -euo pipefail
+     4	
+     5	SESSION="hermes-gw"
+     6	PROFILE_DIR="$HOME/.hermes/profiles"
+     7	CONFIG_DIR="$HOME/.config/hgw"
+     8	ALIASES_FILE="$CONFIG_DIR/aliases.tsv"
+     9	BRIDGE_ENV="$CONFIG_DIR/bridge.env"
+    10	BRIDGE_BIN="$HOME/bin/hgb"
+    11	INTERNAL_PREFIX="hgw-"
+    12	
+    13	mkdir -p "$CONFIG_DIR"
+    14	
+    15	usage() {
+    16	  cat <<USAGE
+    17	hgw = Hermes Gateway Manager
+    18	
+    19	Usage:
+    20	  hgw bind <profile> <alias>
+    21	  hgw unbind <alias>
+    22	  hgw list
+    23	
+    24	  hgw run <profile|alias|all>
+    25	  hgw stop <profile|alias|all>
+    26	  hgw restart <profile|alias|all>
+    27	  hgw status
+    28	  hgw web <url>
+    29	  hgw approve <request|allow|deny|list|show|cleanup>
+    30	  hgw auto <on|off|status|run>
+    31	  hgw logs <profile|alias>
+    32	  hgw view <profile|alias>
+    33	
+    34	  hgw bridge start
+    35	  hgw bridge stop
+    36	  hgw bridge restart
+    37	  hgw bridge status
+    38	  hgw bridge logs [N]
+    39	  hgw bridge test [PROMPT]
+    40	  hgw bridge config
+    41	  hgw bridge set profile|model|port|host|public-model|session|profiles VALUE
+    42	
+    43	Examples:
+    44	  hgw bind tg tg
+    45	  hgw bind tg2 tg2
+    46	
+    47	  hgw run tg
+    48	  hgw run tg2
+    49	  hgw run all
+    50	  hgw logs tg
+    51	  hgw view tg2
+    52	  hgw stop all
+    53	
+    54	  hgw bridge start
+    55	  hgw bridge test "Reply with only: HGB_OK"
+    56	  hgw bridge set model gemini-2.5-flash-lite
+    57	USAGE
+    58	}
+    59	
+    60	require_tmux() {
+    61	  command -v tmux >/dev/null 2>&1 || {
+    62	    echo "ERROR: tmux not found. Install with:"
+    63	    echo "  pkg install -y tmux"
+    64	    exit 1
+    65	  }
+    66	}
+    67	
+    68	is_profile() {
+    69	  [ -d "$PROFILE_DIR/$1" ]
+    70	}
+    71	
+    72	is_gateway_profile() {
+    73	  local profile="$1"
+    74	  local envfile="$PROFILE_DIR/$profile/.env"
+    75	  [ -f "$envfile" ] || return 1
+    76	  grep -Eq '^[[:space:]]*TELEGRAM_BOT_TOKEN=.+' "$envfile"
+    77	}
+    78	
+    79	gateway_profiles() {
+    80	  [ -d "$PROFILE_DIR" ] || return 0
+    81	
+    82	  find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null |
+    83	  while IFS= read -r profile; do
+    84	    if is_gateway_profile "$profile"; then
+    85	      echo "$profile"
+    86	    fi
+    87	  done | sort
+    88	}
+    89	
+    90	profile_for_alias() {
+    91	  local alias_name="$1"
+    92	  [ -f "$ALIASES_FILE" ] || return 1
+    93	  awk -F '\t' -v a="$alias_name" '$1 == a { print $2; exit }' "$ALIASES_FILE"
+    94	}
+    95	
+    96	alias_for_profile() {
+    97	  local profile="$1"
+    98	  [ -f "$ALIASES_FILE" ] || return 1
+    99	  awk -F '\t' -v p="$profile" '$2 == p { print $1; exit }' "$ALIASES_FILE"
+   100	}
+   101	
+   102	list_aliases_plain() {
+   103	  [ -f "$ALIASES_FILE" ] || return 0
+   104	  awk -F '\t' 'NF >= 2 { printf "  %-12s -> %s\n", $1, $2 }' "$ALIASES_FILE" | sort
+   105	}
+   106	
+   107	resolve_profile() {
+   108	  local target="$1"
+   109	
+   110	  if is_profile "$target"; then
+   111	    echo "$target"
+   112	    return 0
+   113	  fi
+   114	
+   115	  local p
+   116	  p="$(profile_for_alias "$target" 2>/dev/null || true)"
+   117	  if [ -n "$p" ]; then
+   118	    echo "$p"
+   119	    return 0
+   120	  fi
+   121	
+   122	  echo "ERROR: unknown profile or alias: $target" >&2
+   123	  echo >&2
+   124	  echo "Detected Telegram gateway profiles:" >&2
+   125	  gateway_profiles | sed 's/^/  /' >&2 || true
+   126	  echo >&2
+   127	  echo "Bound aliases:" >&2
+   128	  list_aliases_plain >&2 || true
+   129	  exit 1
+   130	}
+   131	
+   132	ensure_profile_is_gateway() {
+   133	  local profile="$1"
+   134	  if ! is_gateway_profile "$profile"; then
+   135	    echo "ERROR: profile '$profile' does not look like a Telegram gateway profile."
+   136	    echo "Missing TELEGRAM_BOT_TOKEN in:"
+   137	    echo "  $PROFILE_DIR/$profile/.env"
+   138	    exit 1
+   139	  fi
+   140	}
+   141	
+   142	ensure_hermes_alias() {
+   143	  local profile="$1"
+   144	  local alias_name="$2"
+   145	
+   146	  if command -v "$alias_name" >/dev/null 2>&1; then
+   147	    echo "$alias_name"
+   148	    return 0
+   149	  fi
+   150	
+   151	  hermes profile alias "$profile" --name "$alias_name" >/dev/null
+   152	  hash -r
+   153	
+   154	  command -v "$alias_name" >/dev/null 2>&1 || {
+   155	    echo "ERROR: failed to create Hermes alias '$alias_name' for profile '$profile'."
+   156	    echo "Check that ~/.local/bin is in PATH."
+   157	    exit 1
+   158	  }
+   159	
+   160	  echo "$alias_name"
+   161	}
+   162	
+   163	exec_alias_for_profile_or_target() {
+   164	  local profile="$1"
+   165	  local original_target="$2"
+   166	
+   167	  local bound_profile
+   168	  bound_profile="$(profile_for_alias "$original_target" 2>/dev/null || true)"
+   169	  if [ "$bound_profile" = "$profile" ]; then
+   170	    ensure_hermes_alias "$profile" "$original_target"
+   171	    return 0
+   172	  fi
+   173	
+   174	  local friendly
+   175	  friendly="$(alias_for_profile "$profile" 2>/dev/null || true)"
+   176	  if [ -n "$friendly" ]; then
+   177	    ensure_hermes_alias "$profile" "$friendly"
+   178	    return 0
+   179	  fi
+   180	
+   181	  local internal="${INTERNAL_PREFIX}${profile}"
+   182	  ensure_hermes_alias "$profile" "$internal"
+   183	}
+   184	
+   185	# -------------------------------------------------------------------
+   186	# Bridge management
+   187	# -------------------------------------------------------------------
+   188	
+   189	load_bridge_env() {
+   190	  [ -f "$BRIDGE_ENV" ] && . "$BRIDGE_ENV"
+   191	
+   192	  HGB_HOST="${HGB_HOST:-127.0.0.1}"
+   193	  HGB_PORT="${HGB_PORT:-8787}"
+   194	  HGB_PROFILE="${HGB_PROFILE:-tg}"
+   195	  HGB_MODEL="${HGB_MODEL:-gemini-2.5-flash-lite}"
+   196	  HGB_PUBLIC_MODEL="${HGB_PUBLIC_MODEL:-hgb-gemini}"
+   197	  HGB_SESSION="${HGB_SESSION:-hgb}"
+   198	  HGB_PROFILES="${HGB_PROFILES:-tg2}"
+   199	}
+   200	
+   201	bridge_url() {
+   202	  load_bridge_env
+   203	  echo "http://$HGB_HOST:$HGB_PORT"
+   204	}
+   205	
+   206	bridge_health() {
+   207	  load_bridge_env
+   208	  command -v curl >/dev/null 2>&1 || return 1
+   209	  curl -fsS --max-time 3 "http://$HGB_HOST:$HGB_PORT/health" 2>/dev/null
+   210	}
+   211	
+   212	bridge_running() {
+   213	  load_bridge_env
+   214	  tmux has-session -t "$HGB_SESSION" 2>/dev/null
+   215	}
+   216	
+   217	bridge_status() {
+   218	  load_bridge_env
+   219	
+   220	  echo "== Hermes Gemini Bridge =="
+   221	  echo "session:      $HGB_SESSION"
+   222	  echo "url:          http://$HGB_HOST:$HGB_PORT/v1"
+   223	  echo "profile:      $HGB_PROFILE"
+   224	  echo "model:        $HGB_MODEL"
+   225	  echo "public_model: $HGB_PUBLIC_MODEL"
+   226	  echo "profiles:     $HGB_PROFILES"
+   227	  echo "config:       $BRIDGE_ENV"
+   228	
+   229	  if bridge_running; then
+   230	    echo "tmux:         running"
+   231	  else
+   232	    echo "tmux:         stopped"
+   233	  fi
+   234	
+   235	  local tmpbase tmp
+   236	  tmpbase="${TMPDIR:-$HOME/tmp}"
+   237	  mkdir -p "$tmpbase"
+   238	  tmp="$tmpbase/hgw-bridge-health.$$"
+   239	
+   240	  if bridge_health > "$tmp" 2>/dev/null; then
+   241	    echo "health:       OK"
+   242	    cat "$tmp" 2>/dev/null
+   243	  else
+   244	    echo "health:       unavailable"
+   245	  fi
+   246	
+   247	  rm -f "$tmp" 2>/dev/null || true
+   248	}
+   249	
+   250	bridge_start() {
+   251	  load_bridge_env
+   252	  require_tmux
+   253	
+   254	  [ -x "$BRIDGE_BIN" ] || {
+   255	    echo "ERROR: bridge binary not found or not executable:"
+   256	    echo "  $BRIDGE_BIN"
+   257	    exit 1
+   258	  }
+   259	
+   260	  if bridge_health >/dev/null 2>&1; then
+   261	    echo "hgb already healthy: http://$HGB_HOST:$HGB_PORT/v1"
+   262	    return 0
+   263	  fi
+   264	
+   265	  if bridge_running; then
+   266	    echo "hgb tmux session exists but health check failed: $HGB_SESSION"
+   267	    echo "Try: hgw bridge restart"
+   268	    return 1
+   269	  fi
+   270	
+   271	  local cmd
+   272	  cmd=$(printf '%q serve --host %q --port %q --profile %q --model %q --public-model %q' \
+   273	    "$BRIDGE_BIN" "$HGB_HOST" "$HGB_PORT" "$HGB_PROFILE" "$HGB_MODEL" "$HGB_PUBLIC_MODEL")
+   274	
+   275	  tmux new-session -d -s "$HGB_SESSION" "$cmd"
+   276	
+   277	  echo "started hgb: $HGB_SESSION"
+   278	  echo "url: http://$HGB_HOST:$HGB_PORT/v1"
+   279	
+   280	  sleep 1
+   281	
+   282	  if bridge_health >/dev/null 2>&1; then
+   283	    echo "health: OK"
+   284	  else
+   285	    echo "health: not ready yet"
+   286	  fi
+   287	}
+   288	
+   289	bridge_start_quiet() {
+   290	  load_bridge_env
+   291	  require_tmux
+   292	
+   293	  bridge_health >/dev/null 2>&1 && return 0
+   294	  bridge_running && return 0
+   295	  [ -x "$BRIDGE_BIN" ] || return 0
+   296	
+   297	  local cmd
+   298	  cmd=$(printf '%q serve --host %q --port %q --profile %q --model %q --public-model %q' \
+   299	    "$BRIDGE_BIN" "$HGB_HOST" "$HGB_PORT" "$HGB_PROFILE" "$HGB_MODEL" "$HGB_PUBLIC_MODEL")
+   300	
+   301	  tmux new-session -d -s "$HGB_SESSION" "$cmd" >/dev/null 2>&1 || true
+   302	}
+   303	
+   304	bridge_stop() {
+   305	  load_bridge_env
+   306	  require_tmux
+   307	
+   308	  if bridge_running; then
+   309	    tmux kill-session -t "$HGB_SESSION"
+   310	    echo "stopped hgb: $HGB_SESSION"
+   311	  else
+   312	    echo "hgb already stopped"
+   313	  fi
+   314	}
+   315	
+   316	bridge_restart() {
+   317	  bridge_stop || true
+   318	  sleep 1
+   319	  bridge_start
+   320	}
+   321	
+   322	bridge_logs() {
+   323	  local n="${1:-80}"
+   324	  tail -n "$n" "${TMPDIR:-$HOME/tmp}/hgb.log" 2>/dev/null || true
+   325	}
+   326	
+   327	bridge_test() {
+   328	  load_bridge_env
+   329	  local prompt="${1:-Reply with only: HGB_OK}"
+   330	
+   331	  bridge_health >/dev/null 2>&1 || {
+   332	    echo "Bridge is not healthy. Try:"
+   333	    echo "  hgw bridge start"
+   334	    exit 1
+   335	  }
+   336	
+   337	  curl -s "http://$HGB_HOST:$HGB_PORT/v1/chat/completions" \
+   338	    -H 'Content-Type: application/json' \
+   339	    -d "$(python - "$HGB_PUBLIC_MODEL" "$prompt" <<'PY'
+   340	import json, sys
+   341	model = sys.argv[1]
+   342	prompt = sys.argv[2]
+   343	print(json.dumps({
+   344	  "model": model,
+   345	  "messages": [
+   346	    {"role": "user", "content": prompt}
+   347	  ]
+   348	}, ensure_ascii=False))
+   349	PY
+   350	)" | python -m json.tool
+   351	}
+   352	
+   353	bridge_config() {
+   354	  load_bridge_env
+   355	  echo "config file: $BRIDGE_ENV"
+   356	  echo
+   357	  cat "$BRIDGE_ENV" 2>/dev/null || true
+   358	}
+   359	
+   360	bridge_set() {
+   361	  local key="${1:-}"
+   362	  local val="${2:-}"
+   363	
+   364	  if [ -z "$key" ] || [ -z "$val" ]; then
+   365	    echo "Usage: hgw bridge set profile|model|port|host|public-model|session|profiles VALUE" >&2
+   366	    exit 2
+   367	  fi
+   368	
+   369	  mkdir -p "$(dirname "$BRIDGE_ENV")"
+   370	  touch "$BRIDGE_ENV"
+   371	
+   372	  case "$key" in
+   373	    profile) key="HGB_PROFILE" ;;
+   374	    model) key="HGB_MODEL" ;;
+   375	    port) key="HGB_PORT" ;;
+   376	    host) key="HGB_HOST" ;;
+   377	    public-model|public_model) key="HGB_PUBLIC_MODEL" ;;
+   378	    session) key="HGB_SESSION" ;;
+   379	    profiles) key="HGB_PROFILES" ;;
+   380	    *)
+   381	      echo "ERROR: unknown bridge setting: $key" >&2
+   382	      exit 2
+   383	      ;;
+   384	  esac
+   385	
+   386	  if grep -q "^$key=" "$BRIDGE_ENV"; then
+   387	    python - "$BRIDGE_ENV" "$key" "$val" <<'PY'
+   388	from pathlib import Path
+   389	import sys
+   390	p = Path(sys.argv[1])
+   391	key = sys.argv[2]
+   392	val = sys.argv[3]
+   393	lines = p.read_text().splitlines()
+   394	out = []
+   395	for line in lines:
+   396	    if line.startswith(key + "="):
+   397	        out.append(f'{key}="{val}"')
+   398	    else:
+   399	        out.append(line)
+   400	p.write_text("\n".join(out) + "\n")
+   401	PY
+   402	  else
+   403	    printf '%s="%s"\n' "$key" "$val" >> "$BRIDGE_ENV"
+   404	  fi
+   405	
+   406	  echo "set $key=$val"
+   407	}
+   408	
+   409	bridge_cmd() {
+   410	  local sub="${1:-status}"
+   411	  [ "$#" -gt 0 ] && shift || true
+   412	
+   413	  case "$sub" in
+   414	    start) bridge_start ;;
+   415	    stop) bridge_stop ;;
+   416	    restart) bridge_restart ;;
+   417	    status|"") bridge_status ;;
+   418	    logs|log) bridge_logs "${1:-80}" ;;
+   419	    test) bridge_test "${1:-Reply with only: HGB_OK}" ;;
+   420	    config) bridge_config ;;
+   421	    set) bridge_set "$@" ;;
+   422	    *)
+   423	      cat >&2 <<USAGE
+   424	Usage:
+   425	  hgw bridge start
+   426	  hgw bridge stop
+   427	  hgw bridge restart
+   428	  hgw bridge status
+   429	  hgw bridge logs [N]
+   430	  hgw bridge test [PROMPT]
+   431	  hgw bridge config
+   432	  hgw bridge set profile|model|port|host|public-model|session|profiles VALUE
+   433	USAGE
+   434	      exit 2
+   435	      ;;
+   436	  esac
+   437	}
+   438	
+   439	profile_uses_bridge() {
+   440	  local profile="$1"
+   441	  load_bridge_env
+   442	
+   443	  case " $HGB_PROFILES " in
+   444	    *" $profile "*) return 0 ;;
+   445	  esac
+   446	
+   447	  hermes profile show "$profile" 2>/dev/null | grep -q 'google-gemini-cli'
+   448	}
+   449	
+   450	auto_bridge_for_profile() {
+   451	  local profile="$1"
+   452	
+   453	  if profile_uses_bridge "$profile"; then
+   454	    bridge_start_quiet || true
+   455	  fi
+   456	}
+   457	
+   458	# -------------------------------------------------------------------
+   459	# Gateway alias / run management
+   460	# -------------------------------------------------------------------
+   461	
+   462	bind_alias() {
+   463	  local profile="${1:-}"
+   464	  local alias_name="${2:-}"
+   465	
+   466	  [ -n "$profile" ] && [ -n "$alias_name" ] || {
+   467	    echo "Usage: hgw bind <profile> <alias>"
+   468	    exit 1
+   469	  }
+   470	
+   471	  is_profile "$profile" || {
+   472	    echo "ERROR: profile not found: $profile"
+   473	    exit 1
+   474	  }
+   475	
+   476	  ensure_profile_is_gateway "$profile"
+   477	
+   478	  echo "Binding Hermes gateway alias:"
+   479	  echo "  profile: $profile"
+   480	  echo "  alias:   $alias_name"
+   481	  echo
+   482	
+   483	  ensure_hermes_alias "$profile" "$alias_name" >/dev/null
+   484	
+   485	  touch "$ALIASES_FILE"
+   486	
+   487	  awk -F '\t' -v a="$alias_name" -v p="$profile" '
+   488	    $1 != a && $2 != p { print }
+   489	  ' "$ALIASES_FILE" > "$ALIASES_FILE.tmp" 2>/dev/null || true
+   490	
+   491	  printf "%s\t%s\n" "$alias_name" "$profile" >> "$ALIASES_FILE.tmp"
+   492	  mv "$ALIASES_FILE.tmp" "$ALIASES_FILE"
+   493	
+   494	  echo "Bound: $alias_name -> $profile"
+   495	}
+   496	
+   497	unbind_alias() {
+   498	  local alias_name="${1:-}"
+   499	
+   500	  [ -n "$alias_name" ] || {
+   501	    echo "Usage: hgw unbind <alias>"
+   502	    exit 1
+   503	  }
+   504	
+   505	  if [ -f "$ALIASES_FILE" ]; then
+   506	    awk -F '\t' -v a="$alias_name" '$1 != a { print }' "$ALIASES_FILE" > "$ALIASES_FILE.tmp" || true
+   507	    mv "$ALIASES_FILE.tmp" "$ALIASES_FILE"
+   508	  fi
+   509	
+   510	  echo "Unbound from hgw: $alias_name"
+   511	  echo "Note: Hermes alias executable itself was not removed."
+   512	}
+   513	
+   514	window_exists() {
+   515	  local profile="$1"
+   516	  tmux has-session -t "$SESSION" 2>/dev/null || return 1
+   517	  tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$profile"
+   518	}
+   519	
+   520	run_one() {
+   521	  local target="$1"
+   522	  local profile alias_name
+   523	
+   524	  profile="$(resolve_profile "$target")"
+   525	  ensure_profile_is_gateway "$profile"
+   526	  auto_bridge_for_profile "$profile"
+   527	  alias_name="$(exec_alias_for_profile_or_target "$profile" "$target")"
+   528	
+   529	  if window_exists "$profile"; then
+   530	    echo "Already running or window exists: $SESSION:$profile"
+   531	    return 0
+   532	  fi
+   533	
+   534	  if tmux has-session -t "$SESSION" 2>/dev/null; then
+   535	    tmux new-window -d -t "$SESSION" -n "$profile" "$alias_name gateway run"
+   536	  else
+   537	    tmux new-session -d -s "$SESSION" -n "$profile" "$alias_name gateway run"
+   538	  fi
+   539	
+   540	  echo "Started: $SESSION:$profile via $alias_name"
+   541	}
+   542	
+   543	stop_one() {
+   544	  local target="$1"
+   545	  local profile
+   546	
+   547	  profile="$(resolve_profile "$target")"
+   548	
+   549	  if window_exists "$profile"; then
+   550	    tmux kill-window -t "$SESSION:$profile" 2>/dev/null || true
+   551	    echo "Stopped: $SESSION:$profile"
+   552	  else
+   553	    echo "Not running: $SESSION:$profile"
+   554	  fi
+   555	}
+   556	
+   557	restart_one() {
+   558	  local target="$1"
+   559	  stop_one "$target"
+   560	  run_one "$target"
+   561	}
+   562	
+   563	logs_one() {
+   564	  local target="$1"
+   565	  local profile
+   566	
+   567	  profile="$(resolve_profile "$target")"
+   568	
+   569	  if ! window_exists "$profile"; then
+   570	    echo "Not running: $SESSION:$profile"
+   571	    echo "Start with: hgw run $target"
+   572	    exit 1
+   573	  fi
+   574	
+   575	  tmux capture-pane -t "$SESSION:$profile" -p -S -160
+   576	}
+   577	
+   578	view_one() {
+   579	  local target="$1"
+   580	  local profile
+   581	
+   582	  profile="$(resolve_profile "$target")"
+   583	
+   584	  if ! window_exists "$profile"; then
+   585	    echo "Not running: $SESSION:$profile"
+   586	    echo "Start with: hgw run $target"
+   587	    exit 1
+   588	  fi
+   589	
+   590	  tmux select-window -t "$SESSION:$profile" 2>/dev/null || true
+   591	  tmux attach -t "$SESSION"
+   592	}
+   593	
+   594	run_target() {
+   595	  local action="$1"
+   596	  local target="$2"
+   597	
+   598	  if [ "$target" = "all" ]; then
+   599	    local found=0
+   600	    while IFS= read -r profile; do
+   601	      [ -n "$profile" ] || continue
+   602	      found=1
+   603	      "${action}_one" "$profile"
+   604	    done < <(gateway_profiles)
+   605	
+   606	    if [ "$found" -eq 0 ]; then
+   607	      echo "No Telegram gateway profiles found."
+   608	      exit 1
+   609	    fi
+   610	
+   611	    return 0
+   612	  fi
+   613	
+   614	  "${action}_one" "$target"
+   615	}
+   616	
+   617	list_all() {
+   618	  echo "== Telegram gateway profiles =="
+   619	  gateway_profiles | sed 's/^/  /' || true
+   620	
+   621	  echo
+   622	  echo "== Bound aliases =="
+   623	  if [ -f "$ALIASES_FILE" ] && [ -s "$ALIASES_FILE" ]; then
+   624	    list_aliases_plain
+   625	  else
+   626	    echo "  none"
+   627	  fi
+   628	
+   629	  echo
+   630	  echo "== Hermes profiles =="
+   631	  hermes profile list 2>&1 || true
+   632	
+   633	  echo
+   634	  bridge_status
+   635	}
+   636	
+   637	status_all() {
+   638	  echo "== tmux session =="
+   639	
+   640	  if tmux has-session -t "$SESSION" 2>/dev/null; then
+   641	    tmux list-windows -t "$SESSION" -F '  #S:#W  pane=#{pane_current_command}'
+   642	  else
+   643	    echo "  no tmux session: $SESSION"
+   644	  fi
+   645	
+   646	  echo
+   647	  echo "== Telegram gateway profiles =="
+   648	  gateway_profiles | sed 's/^/  /' || true
+   649	
+   650	  echo
+   651	  echo "== Bound aliases =="
+   652	  if [ -f "$ALIASES_FILE" ] && [ -s "$ALIASES_FILE" ]; then
+   653	    list_aliases_plain
+   654	  else
+   655	    echo "  none"
+   656	  fi
+   657	
+   658	  echo
+   659	  bridge_status
+   660	}
+   661	
+   662	cmd="${1:-help}"
+   663	shift || true
+   664	
+   665	
+   666	# hgw web/approve early dispatch
+   667	# Keep this outside the main case block so it survives case layout changes.
+   668	if [ "$cmd" = "approve" ]; then
+   669	  "$HOME/.config/hgw/lib/approve.py" "$@"
+   670	  exit $?
+   671	fi
+   672	
+   673	if [ "$cmd" = "web" ]; then
+   674	  [ -n "${1:-}" ] || {
+   675	    echo "Usage: hgw web <url>"
+   676	    exit 2
+   677	  }
+   678	  "$HOME/.config/hgw/lib/web_fetch.py" "$@"
+   679	  exit $?
+   680	fi
+   681	
+   682	case "$cmd" in
+   683	  bind)
+   684	    bind_alias "${1:-}" "${2:-}" ;;
+   685	  unbind)
+   686	    unbind_alias "${1:-}" ;;
+   687	  list)
+   688	    list_all ;;
+   689	  run|start)
+   690	    [ -n "${1:-}" ] || { usage; exit 1; }
+   691	    require_tmux
+   692	    run_target run "$1" ;;
+   693	  stop)
+   694	    [ -n "${1:-}" ] || { usage; exit 1; }
+   695	    require_tmux
+   696	    run_target stop "$1"
+   697	    if [ "${1:-}" = "all" ]; then
+   698	      bridge_stop >/dev/null 2>&1 || true
+   699	      echo "Bridge stopped: all"
+   700	    else
+   701	      target_profile="$(resolve_profile "$1" 2>/dev/null || true)"
+   702	      if [ -n "$target_profile" ] && profile_uses_bridge "$target_profile"; then
+   703	        bridge_stop >/dev/null 2>&1 || true
+   704	        echo "Bridge stopped: $target_profile uses bridge"
+   705	      fi
+   706	    fi
+   707	    ;;
+   708	  restart)
+   709	    [ -n "${1:-}" ] || { usage; exit 1; }
+   710	    require_tmux
+   711	    run_target restart "$1" ;;
+   712	  logs)
+   713	    [ -n "${1:-}" ] || { usage; exit 1; }
+   714	    require_tmux
+   715	    logs_one "$1" ;;
+   716	  view)
+   717	    [ -n "${1:-}" ] || { usage; exit 1; }
+   718	    require_tmux
+   719	    view_one "$1" ;;
+   720	  status)
+   721	    require_tmux
+   722	    status_all ;;
+   723	  bridge|br)
+   724	    bridge_cmd "$@" ;;
+   725	  help|-h|--help|"")
+   726	    usage ;;
+   727	  *)
+   728	    echo "ERROR: unknown command: $cmd"
+   729	    usage
+   730	    exit 1 ;;
+   731	esac
+
+============================================================
+FILE: bin/hgb
+PATH: /data/data/com.termux/files/home/bin/hgb
+============================================================
+
+     1	#!/data/data/com.termux/files/usr/bin/python
+     2	# hgb = Hermes Gemini Bridge
+     3	import argparse
+     4	import json
+     5	import os
+     6	import re
+     7	import subprocess
+     8	import time
+     9	import uuid
+    10	from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    11	from pathlib import Path
+    12	from typing import Any, Dict, List, Tuple
+    13	
+    14	
+    15	DEFAULT_HOST = "127.0.0.1"
+    16	DEFAULT_PORT = 8787
+    17	DEFAULT_PROFILE = os.environ.get("HGB_PROFILE", "tg")
+    18	DEFAULT_MODEL = os.environ.get("HGB_MODEL", "gemini-2.5-flash-lite")
+    19	DEFAULT_PUBLIC_MODEL = os.environ.get("HGB_PUBLIC_MODEL", "hgb-tg")
+    20	DEFAULT_TIMEOUT = int(os.environ.get("HGB_TIMEOUT", "120"))
+    21	DEFAULT_ROUTES_FILE = os.environ.get(
+    22	    "HGB_ROUTES_FILE",
+    23	    str(Path.home() / ".config/hgw/bridge.routes.json"),
+    24	)
+    25	
+    26	
+    27	def get_tmp_dir() -> Path:
+    28	    base = os.environ.get("TMPDIR") or str(Path.home() / "tmp")
+    29	    p = Path(base)
+    30	    p.mkdir(parents=True, exist_ok=True)
+    31	    return p
+    32	
+    33	
+    34	LOG_FILE = get_tmp_dir() / "hgb.log"
+    35	
+    36	
+    37	def log(msg: str) -> None:
+    38	    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    39	    try:
+    40	        with LOG_FILE.open("a", encoding="utf-8") as f:
+    41	            f.write(f"{ts} {msg}\n")
+    42	    except Exception:
+    43	        pass
+    44	
+    45	
+    46	def extract_text_content(content: Any) -> str:
+    47	    if content is None:
+    48	        return ""
+    49	
+    50	    if isinstance(content, str):
+    51	        return content
+    52	
+    53	    if isinstance(content, list):
+    54	        parts: List[str] = []
+    55	        for item in content:
+    56	            if isinstance(item, str):
+    57	                parts.append(item)
+    58	            elif isinstance(item, dict):
+    59	                if item.get("type") in ("text", "input_text"):
+    60	                    parts.append(str(item.get("text", "")))
+    61	                elif "text" in item:
+    62	                    parts.append(str(item.get("text", "")))
+    63	        return "\n".join(x for x in parts if x)
+    64	
+    65	    return str(content)
+    66	
+    67	
+    68	# >>> hgb gemini prompt guard v3 >>>
+    69	_HGB_AT_PATH_RE = re.compile(
+    70	    r'(?<![\\w.+-])@(?=(?:[./~]|[A-Za-z0-9_.-]+/))'
+    71	)
+    72	
+    73	_HGB_HERMES_SKILLS_RE = re.compile(
+    74	    r'<available_skills>.*?</available_skills>',
+    75	    re.S,
+    76	)
+    77	
+    78	_HGB_REFERENCED_FILES_RE = re.compile(
+    79	    r'\\n--- Content from referenced files ---.*?\\n--- End of content ---',
+    80	    re.S,
+    81	)
+    82	
+    83	def guard_gemini_prompt_text(text: str) -> str:
+    84	    """Sanitize Hermes/Gateway text before handing it to Gemini CLI.
+    85	
+    86	    B안:
+    87	      Gemini CLI treats @path-like text as a file reference. Break only
+    88	      file-ish @ references such as @tests/foo.py, @./x, @../x, @/x, @~/x.
+    89	
+    90	    C안:
+    91	      Hermes skill catalog / referenced-file blocks are useful for Hermes
+    92	      itself, but they pollute Gemini CLI prompts and can trigger @file import.
+    93	    """
+    94	    if not isinstance(text, str) or not text:
+    95	        return text
+    96	
+    97	    text = _HGB_HERMES_SKILLS_RE.sub(
+    98	        '<available_skills omitted by hgb gemini prompt guard>',
+    99	        text,
+   100	    )
+   101	
+   102	    text = _HGB_REFERENCED_FILES_RE.sub(
+   103	        '\\n[referenced file contents omitted by hgb gemini prompt guard]\\n',
+   104	        text,
+   105	    )
+   106	
+   107	    # Insert zero-width space after @ only for file/path-looking references.
+   108	    text = _HGB_AT_PATH_RE.sub('@\u200b', text)
+   109	    return text
+   110	
+   111	# <<< hgb gemini prompt guard v3 <<<
+   112	
+   113	
+   114	def messages_to_prompt(messages: List[Dict[str, Any]]) -> str:
+   115	    blocks: List[str] = []
+   116	
+   117	    for msg in messages:
+   118	        role = msg.get("role", "user")
+   119	        content = extract_text_content(msg.get("content", ""))
+   120	        content = guard_gemini_prompt_text(content)
+   121	
+   122	        if not content:
+   123	            continue
+   124	
+   125	        if role == "system":
+   126	            blocks.append(f"[system]\\n{content}")
+   127	        elif role == "assistant":
+   128	            blocks.append(f"[assistant]\\n{content}")
+   129	        elif role == "tool":
+   130	            name = msg.get("name") or msg.get("tool_call_id") or "tool"
+   131	            blocks.append(f"[tool:{name}]\\n{content}")
+   132	        else:
+   133	            blocks.append(f"[user]\\n{content}")
+   134	
+   135	    return guard_gemini_prompt_text("\\n\\n".join(blocks).strip())
+   136	
+   137	
+   138	def parse_gemini_json(stdout: str) -> Dict[str, Any]:
+   139	    text = stdout.strip()
+   140	    if not text:
+   141	        raise ValueError("empty stdout from gm")
+   142	
+   143	    start = text.find("{")
+   144	    end = text.rfind("}")
+   145	
+   146	    if start < 0 or end < start:
+   147	        raise ValueError(f"no JSON object found in gm stdout: {text[:500]}")
+   148	
+   149	    return json.loads(text[start:end + 1])
+   150	
+   151	
+   152	def load_routes(routes_file: str, fallback_public: str, fallback_profile: str, fallback_model: str) -> Dict[str, Dict[str, Any]]:
+   153	    routes: Dict[str, Dict[str, Any]] = {}
+   154	
+   155	    p = Path(routes_file)
+   156	    if p.exists():
+   157	        try:
+   158	            data = json.loads(p.read_text(encoding="utf-8"))
+   159	            if isinstance(data, dict):
+   160	                for name, route in data.items():
+   161	                    if isinstance(route, dict):
+   162	                        routes[str(name)] = dict(route)
+   163	        except Exception as e:
+   164	            log(f"ROUTES_LOAD_ERROR file={routes_file} error={e}")
+   165	
+   166	    if fallback_public not in routes:
+   167	        routes[fallback_public] = {
+   168	            "profile": fallback_profile,
+   169	            "model": fallback_model,
+   170	            "skip_trust": True,
+   171	        }
+   172	
+   173	    return routes
+   174	
+   175	
+   176	def normalize_route(route: Dict[str, Any], fallback_profile: str, fallback_model: str, fallback_timeout: int) -> Dict[str, Any]:
+   177	    return {
+   178	        "profile": str(route.get("profile") or fallback_profile),
+   179	        "model": str(route.get("model") or fallback_model),
+   180	        "skip_trust": bool(route.get("skip_trust", True)),
+   181	        "timeout": int(route.get("timeout") or fallback_timeout),
+   182	    }
+   183	
+   184	
+   185	def call_gm(prompt: str, route_name: str, route: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+   186	    prompt = guard_gemini_prompt_text(prompt)
+   187	    profile = route["profile"]
+   188	    model = route["model"]
+   189	    timeout = route["timeout"]
+   190	    skip_trust = route["skip_trust"]
+   191	
+   192	    cmd = ["gm", "task", profile, "--"]
+   193	
+   194	    if skip_trust:
+   195	        cmd.append("--skip-trust")
+   196	
+   197	    if model:
+   198	        cmd.extend(["--model", model])
+   199	
+   200	    cmd.extend(["-p", prompt, "--output-format", "json"])
+   201	
+   202	    started = time.time()
+   203	    log(f"CALL route={route_name} profile={profile} model={model} chars={len(prompt)}")
+   204	
+   205	    proc = subprocess.run(
+   206	        cmd,
+   207	        text=True,
+   208	        capture_output=True,
+   209	        timeout=timeout,
+   210	        input="",
+   211	        env=os.environ.copy(),
+   212	    )
+   213	
+   214	    elapsed = time.time() - started
+   215	    log(
+   216	        f"DONE route={route_name} rc={proc.returncode} elapsed={elapsed:.2f}s "
+   217	        f"stdout={len(proc.stdout)} stderr={len(proc.stderr)}"
+   218	    )
+   219	
+   220	    if proc.returncode != 0:
+   221	        err = proc.stderr.strip() or proc.stdout.strip() or f"gm exited with code {proc.returncode}"
+   222	        raise RuntimeError(err[:4000])
+   223	
+   224	    data = parse_gemini_json(proc.stdout)
+   225	    response = data.get("response", "")
+   226	
+   227	    if response is None:
+   228	        response = ""
+   229	
+   230	    return str(response), data
+   231	
+   232	
+   233	def usage_from_stats(data: Dict[str, Any]) -> Dict[str, int]:
+   234	    stats = data.get("stats", {})
+   235	    models = stats.get("models", {})
+   236	
+   237	    if isinstance(models, dict) and models:
+   238	        first = next(iter(models.values()))
+   239	        tokens = first.get("tokens", {}) if isinstance(first, dict) else {}
+   240	    else:
+   241	        tokens = {}
+   242	
+   243	    prompt_tokens = int(tokens.get("prompt") or tokens.get("input") or 0)
+   244	    completion_tokens = int(tokens.get("candidates") or 0)
+   245	    total_tokens = int(tokens.get("total") or prompt_tokens + completion_tokens)
+   246	
+   247	    return {
+   248	        "prompt_tokens": prompt_tokens,
+   249	        "completion_tokens": completion_tokens,
+   250	        "total_tokens": total_tokens,
+   251	    }
+   252	
+   253	
+   254	class HGBHandler(BaseHTTPRequestHandler):
+   255	    server_version = "hermes-gemini-bridge/0.2"
+   256	
+   257	    def log_message(self, fmt: str, *args: Any) -> None:
+   258	        log(f"{self.address_string()} {fmt % args}")
+   259	
+   260	    def routes(self) -> Dict[str, Dict[str, Any]]:
+   261	        return load_routes(
+   262	            self.server.routes_file,
+   263	            self.server.public_model,
+   264	            self.server.profile,
+   265	            self.server.model,
+   266	        )
+   267	
+   268	    def send_json(self, code: int, payload: Dict[str, Any]) -> None:
+   269	        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+   270	        self.send_response(code)
+   271	        self.send_header("Content-Type", "application/json; charset=utf-8")
+   272	        self.send_header("Content-Length", str(len(body)))
+   273	        self.end_headers()
+   274	        self.wfile.write(body)
+   275	
+   276	    def read_json(self) -> Dict[str, Any]:
+   277	        n = int(self.headers.get("Content-Length", "0") or "0")
+   278	        raw = self.rfile.read(n).decode("utf-8", errors="replace")
+   279	        if not raw:
+   280	            return {}
+   281	        return json.loads(raw)
+   282	
+   283	    def do_GET(self) -> None:
+   284	        if self.path in ("/", "/health", "/v1/health"):
+   285	            routes = self.routes()
+   286	            self.send_json(200, {
+   287	                "ok": True,
+   288	                "service": "hermes-gemini-bridge",
+   289	                "version": "0.2",
+   290	                "profile": self.server.profile,
+   291	                "model": self.server.model,
+   292	                "public_model": self.server.public_model,
+   293	                "routes_file": self.server.routes_file,
+   294	                "routes": sorted(routes.keys()),
+   295	            })
+   296	            return
+   297	
+   298	        if self.path == "/v1/models":
+   299	            now = int(time.time())
+   300	            routes = self.routes()
+   301	            self.send_json(200, {
+   302	                "object": "list",
+   303	                "data": [
+   304	                    {
+   305	                        "id": name,
+   306	                        "object": "model",
+   307	                        "created": now,
+   308	                        "owned_by": "hermes-gemini-bridge",
+   309	                    }
+   310	                    for name in sorted(routes.keys())
+   311	                ],
+   312	            })
+   313	            return
+   314	
+   315	        self.send_json(404, {
+   316	            "error": {
+   317	                "message": f"not found: {self.path}",
+   318	                "type": "not_found",
+   319	            }
+   320	        })
+   321	
+   322	    def do_POST(self) -> None:
+   323	        if self.path != "/v1/chat/completions":
+   324	            self.send_json(404, {
+   325	                "error": {
+   326	                    "message": f"not found: {self.path}",
+   327	                    "type": "not_found",
+   328	                }
+   329	            })
+   330	            return
+   331	
+   332	        try:
+   333	            req = self.read_json()
+   334	            messages = req.get("messages", [])
+   335	            stream = bool(req.get("stream", False))
+   336	
+   337	            if not isinstance(messages, list):
+   338	                raise ValueError("messages must be a list")
+   339	
+   340	            prompt = messages_to_prompt(messages)
+   341	
+   342	            if not prompt:
+   343	                prompt = str(req.get("prompt", "")).strip()
+   344	
+   345	            if not prompt:
+   346	                raise ValueError("empty prompt/messages")
+   347	
+   348	            requested_model = str(req.get("model") or self.server.public_model)
+   349	            routes = self.routes()
+   350	
+   351	            if requested_model in routes:
+   352	                route_name = requested_model
+   353	                raw_route = routes[requested_model]
+   354	            else:
+   355	                route_name = self.server.public_model
+   356	                raw_route = routes.get(route_name, {
+   357	                    "profile": self.server.profile,
+   358	                    "model": self.server.model,
+   359	                    "skip_trust": True,
+   360	                })
+   361	                log(f"ROUTE_FALLBACK requested={requested_model} fallback={route_name}")
+   362	
+   363	            route = normalize_route(
+   364	                raw_route,
+   365	                fallback_profile=self.server.profile,
+   366	                fallback_model=self.server.model,
+   367	                fallback_timeout=self.server.timeout,
+   368	            )
+   369	
+   370	            content, gm_data = call_gm(prompt, route_name=route_name, route=route)
+   371	
+   372	            if stream:
+   373	                self.send_stream_response(requested_model, content)
+   374	            else:
+   375	                self.send_completion_response(requested_model, content, gm_data)
+   376	
+   377	        except subprocess.TimeoutExpired:
+   378	            self.send_json(504, {
+   379	                "error": {
+   380	                    "message": f"gm timed out after {self.server.timeout}s",
+   381	                    "type": "timeout",
+   382	                }
+   383	            })
+   384	        except Exception as e:
+   385	            log(f"ERROR {type(e).__name__}: {e}")
+   386	            self.send_json(502, {
+   387	                "error": {
+   388	                    "message": str(e),
+   389	                    "type": "hgb_error",
+   390	                }
+   391	            })
+   392	
+   393	    def send_completion_response(self, model: str, content: str, gm_data: Dict[str, Any]) -> None:
+   394	        now = int(time.time())
+   395	        cid = f"chatcmpl-hgb-{uuid.uuid4().hex[:16]}"
+   396	
+   397	        self.send_json(200, {
+   398	            "id": cid,
+   399	            "object": "chat.completion",
+   400	            "created": now,
+   401	            "model": model,
+   402	            "choices": [
+   403	                {
+   404	                    "index": 0,
+   405	                    "message": {
+   406	                        "role": "assistant",
+   407	                        "content": content,
+   408	                    },
+   409	                    "finish_reason": "stop",
+   410	                }
+   411	            ],
+   412	            "usage": usage_from_stats(gm_data),
+   413	        })
+   414	
+   415	    def send_stream_response(self, model: str, content: str) -> None:
+   416	        now = int(time.time())
+   417	        cid = f"chatcmpl-hgb-{uuid.uuid4().hex[:16]}"
+   418	
+   419	        self.send_response(200)
+   420	        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+   421	        self.send_header("Cache-Control", "no-cache")
+   422	        self.send_header("Connection", "keep-alive")
+   423	        self.end_headers()
+   424	
+   425	        first = {
+   426	            "id": cid,
+   427	            "object": "chat.completion.chunk",
+   428	            "created": now,
+   429	            "model": model,
+   430	            "choices": [
+   431	                {
+   432	                    "index": 0,
+   433	                    "delta": {
+   434	                        "role": "assistant",
+   435	                        "content": content,
+   436	                    },
+   437	                    "finish_reason": None,
+   438	                }
+   439	            ],
+   440	        }
+   441	
+   442	        final = {
+   443	            "id": cid,
+   444	            "object": "chat.completion.chunk",
+   445	            "created": now,
+   446	            "model": model,
+   447	            "choices": [
+   448	                {
+   449	                    "index": 0,
+   450	                    "delta": {},
+   451	                    "finish_reason": "stop",
+   452	                }
+   453	            ],
+   454	        }
+   455	
+   456	        for obj in (first, final):
+   457	            self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8"))
+   458	            self.wfile.flush()
+   459	
+   460	        self.wfile.write(b"data: [DONE]\n\n")
+   461	        self.wfile.flush()
+   462	
+   463	
+   464	class HGBServer(ThreadingHTTPServer):
+   465	    def __init__(
+   466	        self,
+   467	        addr: Tuple[str, int],
+   468	        profile: str,
+   469	        model: str,
+   470	        public_model: str,
+   471	        timeout: int,
+   472	        routes_file: str,
+   473	    ):
+   474	        super().__init__(addr, HGBHandler)
+   475	        self.profile = profile
+   476	        self.model = model
+   477	        self.public_model = public_model
+   478	        self.timeout = timeout
+   479	        self.routes_file = routes_file
+   480	
+   481	
+   482	def serve(args: argparse.Namespace) -> None:
+   483	    server = HGBServer(
+   484	        (args.host, args.port),
+   485	        profile=args.profile,
+   486	        model=args.model,
+   487	        public_model=args.public_model,
+   488	        timeout=args.timeout,
+   489	        routes_file=args.routes_file,
+   490	    )
+   491	
+   492	    log(
+   493	        f"START host={args.host} port={args.port} "
+   494	        f"profile={args.profile} model={args.model} "
+   495	        f"public_model={args.public_model} routes_file={args.routes_file}"
+   496	    )
+   497	
+   498	    print(f"hermes-gemini-bridge listening on http://{args.host}:{args.port}/v1")
+   499	    print(f"profile={args.profile}")
+   500	    print(f"model={args.model}")
+   501	    print(f"public_model={args.public_model}")
+   502	    print(f"routes_file={args.routes_file}")
+   503	    print(f"log={LOG_FILE}")
+   504	
+   505	    try:
+   506	        server.serve_forever()
+   507	    except KeyboardInterrupt:
+   508	        print()
+   509	        print("hermes-gemini-bridge stopped")
+   510	
+   511	
+   512	def main() -> None:
+   513	    parser = argparse.ArgumentParser(prog="hermes-gemini-bridge")
+   514	    sub = parser.add_subparsers(dest="cmd")
+   515	
+   516	    p = sub.add_parser("serve")
+   517	    p.add_argument("--host", default=os.environ.get("HGB_HOST", DEFAULT_HOST))
+   518	    p.add_argument("--port", type=int, default=int(os.environ.get("HGB_PORT", DEFAULT_PORT)))
+   519	    p.add_argument("--profile", default=DEFAULT_PROFILE)
+   520	    p.add_argument("--model", default=DEFAULT_MODEL)
+   521	    p.add_argument("--public-model", default=DEFAULT_PUBLIC_MODEL)
+   522	    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+   523	    p.add_argument("--routes-file", default=os.environ.get("HGB_ROUTES_FILE", DEFAULT_ROUTES_FILE))
+   524	
+   525	    args = parser.parse_args()
+   526	
+   527	    if args.cmd == "serve":
+   528	        serve(args)
+   529	    else:
+   530	        parser.print_help()
+   531	        raise SystemExit(2)
+   532	
+   533	
+   534	if __name__ == "__main__":
+   535	    main()
+
+============================================================
+FILE: ai-lib/manager_cwd_policy.sh
+PATH: /data/data/com.termux/files/home/.config/ai/lib/manager_cwd_policy.sh
+============================================================
+
+     1	# Shared cwd policy for gm/cm/hm.
+     2	# Source this file from manager wrappers only.
+     3	
+     4	ai_mgr_maybe_cd() {
+     5	  local mgr_name="$1"
+     6	  local profile_home="$2"
+     7	  local sb_root="$3"
+     8	  local cmd="$4"
+     9	  local profile="$5"
+    10	  local force_policy="$6"
+    11	  local tty_policy="$7"
+    12	  local non_tty_policy="$8"
+    13	  local ask_default="$9"
+    14	  local allowed_cmds="${10}"
+    15	
+    16	  [ -n "$profile" ] || return 0
+    17	  [ -d "$profile_home/$profile" ] || return 0
+    18	
+    19	  case " $allowed_cmds " in
+    20	    *" $cmd "*) ;;
+    21	    *) return 0 ;;
+    22	  esac
+    23	
+    24	  local target="$sb_root/$profile"
+    25	  local current
+    26	  current="$(pwd -P 2>/dev/null || pwd)"
+    27	
+    28	  if [ "$current" = "$target" ]; then
+    29	    return 0
+    30	  fi
+    31	
+    32	  local policy="$force_policy"
+    33	
+    34	  if [ -z "$policy" ]; then
+    35	    if [ -t 0 ] && [ -t 1 ]; then
+    36	      policy="$tty_policy"
+    37	    else
+    38	      policy="$non_tty_policy"
+    39	    fi
+    40	  fi
+    41	
+    42	  case "$policy" in
+    43	    cwd|"")
+    44	      return 0
+    45	      ;;
+    46	
+    47	    sandbox|sb)
+    48	      mkdir -p "$target"
+    49	      cd "$target" 2>/dev/null || true
+    50	      return 0
+    51	      ;;
+    52	
+    53	    ask)
+    54	      if ! [ -t 0 ] || ! [ -t 1 ]; then
+    55	        case "$non_tty_policy" in
+    56	          sandbox|sb)
+    57	            mkdir -p "$target"
+    58	            cd "$target" 2>/dev/null || true
+    59	            ;;
+    60	        esac
+    61	        return 0
+    62	      fi
+    63	
+    64	      echo >&2
+    65	      echo "[$mgr_name] 현재 위치가 profile sandbox와 다릅니다." >&2
+    66	      echo >&2
+    67	      echo "  현재 위치:" >&2
+    68	      echo "    $current" >&2
+    69	      echo "  profile sandbox:" >&2
+    70	      echo "    $target" >&2
+    71	      echo >&2
+    72	      echo "선택:" >&2
+    73	      echo "  1) 현재 위치에서 실행" >&2
+    74	      echo "  2) sandbox에서 실행" >&2
+    75	      echo "  3) 취소" >&2
+    76	      echo >&2
+    77	
+    78	      local default_label
+    79	      if [ "$ask_default" = "sandbox" ] || [ "$ask_default" = "sb" ]; then
+    80	        default_label="2"
+    81	      else
+    82	        default_label="1"
+    83	      fi
+    84	
+    85	      local ans
+    86	      printf "선택 [%s]: " "$default_label" > /dev/tty
+    87	      IFS= read -r ans < /dev/tty || ans=""
+    88	      [ -n "$ans" ] || ans="$default_label"
+    89	
+    90	      case "$ans" in
+    91	        1|c|cwd|C|current)
+    92	          return 0
+    93	          ;;
+    94	        2|s|sb|S|sandbox)
+    95	          mkdir -p "$target"
+    96	          cd "$target" 2>/dev/null || true
+    97	          return 0
+    98	          ;;
+    99	        3|q|Q|quit|cancel|취소)
+   100	          echo "cancelled" >&2
+   101	          return 130
+   102	          ;;
+   103	        *)
+   104	          echo "ERROR: unknown choice: $ans" >&2
+   105	          return 2
+   106	          ;;
+   107	      esac
+   108	      ;;
+   109	
+   110	    *)
+   111	      echo "ERROR: invalid $mgr_name cwd policy: $policy" >&2
+   112	      return 2
+   113	      ;;
+   114	  esac
+   115	}
+
+============================================================
+FILE: hgw-lib/approve.py
+PATH: /data/data/com.termux/files/home/.config/hgw/lib/approve.py
+============================================================
+
+     1	#!/data/data/com.termux/files/usr/bin/python
+     2	# hgw approve = URL fetch approval queue for Hermes Gateway
+     3	
+     4	import argparse
+     5	import json
+     6	import os
+     7	import re
+     8	import secrets
+     9	import shutil
+    10	import subprocess
+    11	import sys
+    12	import time
+    13	import urllib.parse
+    14	import urllib.request
+    15	from pathlib import Path
+    16	
+    17	HOME = Path.home()
+    18	LIB = HOME / ".config" / "hgw" / "lib"
+    19	STATE = HOME / ".local" / "state" / "hgw"
+    20	PENDING = STATE / "approvals" / "pending"
+    21	DONE = STATE / "approvals" / "done"
+    22	REJECTED = STATE / "approvals" / "rejected"
+    23	EXPIRED = STATE / "approvals" / "expired"
+    24	LOG = STATE / "logs" / "approve.log"
+    25	
+    26	DEFAULT_TTL_SECONDS = 600
+    27	DEFAULT_MODEL_TIMEOUT = 240
+    28	
+    29	
+    30	def ensure_dirs():
+    31	    for d in [PENDING, DONE, REJECTED, EXPIRED, LOG.parent]:
+    32	        d.mkdir(parents=True, exist_ok=True)
+    33	
+    34	
+    35	def log(msg):
+    36	    ensure_dirs()
+    37	    with LOG.open("a", encoding="utf-8") as f:
+    38	        f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    39	
+    40	
+    41	def new_id():
+    42	    return time.strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(3)
+    43	
+    44	
+    45	def now():
+    46	    return int(time.time())
+    47	
+    48	
+    49	def req_path(id_, folder=PENDING):
+    50	    return folder / f"{id_}.json"
+    51	
+    52	
+    53	def save_req(req, folder=PENDING):
+    54	    ensure_dirs()
+    55	    p = req_path(req["id"], folder)
+    56	    tmp = p.with_suffix(".tmp")
+    57	    tmp.write_text(json.dumps(req, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    58	    tmp.replace(p)
+    59	    return p
+    60	
+    61	
+    62	def load_pending(id_):
+    63	    p = req_path(id_)
+    64	    if not p.exists():
+    65	        raise SystemExit(f"ERROR: pending request not found: {id_}")
+    66	    req = json.loads(p.read_text(encoding="utf-8"))
+    67	    if int(req.get("expires_at", 0)) < now():
+    68	        req["status"] = "expired"
+    69	        req["expired_at"] = now()
+    70	        save_req(req, EXPIRED)
+    71	        p.unlink(missing_ok=True)
+    72	        raise SystemExit(f"ERROR: request expired: {id_}")
+    73	    return req
+    74	
+    75	
+    76	def load_env(profile):
+    77	    envfile = HOME / ".hermes" / "profiles" / profile / ".env"
+    78	    out = {}
+    79	    if not envfile.exists():
+    80	        return out
+    81	    for raw in envfile.read_text(errors="replace").splitlines():
+    82	        line = raw.strip()
+    83	        if not line or line.startswith("#") or "=" not in line:
+    84	            continue
+    85	        k, v = line.split("=", 1)
+    86	        out[k.strip()] = v.strip().strip('"').strip("'")
+    87	    return out
+    88	
+    89	
+    90	def telegram_token(profile):
+    91	    return load_env(profile).get("TELEGRAM_BOT_TOKEN")
+    92	
+    93	
+    94	def default_chat_id(profile):
+    95	    env = load_env(profile)
+    96	    for key in [
+    97	        "HGW_APPROVAL_CHAT_ID",
+    98	        "TELEGRAM_ADMIN_CHAT_ID",
+    99	        "TELEGRAM_HOME_CHAT_ID",
+   100	        "TELEGRAM_HOME",
+   101	        "TELEGRAM_CHAT_ID",
+   102	        "HOME_CHAT_ID",
+   103	    ]:
+   104	        if env.get(key):
+   105	            return env[key]
+   106	    return None
+   107	
+   108	
+   109	def split_text(text, limit=3800):
+   110	    if len(text) <= limit:
+   111	        return [text]
+   112	    chunks = []
+   113	    cur = ""
+   114	    for line in text.splitlines(True):
+   115	        if len(cur) + len(line) > limit:
+   116	            if cur:
+   117	                chunks.append(cur)
+   118	            cur = ""
+   119	        cur += line
+   120	    if cur:
+   121	        chunks.append(cur)
+   122	    return chunks
+   123	
+   124	
+   125	def send_telegram(profile, chat_id, text):
+   126	    if not chat_id:
+   127	        return False
+   128	
+   129	    token = telegram_token(profile)
+   130	    if not token:
+   131	        print(f"WARNING: TELEGRAM_BOT_TOKEN not found for profile={profile}", file=sys.stderr)
+   132	        return False
+   133	
+   134	    url = f"https://api.telegram.org/bot{token}/sendMessage"
+   135	    ok = True
+   136	
+   137	    for chunk in split_text(text):
+   138	        data = urllib.parse.urlencode({
+   139	            "chat_id": chat_id,
+   140	            "text": chunk,
+   141	            "disable_web_page_preview": "true",
+   142	        }).encode()
+   143	
+   144	        try:
+   145	            req = urllib.request.Request(url, data=data, method="POST")
+   146	            with urllib.request.urlopen(req, timeout=15) as resp:
+   147	                resp.read()
+   148	        except Exception as exc:
+   149	            print(f"WARNING: Telegram send failed: {exc}", file=sys.stderr)
+   150	            ok = False
+   151	
+   152	    return ok
+   153	
+   154	
+   155	def fetch_url(url):
+   156	    fetcher = str(LIB / "web_fetch.py")
+   157	    proc = subprocess.run(
+   158	        [fetcher, url, "--timeout", "20", "--max-bytes", "1000000"],
+   159	        text=True,
+   160	        capture_output=True,
+   161	        timeout=35,
+   162	        input="",
+   163	    )
+   164	    if proc.returncode != 0:
+   165	        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"web fetch failed: {proc.returncode}")
+   166	    return proc.stdout.strip()
+   167	
+   168	
+   169	def ask_hermes(profile, prompt):
+   170	    workdir = HOME / "sb" / "hermes" / profile
+   171	    workdir.mkdir(parents=True, exist_ok=True)
+   172	
+   173	    proc = subprocess.run(
+   174	        ["hm", "task", profile, prompt],
+   175	        text=True,
+   176	        capture_output=True,
+   177	        timeout=DEFAULT_MODEL_TIMEOUT,
+   178	        cwd=str(workdir),
+   179	        input="",
+   180	    )
+   181	
+   182	    if proc.returncode != 0:
+   183	        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"hm task failed: {proc.returncode}")
+   184	
+   185	    return proc.stdout.strip()
+   186	
+   187	
+   188	def cmd_request(args):
+   189	    ensure_dirs()
+   190	
+   191	    id_ = new_id()
+   192	    chat_id = args.chat or default_chat_id(args.profile)
+   193	    user_id = args.user or ""
+   194	    prompt = " ".join(args.prompt).strip() or "이 URL의 내용을 읽고 요약해줘."
+   195	
+   196	    req = {
+   197	        "id": id_,
+   198	        "kind": "url_fetch",
+   199	        "status": "pending",
+   200	        "created_at": now(),
+   201	        "expires_at": now() + int(args.ttl),
+   202	        "source": args.source,
+   203	        "profile": args.profile,
+   204	        "chat_id": str(chat_id or ""),
+   205	        "user_id": str(user_id or ""),
+   206	        "message_id": str(args.message_id or ""),
+   207	        "url": args.url,
+   208	        "prompt": prompt,
+   209	    }
+   210	
+   211	    p = save_req(req)
+   212	
+   213	    msg = f"""URL fetch 승인 요청
+   214	
+   215	ID: {id_}
+   216	URL: {args.url}
+   217	요청: {prompt}
+   218	
+   219	승인:
+   220	  /approve {id_}
+   221	
+   222	거절:
+   223	  /deny {id_}
+   224	
+   225	만료:
+   226	  {args.ttl}초 후
+   227	
+   228	CLI:
+   229	  hgw approve allow {id_}
+   230	  hgw approve deny {id_}
+   231	"""
+   232	
+   233	    print(f"created: {p}")
+   234	    print()
+   235	    print(msg)
+   236	
+   237	    if chat_id:
+   238	        send_telegram(args.profile, chat_id, msg)
+   239	
+   240	    log(f"request id={id_} profile={args.profile} url={args.url}")
+   241	
+   242	
+   243	def cmd_list(args):
+   244	    ensure_dirs()
+   245	    cleanup_expired(silent=True)
+   246	
+   247	    files = sorted(PENDING.glob("*.json"))
+   248	    if not files:
+   249	        print("No pending approvals.")
+   250	        return
+   251	
+   252	    for p in files:
+   253	        try:
+   254	            req = json.loads(p.read_text(encoding="utf-8"))
+   255	        except Exception:
+   256	            continue
+   257	        print(f"{req.get('id')}  expires={req.get('expires_at')}  profile={req.get('profile')}  url={req.get('url')}")
+   258	
+   259	
+   260	def cmd_show(args):
+   261	    req = load_pending(args.id)
+   262	    print(json.dumps(req, indent=2, ensure_ascii=False))
+   263	
+   264	
+   265	def finish_request(req, target_folder, status):
+   266	    src = req_path(req["id"])
+   267	    req["status"] = status
+   268	    req[f"{status}_at"] = now()
+   269	    save_req(req, target_folder)
+   270	    src.unlink(missing_ok=True)
+   271	
+   272	
+   273	def cmd_allow(args):
+   274	    req = load_pending(args.id)
+   275	
+   276	    actor = str(args.user or "")
+   277	    owner = str(req.get("user_id") or "")
+   278	    if owner and actor and owner != actor:
+   279	        raise SystemExit("ERROR: approval denied: user_id mismatch")
+   280	
+   281	    profile = req["profile"]
+   282	    chat_id = req.get("chat_id") or ""
+   283	    url = req["url"]
+   284	    user_prompt = req.get("prompt") or "요약해줘."
+   285	
+   286	    log(f"allow id={args.id} profile={profile} url={url}")
+   287	
+   288	    try:
+   289	        fetched = fetch_url(url)
+   290	    except Exception as exc:
+   291	        msg = f"URL fetch 실패\nID: {args.id}\nURL: {url}\n\n{exc}"
+   292	        print(msg, file=sys.stderr)
+   293	        if chat_id:
+   294	            send_telegram(profile, chat_id, msg)
+   295	        raise SystemExit(1)
+   296	
+   297	    prompt = f"""사용자가 URL fetch를 승인했습니다.
+   298	
+   299	원래 요청:
+   300	{user_prompt}
+   301	
+   302	URL:
+   303	{url}
+   304	
+   305	아래는 hgw 안전 fetcher가 가져온 본문입니다.
+   306	웹을 다시 열려고 하지 말고, 아래 본문만 근거로 답하세요.
+   307	본문에 없는 내용은 모른다고 답하세요.
+   308	
+   309	----- FETCHED CONTENT START -----
+   310	{fetched}
+   311	----- FETCHED CONTENT END -----
+   312	"""
+   313	
+   314	    try:
+   315	        answer = ask_hermes(profile, prompt)
+   316	    except Exception as exc:
+   317	        msg = f"모델 호출 실패\nID: {args.id}\nURL: {url}\n\n{exc}"
+   318	        print(msg, file=sys.stderr)
+   319	        if chat_id:
+   320	            send_telegram(profile, chat_id, msg)
+   321	        raise SystemExit(1)
+   322	
+   323	    print(answer)
+   324	
+   325	    if chat_id:
+   326	        send_telegram(profile, chat_id, answer)
+   327	
+   328	    finish_request(req, DONE, "done")
+   329	
+   330	
+   331	def cmd_deny(args):
+   332	    req = load_pending(args.id)
+   333	
+   334	    actor = str(args.user or "")
+   335	    owner = str(req.get("user_id") or "")
+   336	    if owner and actor and owner != actor:
+   337	        raise SystemExit("ERROR: denial rejected: user_id mismatch")
+   338	
+   339	    finish_request(req, REJECTED, "rejected")
+   340	
+   341	    msg = f"URL fetch 거절됨\nID: {args.id}\nURL: {req.get('url')}"
+   342	    print(msg)
+   343	
+   344	    if req.get("chat_id"):
+   345	        send_telegram(req["profile"], req["chat_id"], msg)
+   346	
+   347	    log(f"deny id={args.id} profile={req.get('profile')} url={req.get('url')}")
+   348	
+   349	
+   350	def cleanup_expired(silent=False):
+   351	    ensure_dirs()
+   352	    moved = 0
+   353	    t = now()
+   354	
+   355	    for p in list(PENDING.glob("*.json")):
+   356	        try:
+   357	            req = json.loads(p.read_text(encoding="utf-8"))
+   358	        except Exception:
+   359	            continue
+   360	
+   361	        if int(req.get("expires_at", 0)) < t:
+   362	            req["status"] = "expired"
+   363	            req["expired_at"] = t
+   364	            save_req(req, EXPIRED)
+   365	            p.unlink(missing_ok=True)
+   366	            moved += 1
+   367	
+   368	    if not silent:
+   369	        print(f"expired moved: {moved}")
+   370	
+   371	
+   372	def cmd_cleanup(args):
+   373	    cleanup_expired(silent=False)
+   374	
+   375	    cutoff = now() - int(args.keep_seconds)
+   376	    removed = 0
+   377	
+   378	    for folder in [DONE, REJECTED, EXPIRED]:
+   379	        for p in list(folder.glob("*.json")):
+   380	            try:
+   381	                req = json.loads(p.read_text(encoding="utf-8"))
+   382	                ts = int(req.get("done_at") or req.get("rejected_at") or req.get("expired_at") or req.get("created_at") or 0)
+   383	            except Exception:
+   384	                ts = 0
+   385	            if ts and ts < cutoff:
+   386	                p.unlink(missing_ok=True)
+   387	                removed += 1
+   388	
+   389	    print(f"old removed: {removed}")
+   390	
+   391	
+   392	def main():
+   393	    ap = argparse.ArgumentParser(prog="hgw approve")
+   394	    sub = ap.add_subparsers(dest="cmd", required=True)
+   395	
+   396	    p = sub.add_parser("request")
+   397	    p.add_argument("profile")
+   398	    p.add_argument("url")
+   399	    p.add_argument("prompt", nargs="*")
+   400	    p.add_argument("--chat")
+   401	    p.add_argument("--user")
+   402	    p.add_argument("--message-id")
+   403	    p.add_argument("--source", default="cli")
+   404	    p.add_argument("--ttl", type=int, default=DEFAULT_TTL_SECONDS)
+   405	    p.set_defaults(fn=cmd_request)
+   406	
+   407	    p = sub.add_parser("list")
+   408	    p.set_defaults(fn=cmd_list)
+   409	
+   410	    p = sub.add_parser("show")
+   411	    p.add_argument("id")
+   412	    p.set_defaults(fn=cmd_show)
+   413	
+   414	    p = sub.add_parser("allow")
+   415	    p.add_argument("id")
+   416	    p.add_argument("--user")
+   417	    p.set_defaults(fn=cmd_allow)
+   418	
+   419	    p = sub.add_parser("deny")
+   420	    p.add_argument("id")
+   421	    p.add_argument("--user")
+   422	    p.set_defaults(fn=cmd_deny)
+   423	
+   424	    p = sub.add_parser("cleanup")
+   425	    p.add_argument("--keep-seconds", type=int, default=7 * 24 * 3600)
+   426	    p.set_defaults(fn=cmd_cleanup)
+   427	
+   428	    args = ap.parse_args()
+   429	    args.fn(args)
+   430	
+   431	
+   432	if __name__ == "__main__":
+   433	    main()
