@@ -101,11 +101,25 @@ fi
 section "3. ai structure checks"
 
 AI="$HOME/bin/ai"
+REPO_AI="$HOME/prj/ai/bin/ai"
+
+if [ -f "$REPO_AI" ]; then
+  if cmp -s "$AI" "$REPO_AI"; then
+    ok "live ~/bin/ai matches repo bin/ai"
+  else
+    fail "live ~/bin/ai matches repo bin/ai"
+  fi
+else
+  warn "repo bin/ai not found: $REPO_AI"
+fi
 
 grep_ok "ai has provider metadata" 'provider_mgr\(\)' "$AI"
 grep_ok "ai has provider default profile metadata" 'provider_default_profile\(\)' "$AI"
 grep_ok "ai has provider prepare" 'provider_prepare\(\)' "$AI"
 grep_ok "ai has provider prompt sandbox runner" 'provider_run_manager_sandbox\(\)' "$AI"
+grep_ok "ai has provider prompt project runner" 'provider_run_manager_project\(\)' "$AI"
+grep_ok "ai has common provider command model" 'common_provider_cmd\(\)' "$AI"
+grep_ok "ai has provider native project runner" 'provider_native_project\(\)' "$AI"
 grep_ok "ai has native passthrough" 'provider_native_passthrough\(\)' "$AI"
 grep_ok "ai has native subcommand metadata" 'provider_native_subcommands\(\)' "$AI"
 grep_ok "ai has sandbox native subcommand metadata" 'provider_sandbox_native_subcommands\(\)' "$AI"
@@ -117,7 +131,7 @@ grep_ok "ai uses provider_exec_sandbox" 'provider_exec_sandbox "\$kind" "\$mgr" 
 grep_absent "ai has no old provider shim funcs" '\b(task_codex|task_gemini|task_hermes|chat_codex|chat_gemini|chat_hermes|plan_codex|plan_gemini|plan_hermes)\b' "$AI"
 grep_absent "ai has no old subcommand helpers" '\bis_(codex|gemini|hermes)_subcommand\b' "$AI"
 grep_absent "ai has no hardcoded kind:sub sandbox mapping" 'codex:run|gemini:run|hermes:run|kind:\$sub' "$AI"
-grep_absent "ai does not pass bash function to timeout" 'run_with_timeout provider_run_sandbox_env' "$AI"
+grep_absent "ai does not pass bash function to timeout" 'run_with_timeout provider_(run_sandbox_env|project_env)' "$AI"
 
 section "4. gm/cm/hm shared cwd policy"
 
@@ -183,7 +197,8 @@ done
 
 "$HOME/bin/gm" help 2>&1 | grep -q 'GM_THROTTLE_SEC=2' && ok "gm help mentions throttle" || fail "gm help mentions throttle"
 "$HOME/bin/cm" help 2>&1 | grep -q 'exec' && ok "cm help mentions exec" || fail "cm help mentions exec"
-"$HOME/bin/ai" help 2>&1 | grep -q 'automatically use the provider sandbox' && ok "ai help mentions sandbox auto cd" || fail "ai help mentions sandbox auto cd"
+"$HOME/bin/ai" help 2>&1 | grep -q 'Common command model' && ok "ai help mentions common command model" || fail "ai help mentions common command model"
+"$HOME/bin/ai" help 2>&1 | grep -q -- '--cwd DIR' && ok "ai help mentions cwd option" || fail "ai help mentions cwd option"
 
 section "9. Native smoke checks"
 
@@ -227,9 +242,9 @@ trace_check() {
   fi
 }
 
-trace_check "ai codex run"  "codex run"  'cd /data/data/com.termux/files/home/sb/codex/'
-trace_check "ai gemini run" "gemini run" 'cd /data/data/com.termux/files/home/sb/gemini/'
-trace_check "ai hermes run" "hermes run" 'cd /data/data/com.termux/files/home/sb/hermes/'
+trace_check "ai codex run --sandbox"  "codex run --sandbox"  'cd /data/data/com.termux/files/home/sb/codex/'
+trace_check "ai gemini run --sandbox" "gemini run --sandbox" 'cd /data/data/com.termux/files/home/sb/gemini/'
+trace_check "ai hermes run --sandbox" "hermes run --sandbox" 'cd /data/data/com.termux/files/home/sb/hermes/'
 
 section "11. Optional live model checks"
 

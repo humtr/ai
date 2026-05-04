@@ -35,52 +35,70 @@ usage() {
 ai = AI Manager
 
 Core modes:
-  ai ask "prompt"                    -> default provider no-tool chat with fallback
-  ai chat "prompt"                   -> same as ask
-  ai task "prompt"                   -> default provider tool-capable task with fallback
-  ai plan "prompt"                   -> default provider plan-only prompt with fallback
+  ai ask [provider] [options] "prompt"  -> no-tool chat
+  ai chat [provider] [options] "prompt" -> same as ask
+  ai task [provider] [options] "prompt" -> tool-capable task
+  ai plan [provider] [options] "prompt" -> plan-only prompt
+
+Common command model:
+  ai run [provider] [options] [-- native args...]
+  ai list [provider] [options]
+  ai resume [provider] [options] [session|latest] [prompt/native args...]
+  ai browse [provider] [options]
+
+Common options:
+  --provider codex|gemini|hermes
+  --profile NAME                     -> provider home/profile override
+  --home NAME                        -> alias for --profile
+  --cwd DIR, --cd DIR, -C DIR         -> project working directory
+  --sandbox, --sb                    -> use ~/sb/<provider>/<profile>
+
+Accounts:
+  Account selection is profile/home-bound. Use --profile/--home to select the
+  provider home that carries the desired credentials. If a provider exposes a
+  narrower account switch, pass it after -- to the native provider command.
 
 Provider-first forms:
-  ai codex ask "prompt"              -> cm chat \$AI_CODEX_PROFILE
-  ai gemini ask "prompt"             -> gm chat \$AI_GEMINI_PROFILE
-  ai hermes ask "prompt"             -> hm chat \$AI_HERMES_PROFILE
+  ai codex ask [options] "prompt"    -> cm chat \$AI_CODEX_PROFILE
+  ai gemini ask [options] "prompt"   -> gm chat \$AI_GEMINI_PROFILE
+  ai hermes ask [options] "prompt"   -> hm chat \$AI_HERMES_PROFILE
 
-  ai codex task "prompt"             -> cm task \$AI_CODEX_PROFILE
-  ai gemini task "prompt"            -> gm task \$AI_GEMINI_PROFILE
-  ai hermes task "prompt"            -> hm task \$AI_HERMES_PROFILE
+  ai codex task [options] "prompt"   -> cm task \$AI_CODEX_PROFILE
+  ai gemini task [options] "prompt"  -> gm task \$AI_GEMINI_PROFILE
+  ai hermes task [options] "prompt"  -> hm task \$AI_HERMES_PROFILE
 
-  ai codex plan "prompt"             -> cm plan \$AI_CODEX_PROFILE
-  ai gemini plan "prompt"            -> gm plan \$AI_GEMINI_PROFILE
-  ai hermes plan "prompt"            -> hm plan \$AI_HERMES_PROFILE
+  ai codex plan [options] "prompt"   -> cm plan \$AI_CODEX_PROFILE
+  ai gemini plan [options] "prompt"  -> gm plan \$AI_GEMINI_PROFILE
+  ai hermes plan [options] "prompt"  -> hm plan \$AI_HERMES_PROFILE
 
 Canonical provider forms:
-  ai ask codex "prompt"              -> cm chat \$AI_CODEX_PROFILE
-  ai ask gemini "prompt"             -> gm chat \$AI_GEMINI_PROFILE
-  ai ask hermes "prompt"             -> hm chat \$AI_HERMES_PROFILE
+  ai ask codex [options] "prompt"    -> cm chat \$AI_CODEX_PROFILE
+  ai ask gemini [options] "prompt"   -> gm chat \$AI_GEMINI_PROFILE
+  ai ask hermes [options] "prompt"   -> hm chat \$AI_HERMES_PROFILE
 
-  ai task codex "prompt"             -> cm task \$AI_CODEX_PROFILE
-  ai task gemini "prompt"            -> gm task \$AI_GEMINI_PROFILE
-  ai task hermes "prompt"            -> hm task \$AI_HERMES_PROFILE
+  ai task codex [options] "prompt"   -> cm task \$AI_CODEX_PROFILE
+  ai task gemini [options] "prompt"  -> gm task \$AI_GEMINI_PROFILE
+  ai task hermes [options] "prompt"  -> hm task \$AI_HERMES_PROFILE
 
-  ai plan codex "prompt"             -> cm plan \$AI_CODEX_PROFILE
-  ai plan gemini "prompt"            -> gm plan \$AI_GEMINI_PROFILE
-  ai plan hermes "prompt"            -> hm plan \$AI_HERMES_PROFILE
+  ai plan codex [options] "prompt"   -> cm plan \$AI_CODEX_PROFILE
+  ai plan gemini [options] "prompt"  -> gm plan \$AI_GEMINI_PROFILE
+  ai plan hermes [options] "prompt"  -> hm plan \$AI_HERMES_PROFILE
 
 Provider task shortcuts:
   ai codex "prompt"                  -> ai task codex "prompt"
   ai gemini "prompt"                 -> ai task gemini "prompt"
   ai hermes "prompt"                 -> ai task hermes "prompt"
 
-Native provider commands:
-  ai codex run [profile] [args...]    -> cd ~/sb/codex/<profile>;  cm run <profile>
-  ai gemini run [profile] [args...]   -> cd ~/sb/gemini/<profile>; gm run <profile>
-  ai hermes run [profile] [args...]   -> cd ~/sb/hermes/<profile>; hm run <profile>
+Provider-native passthroughs:
+  ai run codex [options] [-- args...] -> codex in the selected cwd/profile
+  ai run gemini [options] [-- args...] -> gemini in the selected cwd/profile
+  ai run hermes [options] [-- args...] -> hermes in the selected cwd/profile
 
-  ai codex raw [profile] -- <args...> -> sandbox profile + cm raw passthrough
-  ai gemini raw [profile] -- <args...>-> sandbox profile + gm raw passthrough
-  ai hermes raw [profile] -- <args...>-> sandbox profile + hm raw passthrough
+  ai codex raw [profile] -- <args...> -> legacy sandbox + cm raw passthrough
+  ai gemini raw [profile] -- <args...>-> legacy sandbox + gm raw passthrough
+  ai hermes raw [profile] -- <args...>-> legacy sandbox + hm raw passthrough
 
-  ai codex exec [profile] <args...>   -> sandbox profile + native codex exec passthrough
+  ai codex exec [profile] <args...>   -> legacy sandbox + native codex exec passthrough
 
 Manager routers:
   ai cm <args...>                     -> cm <args...>
@@ -121,7 +139,8 @@ Notes:
   ask/chat = no-tool answer mode.
   task     = tool-capable work mode.
   plan     = plan-only mode; should not perform writes or destructive work.
-  run/raw/exec through ai automatically use the provider sandbox directory.
+  Common run/task/list/resume commands use the current directory by default.
+  Add --cwd DIR for another project or --sandbox for the provider sandbox.
   Use quotes for JSON, code, shell symbols, $, *, >, |, ;, &, parentheses,
   command substitutions, backticks, braces, brackets, newlines, and leading dashes.
 USAGE
@@ -223,6 +242,84 @@ ai_workdir() {
   esac
 }
 
+expand_path_arg() {
+  local path="$1"
+
+  case "$path" in
+    "~")
+      echo "$HOME"
+      ;;
+    "~/"*)
+      echo "$HOME/${path#"~/"}"
+      ;;
+    /*)
+      echo "$path"
+      ;;
+    *)
+      echo "$(pwd -P 2>/dev/null || pwd)/$path"
+      ;;
+  esac
+}
+
+resolve_workdir() {
+  local input="$1"
+  local expanded
+
+  expanded="$(expand_path_arg "$input")"
+  [ -d "$expanded" ] || {
+    echo "ERROR: cwd does not exist: $input" >&2
+    return 2
+  }
+
+  (cd "$expanded" && pwd -P)
+}
+
+provider_profile_home() {
+  local kind="$1"
+  local profile="$2"
+
+  case "$kind" in
+    codex) echo "$HOME/.codex-homes/$profile" ;;
+    gemini) echo "$HOME/.gemini-homes/$profile" ;;
+    hermes) echo "$HOME/.hermes/profiles/$profile" ;;
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_project_env() {
+  local kind="$1"
+  shift
+
+  case "$kind" in
+    codex)
+      env \
+        CM_CWD_TTY_POLICY=cwd \
+        CM_CWD_NONTTY_POLICY=cwd \
+        "$@"
+      ;;
+    gemini)
+      env \
+        GEMINI_CLI_TRUST_WORKSPACE=true \
+        GM_CWD_TTY_POLICY=cwd \
+        GM_CWD_NONTTY_POLICY=cwd \
+        "$@"
+      ;;
+    hermes)
+      env \
+        HM_CWD_TTY_POLICY=cwd \
+        HM_CWD_NONTTY_POLICY=cwd \
+        "$@"
+      ;;
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+
 run_with_timeout() {
   local rc
 
@@ -276,6 +373,14 @@ provider_label() {
       return 2
       ;;
   esac
+}
+
+provider_order() {
+  if [ -n "${AI_FALLBACK_PROVIDERS:-}" ]; then
+    echo "$AI_FALLBACK_PROVIDERS"
+  else
+    echo "$AI_DEFAULT_PROVIDER"
+  fi
 }
 
 provider_prepare() {
@@ -412,50 +517,215 @@ provider_run_manager_sandbox() {
 }
 # <<< ai provider prompt sandbox runner >>>
 
-provider_mode_cmd() {
+provider_run_manager_project() {
   local kind="$1"
   local mode="$2"
-  shift 2
+  local profile="$3"
+  local workdir="$4"
+  shift 4
 
-  local profile label workdir prompt
+  local mgr
+  mgr="$(provider_mgr "$kind")" || return $?
+
+  case "$kind" in
+    codex)
+      (
+        cd "$workdir" &&
+        run_with_timeout env \
+          CM_CWD_TTY_POLICY=cwd \
+          CM_CWD_NONTTY_POLICY=cwd \
+          "$mgr" "$mode" "$profile" "$@"
+      )
+      ;;
+
+    gemini)
+      (
+        cd "$workdir" &&
+        run_with_timeout env \
+          GEMINI_CLI_TRUST_WORKSPACE=true \
+          GM_CWD_TTY_POLICY=cwd \
+          GM_CWD_NONTTY_POLICY=cwd \
+          "$mgr" "$mode" "$profile" "$@"
+      )
+      ;;
+
+    hermes)
+      (
+        cd "$workdir" &&
+        run_with_timeout env \
+          HM_CWD_TTY_POLICY=cwd \
+          HM_CWD_NONTTY_POLICY=cwd \
+          "$mgr" "$mode" "$profile" "$@"
+      )
+      ;;
+
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_common_context() {
+  local kind="$1"
+  local profile="$2"
+  local workdir="$3"
 
   provider_prepare "$kind" || return $?
 
-  profile="$(provider_default_profile "$kind")" || return $?
-  label="$(provider_label "$kind")" || return $?
-
-  [ "$#" -gt 0 ] || {
-    echo "Usage: ai $mode $label [profile] PROMPT" >&2
-    return 2
-  }
-
-  # Optional explicit profile.
-  # Critical: check $# before touching $1.
-  if [ "$#" -gt 0 ] && profile_exists "$kind" "$1"; then
-    profile="$1"
-    shift
-  fi
-
+  [ -n "$profile" ] || profile="$(provider_default_profile "$kind")" || return $?
   profile_exists "$kind" "$profile" || {
     profile_hint "$kind" "$profile"
     return 127
   }
 
+  [ -n "$workdir" ] || workdir="$(pwd -P 2>/dev/null || pwd)"
+  workdir="$(resolve_workdir "$workdir")" || return $?
+
+  AI_CONTEXT_KIND="$kind"
+  AI_CONTEXT_PROFILE="$profile"
+  AI_CONTEXT_WORKDIR="$workdir"
+}
+
+parse_common_options() {
+  local default_provider="${1:-}"
+  shift || true
+
+  AI_COMMON_PROVIDER=""
+  AI_COMMON_PROFILE=""
+  AI_COMMON_WORKDIR=""
+  AI_COMMON_SANDBOX="false"
+  AI_COMMON_SESSION=""
+  AI_COMMON_ARGS=()
+
+  : "$default_provider"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --provider)
+        [ -n "${2:-}" ] || { echo "ERROR: --provider requires a value" >&2; return 2; }
+        AI_COMMON_PROVIDER="$(provider_alias_kind "$2")" || {
+          echo "ERROR: unknown provider: $2" >&2
+          return 2
+        }
+        shift 2
+        ;;
+      --profile|--home)
+        [ -n "${2:-}" ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
+        AI_COMMON_PROFILE="$2"
+        shift 2
+        ;;
+      --cwd|--cd|-C)
+        [ -n "${2:-}" ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
+        AI_COMMON_WORKDIR="$2"
+        shift 2
+        ;;
+      --sandbox|--sb)
+        AI_COMMON_SANDBOX="true"
+        shift
+        ;;
+      --session)
+        [ -n "${2:-}" ] || { echo "ERROR: --session requires a value" >&2; return 2; }
+        AI_COMMON_SESSION="$2"
+        shift 2
+        ;;
+      --)
+        shift
+        AI_COMMON_ARGS=("$@")
+        return 0
+        ;;
+      *)
+        if [ -z "$AI_COMMON_PROVIDER" ] && provider_alias_kind "$1" >/dev/null 2>&1; then
+          AI_COMMON_PROVIDER="$(provider_alias_kind "$1")"
+          shift
+        else
+          AI_COMMON_ARGS=("$@")
+          return 0
+        fi
+        ;;
+    esac
+  done
+
+  return 0
+}
+
+provider_mode_parse_and_run() {
+  local kind="$1"
+  local mode="$2"
+  shift 2
+
+  local profile="" workdir="" use_sandbox="false" prompt
+
   [ "$#" -gt 0 ] || {
-    echo "Usage: ai $mode $label [profile] PROMPT" >&2
+    echo "Usage: ai $mode $kind [--profile NAME] [--cwd DIR|--sandbox] PROMPT" >&2
     return 2
   }
 
-  workdir="$(ai_workdir "$kind" "$profile")"
-  mkdir -p "$workdir"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --profile|--home)
+        [ -n "${2:-}" ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
+        profile="$2"
+        shift 2
+        ;;
+      --cwd|--cd|-C)
+        [ -n "${2:-}" ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
+        workdir="$2"
+        shift 2
+        ;;
+      --sandbox|--sb)
+        use_sandbox="true"
+        shift
+        ;;
+      --)
+        break
+        ;;
+      -*)
+        echo "ERROR: unknown ai common option for $mode: $1" >&2
+        echo "Use -- before native provider flags." >&2
+        return 2
+        ;;
+      *)
+        if [ -z "$profile" ] && profile_exists "$kind" "$1"; then
+          profile="$1"
+          shift
+        else
+          break
+        fi
+        ;;
+    esac
+  done
+
+  provider_common_context "$kind" "$profile" "${workdir:-}" || return $?
+  profile="$AI_CONTEXT_PROFILE"
+  workdir="$AI_CONTEXT_WORKDIR"
+
+  if [ "$use_sandbox" = "true" ]; then
+    workdir="$(ai_workdir "$kind" "$profile")"
+    mkdir -p "$workdir"
+    workdir="$(resolve_workdir "$workdir")" || return $?
+  fi
+
+  [ "$#" -gt 0 ] || {
+    echo "Usage: ai $mode $kind [--profile NAME] [--cwd DIR|--sandbox] PROMPT" >&2
+    return 2
+  }
 
   if [ "${1:-}" = "-" ] || [ "${1:-}" = "--" ]; then
-    provider_run_manager_sandbox "$kind" "$mode" "$profile" "$workdir" "$@"
+    provider_run_manager_project "$kind" "$mode" "$profile" "$workdir" "$@"
     return $?
   fi
 
   prompt="$(join_prompt "$@")"
-  provider_run_manager_sandbox "$kind" "$mode" "$profile" "$workdir" "$prompt"
+  provider_run_manager_project "$kind" "$mode" "$profile" "$workdir" "$prompt"
+}
+
+provider_mode_cmd() {
+  local kind="$1"
+  local mode="$2"
+  shift 2
+
+  provider_mode_parse_and_run "$kind" "$mode" "$@"
 }
 
 
@@ -552,50 +822,36 @@ task_default()  { default_mode task "$@"; }
 chat_default() { default_mode chat "$@"; }
 plan_default() { default_mode plan "$@"; }
 
-task_cmd() {
+mode_cmd() {
+  local mode="$1"
+  shift
+
   [ "$#" -gt 0 ] || {
-    echo "Usage: ai task [codex|gemini|hermes] [profile] PROMPT" >&2
+    echo "Usage: ai $mode [codex|gemini|hermes] [--profile NAME] [--cwd DIR|--sandbox] PROMPT" >&2
     return 2
   }
 
-  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
-    local provider="$1"
+  local provider=""
+
+  if [ "${1:-}" = "--provider" ]; then
+    [ -n "${2:-}" ] || { echo "ERROR: --provider requires a value" >&2; return 2; }
+    provider="$2"
+    shift 2
+  elif provider_alias_kind "${1:-}" >/dev/null 2>&1; then
+    provider="$1"
     shift
-    task_provider "$provider" "$@"
+  fi
+
+  if [ -n "$provider" ]; then
+    provider_mode_dispatch "$mode" "$provider" "$@"
   else
-    task_default "$@"
+    default_mode "$mode" "$@"
   fi
 }
 
-chat_cmd() {
-  [ "$#" -gt 0 ] || {
-    echo "Usage: ai ask [codex|gemini|hermes] [profile] PROMPT" >&2
-    return 2
-  }
-
-  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
-    local provider="$1"
-    shift
-    chat_provider "$provider" "$@"
-  else
-    chat_default "$@"
-  fi
-}
-
-plan_cmd() {
-  [ "$#" -gt 0 ] || {
-    echo "Usage: ai plan [codex|gemini|hermes] [profile] PROMPT" >&2
-    return 2
-  }
-
-  if provider_alias_kind "${1:-}" >/dev/null 2>&1; then
-    local provider="$1"
-    shift
-    plan_provider "$provider" "$@"
-  else
-    plan_default "$@"
-  fi
-}
+task_cmd() { mode_cmd task "$@"; }
+chat_cmd() { mode_cmd chat "$@"; }
+plan_cmd() { mode_cmd plan "$@"; }
 
 provider_native_subcommands() {
   case "${1:-}" in
@@ -716,6 +972,184 @@ provider_native_passthrough() {
 }
 # <<< ai provider native passthrough >>>
 
+provider_native_project() {
+  local kind="$1"
+  local profile="$2"
+  local workdir="$3"
+  shift 3
+
+  case "$kind" in
+    codex)
+      (
+        cd "$workdir" &&
+        CODEX_HOME="$(provider_profile_home codex "$profile")" \
+          codex -C "$workdir" "$@"
+      )
+      ;;
+    gemini)
+      (
+        cd "$workdir" &&
+        provider_project_env gemini gm raw "$profile" -- "$@"
+      )
+      ;;
+    hermes)
+      (
+        cd "$workdir" &&
+        provider_project_env hermes hm raw "$profile" -- "$@"
+      )
+      ;;
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_list_sessions() {
+  local kind="$1"
+  local profile="$2"
+  local workdir="$3"
+
+  case "$kind" in
+    codex)
+      local home sessions
+      home="$(provider_profile_home codex "$profile")"
+      sessions="$home/sessions"
+      echo "== Codex sessions =="
+      echo "Profile: $profile"
+      echo "CWD:     $workdir"
+      echo "Home:    $home"
+      echo
+      if [ ! -d "$sessions" ]; then
+        echo "No sessions directory: $sessions"
+        return 0
+      fi
+      find "$sessions" -type f -name '*.jsonl' -printf '%T@ %TY-%Tm-%Td %TH:%TM %p\n' 2>/dev/null |
+        sort -nr |
+        sed -E 's/^[0-9.]+ //; s#^.*/rollout-[0-9TZ:-]+-##; s#\.jsonl$##' |
+        sed -n '1,40p'
+      ;;
+    gemini)
+      provider_native_project gemini "$profile" "$workdir" --list-sessions
+      ;;
+    hermes)
+      provider_native_project hermes "$profile" "$workdir" sessions list --limit 40
+      ;;
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_resume_session() {
+  local kind="$1"
+  local profile="$2"
+  local workdir="$3"
+  local session="$4"
+  shift 4
+
+  case "$kind" in
+    codex)
+      if [ -z "$session" ] && [ -t 0 ] && [ -t 1 ]; then
+        provider_native_project codex "$profile" "$workdir" resume "$@"
+      elif [ -z "$session" ] || [ "$session" = "latest" ] || [ "$session" = "last" ]; then
+        provider_native_project codex "$profile" "$workdir" resume --last "$@"
+      else
+        provider_native_project codex "$profile" "$workdir" resume "$session" "$@"
+      fi
+      ;;
+    gemini)
+      [ -n "$session" ] || session="latest"
+      provider_native_project gemini "$profile" "$workdir" --resume "$session" "$@"
+      ;;
+    hermes)
+      if [ -z "$session" ] || [ "$session" = "latest" ] || [ "$session" = "last" ]; then
+        provider_native_project hermes "$profile" "$workdir" --continue "$@"
+      else
+        provider_native_project hermes "$profile" "$workdir" --resume "$session" "$@"
+      fi
+      ;;
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+
+provider_browse_sessions() {
+  local kind="$1"
+  local profile="$2"
+  local workdir="$3"
+
+  case "$kind" in
+    codex)
+      provider_native_project codex "$profile" "$workdir" resume
+      ;;
+    gemini)
+      echo "Gemini has no native interactive session picker in this wrapper." >&2
+      echo "Use: ai list gemini --cwd DIR" >&2
+      echo "Then: ai resume gemini --cwd DIR <index|latest>" >&2
+      return 2
+      ;;
+    hermes)
+      provider_native_project hermes "$profile" "$workdir" sessions browse
+      ;;
+    *)
+      echo "ERROR: unknown provider kind: $kind" >&2
+      return 2
+      ;;
+  esac
+}
+
+common_provider_cmd() {
+  local action="$1"
+  shift
+
+  parse_common_options "$AI_DEFAULT_PROVIDER" "$@" || return $?
+
+  local kind profile workdir session
+  kind="${AI_COMMON_PROVIDER:-}"
+  [ -n "$kind" ] || kind="$(provider_alias_kind "$AI_DEFAULT_PROVIDER")" || return $?
+
+  profile="$AI_COMMON_PROFILE"
+  workdir="$AI_COMMON_WORKDIR"
+
+  provider_common_context "$kind" "$profile" "${workdir:-}" || return $?
+  profile="$AI_CONTEXT_PROFILE"
+  workdir="$AI_CONTEXT_WORKDIR"
+
+  if [ "$AI_COMMON_SANDBOX" = "true" ]; then
+    workdir="$(ai_workdir "$kind" "$profile")"
+    mkdir -p "$workdir"
+    workdir="$(resolve_workdir "$workdir")" || return $?
+  fi
+
+  case "$action" in
+    run)
+      provider_native_project "$kind" "$profile" "$workdir" "${AI_COMMON_ARGS[@]}"
+      ;;
+    list)
+      provider_list_sessions "$kind" "$profile" "$workdir"
+      ;;
+    resume)
+      session="$AI_COMMON_SESSION"
+      if [ -z "$session" ] && [ "${#AI_COMMON_ARGS[@]}" -gt 0 ]; then
+        session="${AI_COMMON_ARGS[0]}"
+        AI_COMMON_ARGS=("${AI_COMMON_ARGS[@]:1}")
+      fi
+      provider_resume_session "$kind" "$profile" "$workdir" "$session" "${AI_COMMON_ARGS[@]}"
+      ;;
+    browse|select)
+      provider_browse_sessions "$kind" "$profile" "$workdir"
+      ;;
+    *)
+      echo "ERROR: unknown common action: $action" >&2
+      return 2
+      ;;
+  esac
+}
+
 provider_or_router() {
   local provider="$1"
   shift
@@ -740,6 +1174,26 @@ provider_or_router() {
   # Provider-first normalized forms.
   # These MUST run before native manager passthrough.
   case "$first" in
+    run)
+      shift
+      common_provider_cmd run --provider "$kind" "$@"
+      rc=$?
+      ;;
+    list|sessions)
+      shift
+      common_provider_cmd list --provider "$kind" "$@"
+      rc=$?
+      ;;
+    resume)
+      shift
+      common_provider_cmd resume --provider "$kind" "$@"
+      rc=$?
+      ;;
+    browse|select)
+      shift
+      common_provider_cmd browse --provider "$kind" "$@"
+      rc=$?
+      ;;
     ask|chat)
       mode="chat"
       shift
@@ -761,6 +1215,7 @@ provider_or_router() {
     *)
       if provider_is_native_subcommand "$kind" "$first"; then
         provider_native_passthrough "$kind" "$mgr" "$default_profile" "$@"
+        return $?
       fi
 
       # Historical provider shortcut:
@@ -771,7 +1226,7 @@ provider_or_router() {
       ;;
   esac
 
-  if [ "$rc" -ne 0 ] && [ "${AI_EXPLICIT_FALLBACK:-false}" = "true" ]; then
+  if [ "$rc" -ne 0 ] && [ -n "$mode" ] && [ "${AI_EXPLICIT_FALLBACK:-false}" = "true" ]; then
     echo "[ai] explicit provider failed; fallback enabled" >&2
     default_mode "$mode" "$@"
     return $?
@@ -1031,6 +1486,10 @@ case "$cmd" in
   ask|chat) chat_cmd "$@" ;;
   task) task_cmd "$@" ;;
   plan) plan_cmd "$@" ;;
+  run) common_provider_cmd run "$@" ;;
+  list|sessions) common_provider_cmd list "$@" ;;
+  resume) common_provider_cmd resume "$@" ;;
+  browse|select) common_provider_cmd browse "$@" ;;
 
   up|start) up_cmd ;;
   down|stop) down_cmd ;;
