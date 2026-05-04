@@ -21,7 +21,15 @@ ai_mgr_maybe_cd() {
     *) return 0 ;;
   esac
 
-  local target="$sb_root/$profile"
+  local target
+  case "$sb_root" in
+    */sb/codex|*/sb/gemini|*/sb/hermes)
+      target="$sb_root"
+      ;;
+    *)
+      target="$sb_root/$profile"
+      ;;
+  esac
   local current
   current="$(pwd -P 2>/dev/null || pwd)"
 

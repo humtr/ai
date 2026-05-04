@@ -167,7 +167,7 @@ def fetch_url(url):
 
 
 def ask_hermes(profile, prompt):
-    workdir = HOME / "sb" / "hermes" / profile
+    workdir = HOME / "sb" / "hermes"
     workdir.mkdir(parents=True, exist_ok=True)
 
     proc = subprocess.run(

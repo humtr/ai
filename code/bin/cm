@@ -100,7 +100,7 @@ Native passthrough:
   cm task main -- --json "Tool-capable task"
 
 CWD policy:
-  cm sb <command> <profile> ...                 # force ~/sb/codex/<profile>
+  cm sb <command> <profile> ...                 # legacy: force ~/sb/codex
   cm sandbox <command> <profile> ...            # same as sb
   CM_CWD_TTY_POLICY=ask|cwd|sandbox
   CM_CWD_NONTTY_POLICY=cwd|sandbox

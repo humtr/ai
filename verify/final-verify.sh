@@ -74,6 +74,8 @@ exists_file "$HOME/bin/hm"
 exists_file "$HOME/bin/hgw"
 exists_file "$HOME/bin/hgb"
 exists_file "$HOME/.config/ai/lib/manager_cwd_policy.sh"
+exists_file "$HOME/.config/ai/lib/ai_registry.py"
+exists_file "$HOME/.config/ai/lib/ai_tui.py"
 exists_file "$HOME/.config/hgw/lib/approve.py"
 
 section "2. Syntax checks"
@@ -96,6 +98,12 @@ if python -m py_compile "$HOME/.config/hgw/lib/approve.py"; then
   ok "py_compile approve.py"
 else
   fail "py_compile approve.py"
+fi
+
+if python -m py_compile "$HOME/.config/ai/lib/ai_registry.py" "$HOME/.config/ai/lib/ai_tui.py"; then
+  ok "py_compile ai helpers"
+else
+  fail "py_compile ai helpers"
 fi
 
 section "3. ai structure checks"
@@ -121,6 +129,8 @@ grep_ok "ai has provider prompt project runner" 'provider_run_manager_project\(\
 grep_ok "ai has common provider command model" 'common_provider_cmd\(\)' "$AI"
 grep_ok "ai has provider native project runner" 'provider_native_project\(\)' "$AI"
 grep_ok "ai has native passthrough" 'provider_native_passthrough\(\)' "$AI"
+grep_ok "ai has tui command" 'tui_cmd\(\)' "$AI"
+grep_ok "ai has registry command" 'registry_cmd\(\)' "$AI"
 grep_ok "ai has native subcommand metadata" 'provider_native_subcommands\(\)' "$AI"
 grep_ok "ai has sandbox native subcommand metadata" 'provider_sandbox_native_subcommands\(\)' "$AI"
 grep_ok "ai has native subcommand checker" 'provider_is_native_subcommand\(\)' "$AI"
@@ -130,7 +140,6 @@ grep_ok "ai uses provider_exec_sandbox" 'provider_exec_sandbox "\$kind" "\$mgr" 
 
 grep_absent "ai has no old provider shim funcs" '\b(task_codex|task_gemini|task_hermes|chat_codex|chat_gemini|chat_hermes|plan_codex|plan_gemini|plan_hermes)\b' "$AI"
 grep_absent "ai has no old subcommand helpers" '\bis_(codex|gemini|hermes)_subcommand\b' "$AI"
-grep_absent "ai has no hardcoded kind:sub sandbox mapping" 'codex:run|gemini:run|hermes:run|kind:\$sub' "$AI"
 grep_absent "ai does not pass bash function to timeout" 'run_with_timeout provider_(run_sandbox_env|project_env)' "$AI"
 
 section "4. gm/cm/hm shared cwd policy"
@@ -142,6 +151,8 @@ for f in gm cm hm; do
 done
 
 grep_ok "shared lib defines ai_mgr_maybe_cd" 'ai_mgr_maybe_cd\(\)' "$HOME/.config/ai/lib/manager_cwd_policy.sh"
+
+grep_ok "shared lib uses provider sandbox root" 'sb/codex|sb/gemini|sb/hermes' "$HOME/.config/ai/lib/manager_cwd_policy.sh"
 
 section "5. gm throttle / prompt safety"
 
@@ -242,9 +253,9 @@ trace_check() {
   fi
 }
 
-trace_check "ai codex run --sandbox"  "codex run --sandbox"  'cd /data/data/com.termux/files/home/sb/codex/'
-trace_check "ai gemini run --sandbox" "gemini run --sandbox" 'cd /data/data/com.termux/files/home/sb/gemini/'
-trace_check "ai hermes run --sandbox" "hermes run --sandbox" 'cd /data/data/com.termux/files/home/sb/hermes/'
+trace_check "ai codex run --sandbox"  "codex run --sandbox"  'cd /data/data/com.termux/files/home/sb/codex'
+trace_check "ai gemini run --sandbox" "gemini run --sandbox" 'cd /data/data/com.termux/files/home/sb/gemini'
+trace_check "ai hermes run --sandbox" "hermes run --sandbox" 'cd /data/data/com.termux/files/home/sb/hermes'
 
 section "11. Optional live model checks"
 

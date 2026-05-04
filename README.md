@@ -24,9 +24,12 @@ Local Termux `ai` command for routing Codex, Gemini, Hermes, and bridge workflow
 
 ## Common wrapper model
 
-Use `ai` first when you do not want to remember the native provider syntax:
+Use `ai` first when you do not want to remember the native provider syntax.
+Running `ai` with no arguments opens the TUI launcher/editor when attached to a
+terminal.
 
 ```sh
+ai
 ai run gemini --profile main --cwd ~/prj/photos
 ai task gemini --profile main --cwd ~/prj/photos "inspect this project"
 ai list codex --profile main --cwd ~/prj/photos
@@ -37,17 +40,35 @@ ai browse hermes --profile main --cwd ~/prj/photos
 Common options:
 
 - `--provider codex|gemini|hermes`
-- `--profile NAME` or `--home NAME`
+- `--account NAME`
+- `--profile NAME` or `--home NAME` as legacy aliases for `--account`
 - `--cwd DIR`, `--cd DIR`, or `-C DIR`
 - `--sandbox` or `--sb`
 
-By default the common `run`, `task`, `list`, and `resume` commands use the
-current directory as the project working directory. Use `--cwd ~/prj/photos` for
-a specific project, or `--sandbox` to force `~/sb/<provider>/<profile>`.
+By default the common `run`, `task`, `list`, and `resume` commands use the current
+directory as the project working directory. Use `--cwd ~/work/main` or
+`--cwd ~/prj/photos` for a specific work directory, or `--sandbox` to force the
+provider sandbox under `~/sb/<provider>`.
 
-Account selection is profile/home-bound. Choose the provider home that carries
-the desired credentials with `--profile`/`--home`; pass narrower provider-native
-account switches after `--` only when the provider supports them.
+`default`/`native` means the provider's original install environment:
+
+- Codex: `~/.codex` with `CODEX_HOME` unset
+- Gemini: real `~/.gemini` with `HOME` unchanged
+- Hermes: `~/.hermes` native/current profile state
+
+Named accounts are defined in `~/.ai/accounts.json` and map to provider-specific
+profiles only when needed. Work directories are defined separately in
+`~/.ai/workdirs.json`; accounts and work directories are not assumed to be 1:1.
+
+Registry helpers:
+
+```sh
+ai accounts list
+ai accounts add sub1-humetro --alias sub1 --map codex:sub1-humetro
+ai workdirs add main ~/work/main --create --purpose "daily work"
+ai profiles
+ai gateways
+```
 
 ## Important paths
 
@@ -55,6 +76,8 @@ Canonical `ai` paths:
 
 - Source: `~/prj/ai/bin/ai`
 - Live: `~/bin/ai`
+- TUI/helper source: `~/prj/ai/code/ai-lib`
+- TUI/helper live: `~/.config/ai/lib`
 
 The source and live `ai` files must stay byte-identical. The common verifier
 fails when `~/prj/ai/bin/ai` and `~/bin/ai` drift.
@@ -71,6 +94,8 @@ Live binaries:
 Shared libs:
 
 - `~/.config/ai/lib/manager_cwd_policy.sh`
+- `~/.config/ai/lib/ai_registry.py`
+- `~/.config/ai/lib/ai_tui.py`
 - `~/.config/hgw/lib/approve.py`
 
 Verified snapshots:

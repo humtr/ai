@@ -157,7 +157,7 @@ Native passthrough:
   gm task tg -- -p "Return JSON only" --output-format json
 
 CWD policy:
-  gm sb <command> <profile> ...                 # force ~/sb/gemini/<profile>
+  gm sb <command> <profile> ...                 # legacy: force ~/sb/gemini
   gm sandbox <command> <profile> ...            # same as sb
   GM_CWD_TTY_POLICY=ask|cwd|sandbox
   GM_CWD_NONTTY_POLICY=cwd|sandbox
@@ -226,8 +226,11 @@ profile_from_cwd() {
   cur="$(pwd -P 2>/dev/null || pwd)"
 
   case "$cur" in
-    "$HOME/sb/gemini"/*)
-      rel="${cur#"$HOME/sb/gemini"/}"
+    "$HOME/sb/gemini")
+      return 1
+      ;;
+    "$HOME/sb"/*)
+      rel="${cur#"$HOME/sb"/}"
       prof="${rel%%/*}"
 
       if [ -n "$prof" ] && [ -d "$(profile_path "$prof")" ]; then
@@ -248,8 +251,8 @@ parse_profile_first() {
     return 0
   fi
 
-  # If invoked from a profile sandbox, use that profile:
-  #   cd ~/sb/gemini/tg
+  # If invoked from a flat profile sandbox, use that profile:
+  #   cd ~/sb/tg
   #   gm task "prompt"  -> tg
   local cwd_profile
   cwd_profile="$(profile_from_cwd 2>/dev/null || true)"

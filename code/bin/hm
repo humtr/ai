@@ -87,7 +87,7 @@ Native passthrough:
   hm task main -- --ignore-rules -z "Reply with only: OK"
 
 CWD policy:
-  hm sb <command> <profile> ...                 # force ~/sb/hermes/<profile>
+  hm sb <command> <profile> ...                 # legacy: force ~/sb/hermes
   hm sandbox <command> <profile> ...            # same as sb
   HM_CWD_TTY_POLICY=ask|cwd|sandbox
   HM_CWD_NONTTY_POLICY=cwd|sandbox

@@ -118,9 +118,9 @@ run_ai() {
     PATH="$BIN_FIXTURE:$PATH" \
     AI_TRACE="$TRACE" \
     AI_DEFAULT_PROVIDER=gemini \
-    AI_CODEX_PROFILE=main \
-    AI_GEMINI_PROFILE=main \
-    AI_HERMES_PROFILE=main \
+    AI_CODEX_PROFILE=default \
+    AI_GEMINI_PROFILE=default \
+    AI_HERMES_PROFILE=default \
     bash "$AI" "$@"
 }
 
@@ -130,9 +130,9 @@ run_ai_expect_fail() {
     PATH="$BIN_FIXTURE:$PATH" \
     AI_TRACE="$TRACE" \
     AI_DEFAULT_PROVIDER=gemini \
-    AI_CODEX_PROFILE=main \
-    AI_GEMINI_PROFILE=main \
-    AI_HERMES_PROFILE=main \
+    AI_CODEX_PROFILE=default \
+    AI_GEMINI_PROFILE=default \
+    AI_HERMES_PROFILE=default \
     bash "$AI" "$@"
 }
 
@@ -144,9 +144,9 @@ run_ai_missing_codex_profile() {
     PATH="$BIN_FIXTURE:$PATH" \
     AI_TRACE="$TRACE" \
     AI_DEFAULT_PROVIDER=gemini \
-    AI_CODEX_PROFILE=main \
-    AI_GEMINI_PROFILE=main \
-    AI_HERMES_PROFILE=main \
+    AI_CODEX_PROFILE=default \
+    AI_GEMINI_PROFILE=default \
+    AI_HERMES_PROFILE=default \
     bash "$AI" "$@"
   local rc=$?
   rm -f "$HOME_FIXTURE/.config/ai/config.env"
@@ -155,15 +155,19 @@ run_ai_missing_codex_profile() {
 
 mkdir -p \
   "$BIN_FIXTURE" \
+  "$HOME_FIXTURE/.codex/sessions/2026/05/04" \
+  "$HOME_FIXTURE/.gemini" \
+  "$HOME_FIXTURE/.hermes" \
   "$HOME_FIXTURE/.codex-homes/main/sessions/2026/05/04" \
   "$HOME_FIXTURE/.gemini-homes/main" \
   "$HOME_FIXTURE/.hermes/profiles/main" \
   "$HOME_FIXTURE/prj/photos" \
-  "$HOME_FIXTURE/sb/codex/main" \
-  "$HOME_FIXTURE/sb/gemini/main" \
-  "$HOME_FIXTURE/sb/hermes/main"
+  "$HOME_FIXTURE/sb/codex" \
+  "$HOME_FIXTURE/sb/gemini" \
+  "$HOME_FIXTURE/sb/hermes"
 
 touch "$HOME_FIXTURE/.codex-homes/main/sessions/2026/05/04/rollout-2026-05-04T00-00-00-abc123.jsonl"
+touch "$HOME_FIXTURE/.codex/sessions/2026/05/04/rollout-2026-05-04T00-00-00-native999.jsonl"
 
 for cmd in cm gm hm codex gemini hermes hgw hgb; do
   write_stub "$cmd"
@@ -186,7 +190,20 @@ assert_files_equal "repo bin/ai matches live ~/bin/ai" "$AI" "$LIVE_AI"
 HELP="$(HOME="$HOME_FIXTURE" PATH="$BIN_FIXTURE:$PATH" bash "$AI" help)"
 assert_output_contains "help documents common command model" "Common command model:" "$HELP"
 assert_output_contains "help documents cwd option" "--cwd DIR, --cd DIR, -C DIR" "$HELP"
-assert_output_contains "help documents account boundary" "Account selection is profile/home-bound" "$HELP"
+assert_output_contains "help documents native default account" "default/native uses the provider's original install environment" "$HELP"
+
+run_ai run gemini --account default --cwd '~/prj/photos' -- --version
+assert_contains "gemini default uses native binary" "cmd=gemini" "$TRACE"
+assert_contains "gemini default keeps project cwd" "pwd=$HOME_FIXTURE/prj/photos" "$TRACE"
+assert_contains "gemini default passes native args" "args=<--version>" "$TRACE"
+
+run_ai run codex --account default --cwd '~/prj/photos' -- --version
+assert_contains "codex default calls native codex with -C" "args=<-C><$HOME_FIXTURE/prj/photos><--version>" "$TRACE"
+assert_contains "codex default leaves CODEX_HOME unset" "CODEX_HOME=" "$TRACE"
+
+run_ai run hermes --account default --cwd '~/prj/photos' -- --version
+assert_contains "hermes default uses native binary" "cmd=hermes" "$TRACE"
+assert_contains "hermes default keeps project cwd" "pwd=$HOME_FIXTURE/prj/photos" "$TRACE"
 
 run_ai task gemini --profile main --cwd '~/prj/photos' "hello"
 assert_contains "gemini task uses project cwd" "pwd=$HOME_FIXTURE/prj/photos" "$TRACE"
@@ -198,7 +215,7 @@ assert_contains "provider option and home alias work" "args=<task><main><hello>"
 assert_contains "short cwd option works" "pwd=$HOME_FIXTURE/prj/photos" "$TRACE"
 
 run_ai task gemini --profile main --sandbox "hello"
-assert_contains "gemini task sandbox override" "pwd=$HOME_FIXTURE/sb/gemini/main" "$TRACE"
+assert_contains "gemini task sandbox override" "pwd=$HOME_FIXTURE/sb/gemini" "$TRACE"
 
 run_ai run gemini --profile main --cwd '~/prj/photos' -- --version
 assert_contains "gemini run translates to raw passthrough" "args=<raw><main><--><--version>" "$TRACE"
