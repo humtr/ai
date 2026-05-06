@@ -118,9 +118,6 @@ run_ai() {
     PATH="$BIN_FIXTURE:$PATH" \
     AI_TRACE="$TRACE" \
     AI_DEFAULT_PROVIDER=gemini \
-    AI_CODEX_PROFILE=default \
-    AI_GEMINI_PROFILE=default \
-    AI_HERMES_PROFILE=default \
     bash "$AI" "$@"
 }
 
@@ -130,27 +127,16 @@ run_ai_expect_fail() {
     PATH="$BIN_FIXTURE:$PATH" \
     AI_TRACE="$TRACE" \
     AI_DEFAULT_PROVIDER=gemini \
-    AI_CODEX_PROFILE=default \
-    AI_GEMINI_PROFILE=default \
-    AI_HERMES_PROFILE=default \
     bash "$AI" "$@"
 }
 
-run_ai_missing_codex_profile() {
+run_ai_explicit_missing_codex_profile() {
   : > "$TRACE"
-  mkdir -p "$HOME_FIXTURE/.config/ai"
-  printf 'AI_CODEX_PROFILE="missing"\n' > "$HOME_FIXTURE/.config/ai/config.env"
   HOME="$HOME_FIXTURE" \
     PATH="$BIN_FIXTURE:$PATH" \
     AI_TRACE="$TRACE" \
     AI_DEFAULT_PROVIDER=gemini \
-    AI_CODEX_PROFILE=default \
-    AI_GEMINI_PROFILE=default \
-    AI_HERMES_PROFILE=default \
     bash "$AI" "$@"
-  local rc=$?
-  rm -f "$HOME_FIXTURE/.config/ai/config.env"
-  return "$rc"
 }
 
 mkdir -p \
@@ -158,15 +144,15 @@ mkdir -p \
   "$HOME_FIXTURE/.codex/sessions/2026/05/04" \
   "$HOME_FIXTURE/.gemini" \
   "$HOME_FIXTURE/.hermes" \
-  "$HOME_FIXTURE/.codex-homes/main/sessions/2026/05/04" \
-  "$HOME_FIXTURE/.gemini-homes/main" \
+  "$HOME_FIXTURE/.codex-profiles/main/sessions/2026/05/04" \
+  "$HOME_FIXTURE/.gemini-profiles/main" \
   "$HOME_FIXTURE/.hermes/profiles/main" \
   "$HOME_FIXTURE/prj/photos" \
   "$HOME_FIXTURE/sb/codex" \
   "$HOME_FIXTURE/sb/gemini" \
   "$HOME_FIXTURE/sb/hermes"
 
-touch "$HOME_FIXTURE/.codex-homes/main/sessions/2026/05/04/rollout-2026-05-04T00-00-00-abc123.jsonl"
+touch "$HOME_FIXTURE/.codex-profiles/main/sessions/2026/05/04/rollout-2026-05-04T00-00-00-abc123.jsonl"
 touch "$HOME_FIXTURE/.codex/sessions/2026/05/04/rollout-2026-05-04T00-00-00-native999.jsonl"
 
 for cmd in cm gm hm codex gemini hermes hgw hgb; do
@@ -190,18 +176,19 @@ assert_files_equal "repo bin/ai matches live ~/bin/ai" "$AI" "$LIVE_AI"
 HELP="$(HOME="$HOME_FIXTURE" PATH="$BIN_FIXTURE:$PATH" bash "$AI" help)"
 assert_output_contains "help documents common command model" "Common command model:" "$HELP"
 assert_output_contains "help documents cwd option" "--cwd DIR, --cd DIR, -C DIR" "$HELP"
-assert_output_contains "help documents native default account" "default/native uses the provider's original install environment" "$HELP"
+assert_output_contains "help documents no-profile official home" "No --profile uses the provider's official default home" "$HELP"
+assert_output_contains "help documents reserved profile names" "Profile names \"default\" and \"native\" are reserved and rejected." "$HELP"
 
-run_ai run gemini --account default --cwd '~/prj/photos' -- --version
+run_ai run gemini --cwd '~/prj/photos' -- --version
 assert_contains "gemini default uses native binary" "cmd=gemini" "$TRACE"
 assert_contains "gemini default keeps project cwd" "pwd=$HOME_FIXTURE/prj/photos" "$TRACE"
 assert_contains "gemini default passes native args" "args=<--version>" "$TRACE"
 
-run_ai run codex --account default --cwd '~/prj/photos' -- --version
+run_ai run codex --cwd '~/prj/photos' -- --version
 assert_contains "codex default calls native codex with -C" "args=<-C><$HOME_FIXTURE/prj/photos><--version>" "$TRACE"
 assert_contains "codex default leaves CODEX_HOME unset" "CODEX_HOME=" "$TRACE"
 
-run_ai run hermes --account default --cwd '~/prj/photos' -- --version
+run_ai run hermes --cwd '~/prj/photos' -- --version
 assert_contains "hermes default uses native binary" "cmd=hermes" "$TRACE"
 assert_contains "hermes default keeps project cwd" "pwd=$HOME_FIXTURE/prj/photos" "$TRACE"
 
@@ -210,9 +197,27 @@ assert_contains "gemini task uses project cwd" "pwd=$HOME_FIXTURE/prj/photos" "$
 assert_contains "gemini task translates to manager task" "args=<task><main><hello>" "$TRACE"
 assert_contains "gemini task forces cwd policy" "GM_CWD_NONTTY_POLICY=cwd" "$TRACE"
 
-run_ai task --provider gemini --home main -C '~/prj/photos' "hello"
-assert_contains "provider option and home alias work" "args=<task><main><hello>" "$TRACE"
+run_ai task --provider gemini --profile main -C '~/prj/photos' "hello"
+assert_contains "provider option and profile work" "args=<task><main><hello>" "$TRACE"
 assert_contains "short cwd option works" "pwd=$HOME_FIXTURE/prj/photos" "$TRACE"
+
+if run_ai_expect_fail run gemini --account default --cwd '~/prj/photos' -- --version > "$TMP_BASE/account.out" 2>&1; then
+  fail "removed account option fails"
+else
+  assert_contains "removed account option reports profile replacement" "--account was removed; use --profile NAME" "$TMP_BASE/account.out"
+fi
+
+if run_ai_expect_fail run gemini --home main --cwd '~/prj/photos' -- --version > "$TMP_BASE/home.out" 2>&1; then
+  fail "removed home option fails"
+else
+  assert_contains "removed home option reports profile replacement" "--home was removed; use --profile NAME" "$TMP_BASE/home.out"
+fi
+
+if run_ai_expect_fail run gemini --profile default --cwd '~/prj/photos' -- --version > "$TMP_BASE/default-profile.out" 2>&1; then
+  fail "reserved default profile fails"
+else
+  assert_contains "reserved default profile rejected" "invalid or reserved profile name: default" "$TMP_BASE/default-profile.out"
+fi
 
 run_ai task gemini --profile main --sandbox "hello"
 assert_contains "gemini task sandbox override" "pwd=$HOME_FIXTURE/sb/gemini" "$TRACE"
@@ -232,10 +237,10 @@ assert_contains "common run accepts --provider" "args=<raw><main><--><--version>
 
 run_ai run codex --profile main --cwd '~/prj/photos' -- --version
 assert_contains "codex run calls native codex with -C" "args=<-C><$HOME_FIXTURE/prj/photos><--version>" "$TRACE"
-assert_contains "codex run sets CODEX_HOME" "CODEX_HOME=$HOME_FIXTURE/.codex-homes/main" "$TRACE"
+assert_contains "codex run sets CODEX_HOME" "CODEX_HOME=$HOME_FIXTURE/.codex-profiles/main" "$TRACE"
 
-if run_ai_missing_codex_profile codex raw -- --version > "$TMP_BASE/missing.out" 2>&1; then
-  fail "codex raw reports missing default profile"
+if run_ai_explicit_missing_codex_profile run codex --profile missing -- --version > "$TMP_BASE/missing.out" 2>&1; then
+  fail "codex run reports missing explicit profile"
 else
   assert_contains "codex raw missing profile reports hint" "Codex profile not found or not ready: missing" "$TMP_BASE/missing.out"
   assert_occurs "codex raw missing profile does not re-enter task fallback" "Codex profile not found or not ready: missing" 1 "$TMP_BASE/missing.out"

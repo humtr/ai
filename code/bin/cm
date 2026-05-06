@@ -12,7 +12,7 @@ set -euo pipefail
 #   CM_CWD_ASK_DEFAULT=cwd|sandbox
 
 __mgr_name="cm"
-__mgr_profile_home="$HOME/.codex-homes"
+__mgr_profile_home="$HOME/.codex-profiles"
 __mgr_sb_root="$HOME/sb/codex"
 __mgr_tty_policy="${CM_CWD_TTY_POLICY:-ask}"
 __mgr_non_tty_policy="${CM_CWD_NONTTY_POLICY:-cwd}"
@@ -55,10 +55,10 @@ unset __mgr_rc
 
 
 
-BASE="$HOME/.codex-homes"
+BASE="$HOME/.codex-profiles"
 CONFIG="$HOME/.config/cm"
 CURRENT="$CONFIG/current"
-DELETED="$HOME/.codex-homes.deleted"
+DELETED="$HOME/.codex-profiles.deleted"
 
 mkdir -p "$BASE" "$CONFIG"
 

@@ -12,7 +12,7 @@ set -euo pipefail
 #   GM_CWD_ASK_DEFAULT=cwd|sandbox
 
 __mgr_name="gm"
-__mgr_profile_home="$HOME/.gemini-homes"
+__mgr_profile_home="$HOME/.gemini-profiles"
 __mgr_sb_root="$HOME/sb/gemini"
 __mgr_tty_policy="${GM_CWD_TTY_POLICY:-ask}"
 __mgr_non_tty_policy="${GM_CWD_NONTTY_POLICY:-sandbox}"
@@ -115,9 +115,9 @@ gm_run_gemini_native() {
 
 
 
-BASE="$HOME/.gemini-homes"
+BASE="$HOME/.gemini-profiles"
 ACTIVE_LINK="$HOME/.gemini"
-DELETED="$HOME/.gemini-homes.deleted"
+DELETED="$HOME/.gemini-profiles.deleted"
 
 mkdir -p "$BASE"
 

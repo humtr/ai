@@ -11,9 +11,6 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd -P || pwd)"
 REPO_LIB_DIR="$(cd "$SCRIPT_DIR/../code/ai-lib" 2>/dev/null && pwd -P || true)"
 
 AI_DEFAULT_PROVIDER="hermes"
-AI_CODEX_PROFILE="default"
-AI_GEMINI_PROFILE="default"
-AI_HERMES_PROFILE="default"
 AI_FALLBACK_ENABLED="true"
 AI_FALLBACK_PROVIDERS="hermes gemini codex"
 AI_EXPLICIT_FALLBACK="false"
@@ -25,9 +22,6 @@ load_config() {
   [ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 
   AI_DEFAULT_PROVIDER="${AI_DEFAULT_PROVIDER:-hermes}"
-  AI_CODEX_PROFILE="${AI_CODEX_PROFILE:-default}"
-  AI_GEMINI_PROFILE="${AI_GEMINI_PROFILE:-default}"
-  AI_HERMES_PROFILE="${AI_HERMES_PROFILE:-default}"
   AI_FALLBACK_ENABLED="${AI_FALLBACK_ENABLED:-true}"
   AI_FALLBACK_PROVIDERS="${AI_FALLBACK_PROVIDERS:-hermes gemini codex}"
   AI_EXPLICIT_FALLBACK="${AI_EXPLICIT_FALLBACK:-false}"
@@ -70,44 +64,46 @@ Common command model:
 
 Common options:
   --provider codex|gemini|hermes
-  --account NAME                     -> account/native selection
-  --profile NAME                     -> legacy alias for --account
-  --home NAME                        -> alias for --profile
+  --profile NAME                     -> isolated provider profile
   --cwd DIR, --cd DIR, -C DIR         -> project working directory
   --sandbox, --sb                    -> use ~/sb/<provider>
 
-Accounts:
-  default/native uses the provider's original install environment:
+Profiles:
+  No --profile uses the provider's official default home:
     codex  -> ~/.codex with CODEX_HOME unset
     gemini -> ~/.gemini with HOME unchanged
-    hermes -> ~/.hermes native/current profile state
-  Named accounts map to provider profiles through ~/.ai/accounts.json.
+    hermes -> ~/.hermes native/current state
+  Named profiles use isolated homes:
+    codex  -> ~/.codex-profiles/NAME
+    gemini -> ~/.gemini-profiles/NAME
+    hermes -> ~/.hermes/profiles/NAME
+  Profile names "default" and "native" are reserved and rejected.
 
 Provider-first forms:
-  ai codex ask [options] "prompt"    -> cm chat \$AI_CODEX_PROFILE
-  ai gemini ask [options] "prompt"   -> gm chat \$AI_GEMINI_PROFILE
-  ai hermes ask [options] "prompt"   -> hm chat \$AI_HERMES_PROFILE
+  ai codex ask [options] "prompt"    -> codex chat in selected cwd/profile
+  ai gemini ask [options] "prompt"   -> gemini chat in selected cwd/profile
+  ai hermes ask [options] "prompt"   -> hermes chat in selected cwd/profile
 
-  ai codex task [options] "prompt"   -> cm task \$AI_CODEX_PROFILE
-  ai gemini task [options] "prompt"  -> gm task \$AI_GEMINI_PROFILE
-  ai hermes task [options] "prompt"  -> hm task \$AI_HERMES_PROFILE
+  ai codex task [options] "prompt"   -> codex task in selected cwd/profile
+  ai gemini task [options] "prompt"  -> gemini task in selected cwd/profile
+  ai hermes task [options] "prompt"  -> hermes task in selected cwd/profile
 
-  ai codex plan [options] "prompt"   -> cm plan \$AI_CODEX_PROFILE
-  ai gemini plan [options] "prompt"  -> gm plan \$AI_GEMINI_PROFILE
-  ai hermes plan [options] "prompt"  -> hm plan \$AI_HERMES_PROFILE
+  ai codex plan [options] "prompt"   -> codex plan in selected cwd/profile
+  ai gemini plan [options] "prompt"  -> gemini plan in selected cwd/profile
+  ai hermes plan [options] "prompt"  -> hermes plan in selected cwd/profile
 
 Canonical provider forms:
-  ai ask codex [options] "prompt"    -> cm chat \$AI_CODEX_PROFILE
-  ai ask gemini [options] "prompt"   -> gm chat \$AI_GEMINI_PROFILE
-  ai ask hermes [options] "prompt"   -> hm chat \$AI_HERMES_PROFILE
+  ai ask codex [options] "prompt"    -> codex chat in selected cwd/profile
+  ai ask gemini [options] "prompt"   -> gemini chat in selected cwd/profile
+  ai ask hermes [options] "prompt"   -> hermes chat in selected cwd/profile
 
-  ai task codex [options] "prompt"   -> cm task \$AI_CODEX_PROFILE
-  ai task gemini [options] "prompt"  -> gm task \$AI_GEMINI_PROFILE
-  ai task hermes [options] "prompt"  -> hm task \$AI_HERMES_PROFILE
+  ai task codex [options] "prompt"   -> codex task in selected cwd/profile
+  ai task gemini [options] "prompt"  -> gemini task in selected cwd/profile
+  ai task hermes [options] "prompt"  -> hermes task in selected cwd/profile
 
-  ai plan codex [options] "prompt"   -> cm plan \$AI_CODEX_PROFILE
-  ai plan gemini [options] "prompt"  -> gm plan \$AI_GEMINI_PROFILE
-  ai plan hermes [options] "prompt"  -> hm plan \$AI_HERMES_PROFILE
+  ai plan codex [options] "prompt"   -> codex plan in selected cwd/profile
+  ai plan gemini [options] "prompt"  -> gemini plan in selected cwd/profile
+  ai plan hermes [options] "prompt"  -> hermes plan in selected cwd/profile
 
 Provider task shortcuts:
   ai codex "prompt"                  -> ai task codex "prompt"
@@ -119,11 +115,11 @@ Provider-native passthroughs:
   ai run gemini [options] [-- args...] -> gemini in the selected cwd/profile
   ai run hermes [options] [-- args...] -> hermes in the selected cwd/profile
 
-  ai codex raw [profile] -- <args...> -> legacy sandbox + cm raw passthrough
-  ai gemini raw [profile] -- <args...>-> legacy sandbox + gm raw passthrough
-  ai hermes raw [profile] -- <args...>-> legacy sandbox + hm raw passthrough
+  ai codex raw [profile] -- <args...> -> native codex passthrough
+  ai gemini raw [profile] -- <args...>-> native gemini passthrough
+  ai hermes raw [profile] -- <args...>-> native hermes passthrough
 
-  ai codex exec [profile] <args...>   -> legacy sandbox + native codex exec passthrough
+  ai codex exec [profile] <args...>   -> native codex exec passthrough
 
 Manager routers:
   ai cm <args...>                     -> cm <args...>
@@ -144,22 +140,15 @@ Plane / service control:
 Config:
   ai config
   ai config set default-provider hermes
-  ai config set codex-profile default
-  ai config set gemini-profile default
-  ai config set hermes-profile default
   ai config set ask-timeout 180
 
 Registry:
-  ai accounts list|add|alias
   ai workdirs list|add|archive
   ai profiles [provider]
   ai gateways
 
 Current:
   AI_DEFAULT_PROVIDER="$AI_DEFAULT_PROVIDER"
-  AI_CODEX_PROFILE="$AI_CODEX_PROFILE"
-  AI_GEMINI_PROFILE="$AI_GEMINI_PROFILE"
-  AI_HERMES_PROFILE="$AI_HERMES_PROFILE"
   AI_FALLBACK_ENABLED="$AI_FALLBACK_ENABLED"
   AI_FALLBACK_PROVIDERS="$AI_FALLBACK_PROVIDERS"
   AI_EXPLICIT_FALLBACK="$AI_EXPLICIT_FALLBACK"
@@ -200,7 +189,7 @@ profile_exists() {
   local profile="$2"
 
   case "$profile" in
-    ""|default|native)
+    "")
       case "$kind" in
         codex)  [ -d "$HOME/.codex" ] ;;
         gemini) [ -d "$HOME/.gemini" ] ;;
@@ -209,11 +198,14 @@ profile_exists() {
       esac
       return $?
       ;;
+    default|native)
+      return 1
+      ;;
   esac
 
   case "$kind" in
-    codex)  [ -d "$HOME/.codex-homes/$profile" ] ;;
-    gemini) [ -d "$HOME/.gemini-homes/$profile" ] ;;
+    codex)  [ -d "$HOME/.codex-profiles/$profile" ] ;;
+    gemini) [ -d "$HOME/.gemini-profiles/$profile" ] ;;
     hermes) [ -d "$HOME/.hermes/profiles/$profile" ] ;;
     *) return 1 ;;
   esac
@@ -222,22 +214,24 @@ profile_exists() {
 profile_hint() {
   local kind="$1"
   local profile="$2"
+  local label
+  label="$(profile_label "$profile")"
 
   case "$kind" in
     codex)
-      echo "[ai] Codex profile not found or not ready: $profile" >&2
+      echo "[ai] Codex profile not found or not ready: $label" >&2
       echo "     Try: cm profile list" >&2
       echo "     Try: cm profile add $profile" >&2
       echo "     Try: cm run $profile" >&2
       ;;
     gemini)
-      echo "[ai] Gemini profile not found or not ready: $profile" >&2
+      echo "[ai] Gemini profile not found or not ready: $label" >&2
       echo "     Try: gm profile list" >&2
       echo "     Try: gm profile add $profile" >&2
       echo "     Try: cd ~/sb/gemini/$profile && gm run $profile" >&2
       ;;
     hermes)
-      echo "[ai] Hermes profile not found or not ready: $profile" >&2
+      echo "[ai] Hermes profile not found or not ready: $label" >&2
       echo "     Try: hm profile list" >&2
       echo "     Try: hm profile use $profile" >&2
       echo "     Try: hermes model  # or hermes setup/auth" >&2
@@ -249,19 +243,21 @@ failure_hint() {
   local kind="$1"
   local profile="$2"
   local rc="$3"
+  local label
+  label="$(profile_label "$profile")"
 
-  echo "[ai] $kind/$profile failed with exit=$rc" >&2
+  echo "[ai] $kind/$label failed with exit=$rc" >&2
 
   case "$kind" in
     codex)
-      echo "     Check: cd ~/sb/codex/$profile && cm task $profile \"Reply with only: OK\"" >&2
+      echo "     Check: cd ~/sb/codex && cm task ${profile:-PROFILE} \"Reply with only: OK\"" >&2
       ;;
     gemini)
-      echo "     Check: cd ~/sb/gemini/$profile && gm task $profile -- --skip-trust -p 'Reply with only: OK'" >&2
+      echo "     Check: cd ~/sb/gemini && gm task ${profile:-PROFILE} -- --skip-trust -p 'Reply with only: OK'" >&2
       echo "     If trust error appears, run from ~/sb/gemini/$profile or re-run gm run $profile." >&2
       ;;
     hermes)
-      echo "     Check: cd ~/sb/hermes/$profile && hm task $profile \"Reply with only: OK\"" >&2
+      echo "     Check: cd ~/sb/hermes && hm task ${profile:-PROFILE} \"Reply with only: OK\"" >&2
       echo "     If provider error appears, run: hm profile use $profile && hermes model" >&2
       echo "     If custom hgb is used, check: ai bridge status" >&2
       ;;
@@ -324,7 +320,7 @@ provider_profile_home() {
   local profile="$2"
 
   case "$profile" in
-    ""|default|native)
+    "")
       case "$kind" in
         codex) echo "$HOME/.codex" ;;
         gemini) echo "$HOME/.gemini" ;;
@@ -336,11 +332,15 @@ provider_profile_home() {
       esac
       return 0
       ;;
+    default|native)
+      echo "ERROR: reserved profile name: $profile" >&2
+      return 2
+      ;;
   esac
 
   case "$kind" in
-    codex) echo "$HOME/.codex-homes/$profile" ;;
-    gemini) echo "$HOME/.gemini-homes/$profile" ;;
+    codex) echo "$HOME/.codex-profiles/$profile" ;;
+    gemini) echo "$HOME/.gemini-profiles/$profile" ;;
     hermes) echo "$HOME/.hermes/profiles/$profile" ;;
     *)
       echo "ERROR: unknown provider kind: $kind" >&2
@@ -413,35 +413,31 @@ provider_mgr() {
   esac
 }
 
-provider_default_profile() {
-  case "${1:-}" in
-    codex) echo "$AI_CODEX_PROFILE" ;;
-    gemini) echo "$AI_GEMINI_PROFILE" ;;
-    hermes) echo "$AI_HERMES_PROFILE" ;;
-    *)
-      echo "ERROR: unknown provider kind: ${1:-}" >&2
+validate_profile_name() {
+  local profile="${1:-}"
+
+  case "$profile" in
+    "")
+      return 0
+      ;;
+    default|native|.*|*/*|*..*|*" "*)
+      echo "ERROR: invalid or reserved profile name: $profile" >&2
       return 2
       ;;
   esac
 }
 
-provider_resolve_account() {
+provider_resolve_profile() {
   local kind="$1"
-  local account="${2:-}"
+  local profile="${2:-}"
 
-  [ -n "$account" ] || account="$(provider_default_profile "$kind")" || return $?
-  case "$account" in
-    default|native)
-      echo "default"
-      return 0
-      ;;
-  esac
+  : "$kind"
+  validate_profile_name "$profile" || return $?
+  echo "$profile"
+}
 
-  if [ -f "$(ai_lib_file ai_registry.py)" ]; then
-    ai_registry resolve-account "$kind" "$account"
-  else
-    echo "$account"
-  fi
+profile_label() {
+  [ -n "${1:-}" ] && echo "$1" || echo "default"
 }
 
 provider_label() {
@@ -606,7 +602,7 @@ provider_run_manager_project() {
   local mgr
   mgr="$(provider_mgr "$kind")" || return $?
 
-  if [ "$profile" = "default" ] || [ "$profile" = "native" ]; then
+  if [ -z "$profile" ]; then
     case "$kind:$mode" in
       codex:task)
         (
@@ -738,7 +734,7 @@ provider_common_context() {
 
   provider_prepare "$kind" || return $?
 
-  profile="$(provider_resolve_account "$kind" "$profile")" || return $?
+  profile="$(provider_resolve_profile "$kind" "$profile")" || return $?
   profile_exists "$kind" "$profile" || {
     profile_hint "$kind" "$profile"
     return 127
@@ -775,10 +771,14 @@ parse_common_options() {
         }
         shift 2
         ;;
-      --account|--profile|--home)
+      --profile)
         [ -n "${2:-}" ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
         AI_COMMON_PROFILE="$2"
         shift 2
+        ;;
+      --account|--home)
+        echo "ERROR: $1 was removed; use --profile NAME" >&2
+        return 2
         ;;
       --cwd|--cd|-C)
         [ -n "${2:-}" ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
@@ -828,10 +828,14 @@ provider_mode_parse_and_run() {
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --account|--profile|--home)
+      --profile)
         [ -n "${2:-}" ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
         profile="$2"
         shift 2
+        ;;
+      --account|--home)
+        echo "ERROR: $1 was removed; use --profile NAME" >&2
+        return 2
         ;;
       --cwd|--cd|-C)
         [ -n "${2:-}" ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
@@ -970,9 +974,9 @@ default_mode() {
     last_rc="$rc"
 
     case "$provider" in
-      codex|cm|c) failure_hint codex "$AI_CODEX_PROFILE" "$rc" ;;
-      gemini|gm|g) failure_hint gemini "$AI_GEMINI_PROFILE" "$rc" ;;
-      hermes|hm|h) failure_hint hermes "$AI_HERMES_PROFILE" "$rc" ;;
+      codex|cm|c) failure_hint codex "" "$rc" ;;
+      gemini|gm|g) failure_hint gemini "" "$rc" ;;
+      hermes|hm|h) failure_hint hermes "" "$rc" ;;
     esac
 
     echo "[ai] fallback: next provider" >&2
@@ -1094,11 +1098,10 @@ provider_is_sandbox_native_subcommand() {
 provider_native_passthrough() {
   local kind="$1"
   local mgr="$2"
-  local default_profile="$3"
-  local sub="$4"
-  shift 4 || true
+  local sub="$3"
+  shift 3 || true
 
-  local profile="$default_profile"
+  local profile=""
   local workdir
 
   case "$sub" in
@@ -1108,6 +1111,10 @@ provider_native_passthrough() {
       #   ai gemini raw tg -- --version
       #
       # Critical: check $# before touching $1.
+      if [ "$#" -gt 0 ] && { [ "$1" = "default" ] || [ "$1" = "native" ]; }; then
+        echo "ERROR: invalid or reserved profile name: $1" >&2
+        return 2
+      fi
       if [ "$#" -gt 0 ] && profile_exists "$kind" "$1"; then
         profile="$1"
         shift
@@ -1122,7 +1129,7 @@ provider_native_passthrough() {
       mkdir -p "$workdir"
       cd "$workdir" || return 1
 
-      if [ "$profile" = "default" ] || [ "$profile" = "native" ]; then
+      if [ -z "$profile" ]; then
         if [ "${1:-}" = "--" ]; then
           shift
         fi
@@ -1165,7 +1172,7 @@ provider_native_project() {
 
   case "$kind" in
     codex)
-      if [ "$profile" = "default" ] || [ "$profile" = "native" ]; then
+      if [ -z "$profile" ]; then
         (
           cd "$workdir" &&
             codex -C "$workdir" "$@"
@@ -1179,7 +1186,7 @@ provider_native_project() {
       fi
       ;;
     gemini)
-      if [ "$profile" = "default" ] || [ "$profile" = "native" ]; then
+      if [ -z "$profile" ]; then
         (
           cd "$workdir" &&
             env GEMINI_CLI_TRUST_WORKSPACE=true gemini "$@"
@@ -1192,7 +1199,7 @@ provider_native_project() {
       fi
       ;;
     hermes)
-      if [ "$profile" = "default" ] || [ "$profile" = "native" ]; then
+      if [ -z "$profile" ]; then
         (
           cd "$workdir" &&
             hermes "$@"
@@ -1360,7 +1367,7 @@ provider_or_router() {
   local provider="$1"
   shift
 
-  local kind mgr first mode rc default_profile
+  local kind mgr first mode rc
 
   kind="$(provider_alias_kind "$provider")" || {
     echo "ERROR: unknown provider: $provider" >&2
@@ -1368,7 +1375,6 @@ provider_or_router() {
   }
 
   mgr="$(provider_mgr "$kind")" || return $?
-  default_profile="$(provider_default_profile "$kind")" || return $?
 
   provider_prepare "$kind" || return $?
 
@@ -1420,7 +1426,7 @@ provider_or_router() {
       ;;
     *)
       if provider_is_native_subcommand "$kind" "$first"; then
-        provider_native_passthrough "$kind" "$mgr" "$default_profile" "$@"
+        provider_native_passthrough "$kind" "$mgr" "$@"
         return $?
       fi
 
@@ -1471,9 +1477,6 @@ config_cmd() {
 
       case "$key" in
         default-provider) key="AI_DEFAULT_PROVIDER" ;;
-        codex-profile) key="AI_CODEX_PROFILE" ;;
-        gemini-profile) key="AI_GEMINI_PROFILE" ;;
-        hermes-profile) key="AI_HERMES_PROFILE" ;;
         fallback-enabled) key="AI_FALLBACK_ENABLED" ;;
         fallback-providers) key="AI_FALLBACK_PROVIDERS" ;;
         explicit-fallback) key="AI_EXPLICIT_FALLBACK" ;;
@@ -1482,7 +1485,7 @@ config_cmd() {
       esac
 
       case "$key" in
-        AI_DEFAULT_PROVIDER|AI_CODEX_PROFILE|AI_GEMINI_PROFILE|AI_HERMES_PROFILE|AI_FALLBACK_ENABLED|AI_FALLBACK_PROVIDERS|AI_EXPLICIT_FALLBACK|AI_ASK_TIMEOUT|AI_AUTO_START_BRIDGE) ;;
+        AI_DEFAULT_PROVIDER|AI_FALLBACK_ENABLED|AI_FALLBACK_PROVIDERS|AI_EXPLICIT_FALLBACK|AI_ASK_TIMEOUT|AI_AUTO_START_BRIDGE) ;;
         *)
           echo "ERROR: unknown config key: $key" >&2
           return 2
@@ -1530,18 +1533,6 @@ registry_cmd() {
     ensure)
       ai_registry ensure
       ;;
-    accounts|account)
-      local sub="${1:-list}"
-      [ "$#" -gt 0 ] && shift || true
-      case "$sub" in
-        list|"") ai_registry accounts-list "$@" ;;
-        add) ai_registry accounts-add "$@" ;;
-        alias) ai_registry accounts-alias "$@" ;;
-        edit) "${EDITOR:-nano}" "$AI_STATE_HOME/accounts.json" ;;
-        path) echo "$AI_STATE_HOME/accounts.json" ;;
-        *) echo "Usage: ai accounts list|add|alias|edit|path" >&2; return 2 ;;
-      esac
-      ;;
     workdirs|workdir|work)
       local sub="${1:-list}"
       [ "$#" -gt 0 ] && shift || true
@@ -1561,18 +1552,36 @@ registry_cmd() {
       ai_registry gateways-list "$@"
       ;;
     *)
-      echo "Usage: ai registry ensure|accounts|workdirs|profiles|gateways" >&2
+      echo "Usage: ai registry ensure|workdirs|profiles|gateways" >&2
       return 2
       ;;
   esac
 }
 
 tui_cmd() {
+  local workdir_override="false"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --workdir-override)
+        workdir_override="true"
+        shift
+        ;;
+      *)
+        echo "Usage: ai tui [--workdir-override]" >&2
+        return 2
+        ;;
+    esac
+  done
+
   if ! [ -t 0 ] || ! [ -t 1 ]; then
     echo "ERROR: ai tui requires a TTY" >&2
     return 2
   fi
   export AI_BIN="${AI_BIN:-$HOME/bin/ai}"
+  if [ "$workdir_override" = "true" ]; then
+    export AI_TUI_WORKDIR_OVERRIDE=1
+  fi
   python "$(ai_lib_file ai_tui.py)"
 }
 
@@ -1675,9 +1684,6 @@ auto_cmd() {
 status_cmd() {
   echo "== ai config =="
   echo "AI_DEFAULT_PROVIDER=$AI_DEFAULT_PROVIDER"
-  echo "AI_CODEX_PROFILE=$AI_CODEX_PROFILE"
-  echo "AI_GEMINI_PROFILE=$AI_GEMINI_PROFILE"
-  echo "AI_HERMES_PROFILE=$AI_HERMES_PROFILE"
   echo "AI_FALLBACK_ENABLED=$AI_FALLBACK_ENABLED"
   echo "AI_FALLBACK_PROVIDERS=$AI_FALLBACK_PROVIDERS"
   echo "AI_EXPLICIT_FALLBACK=$AI_EXPLICIT_FALLBACK"
@@ -1712,11 +1718,11 @@ check_cmd() {
   done
 
   echo
-  echo "== default profiles =="
-  for item in "codex:$AI_CODEX_PROFILE" "gemini:$AI_GEMINI_PROFILE" "hermes:$AI_HERMES_PROFILE"; do
+  echo "== default homes =="
+  for item in "codex:" "gemini:" "hermes:"; do
     kind="${item%%:*}"
     profile="${item#*:}"
-    printf "%-8s %-12s " "$kind" "$profile"
+    printf "%-8s %-12s " "$kind" "$(profile_label "$profile")"
     if profile_exists "$kind" "$profile"; then echo "OK"; else echo "missing"; fi
   done
 
@@ -1747,7 +1753,7 @@ case "$cmd" in
   gemini) provider_or_router gemini "$@" ;;
   hermes) provider_or_router hermes "$@" ;;
 
-  tui) tui_cmd ;;
+  tui) tui_cmd "$@" ;;
 
   hgw|gateway|gw) need hgw && exec hgw "$@" ;;
   hgb) need hgb && exec hgb "$@" ;;
@@ -1770,7 +1776,6 @@ case "$cmd" in
 
   config|cfg) config_cmd "$@" ;;
   registry) registry_cmd "$@" ;;
-  accounts|account) registry_cmd accounts "$@" ;;
   workdirs|workdir|work) registry_cmd workdirs "$@" ;;
   profiles|profile) registry_cmd profiles "$@" ;;
   gateways) registry_cmd gateways "$@" ;;

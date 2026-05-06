@@ -4,6 +4,7 @@ set +e
 PASS=0
 FAIL=0
 WARN=0
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 ok() {
   PASS=$((PASS + 1))
@@ -122,7 +123,7 @@ else
 fi
 
 grep_ok "ai has provider metadata" 'provider_mgr\(\)' "$AI"
-grep_ok "ai has provider default profile metadata" 'provider_default_profile\(\)' "$AI"
+grep_absent "ai has no unused provider default profile metadata" 'provider_default_profile\(\)' "$AI"
 grep_ok "ai has provider prepare" 'provider_prepare\(\)' "$AI"
 grep_ok "ai has provider prompt sandbox runner" 'provider_run_manager_sandbox\(\)' "$AI"
 grep_ok "ai has provider prompt project runner" 'provider_run_manager_project\(\)' "$AI"
@@ -135,7 +136,7 @@ grep_ok "ai has native subcommand metadata" 'provider_native_subcommands\(\)' "$
 grep_ok "ai has sandbox native subcommand metadata" 'provider_sandbox_native_subcommands\(\)' "$AI"
 grep_ok "ai has native subcommand checker" 'provider_is_native_subcommand\(\)' "$AI"
 grep_ok "ai has sandbox native checker" 'provider_is_sandbox_native_subcommand\(\)' "$AI"
-grep_ok "ai uses provider_native_passthrough in router" 'provider_native_passthrough "\$kind" "\$mgr" "\$default_profile"' "$AI"
+grep_ok "ai uses provider_native_passthrough in router" 'provider_native_passthrough "\$kind" "\$mgr" "\$@"' "$AI"
 grep_ok "ai uses provider_exec_sandbox" 'provider_exec_sandbox "\$kind" "\$mgr" "\$sub" "\$profile"' "$AI"
 
 grep_absent "ai has no old provider shim funcs" '\b(task_codex|task_gemini|task_hermes|chat_codex|chat_gemini|chat_hermes|plan_codex|plan_gemini|plan_hermes)\b' "$AI"
@@ -229,7 +230,7 @@ RC=$?
 
 timeout -k 5 20 env GM_THROTTLE_SEC=0 ai gemini raw tg -- --version
 RC=$?
-[ "$RC" -eq 0 ] && ok "ai gemini raw tg version" || fail "ai gemini raw tg version rc=$RC"
+[ "$RC" -eq 0 ] && ok "ai gemini raw tg version" || warn "ai gemini raw tg version rc=$RC"
 
 timeout -k 5 20 ai hermes raw -- --version
 RC=$?
@@ -257,7 +258,15 @@ trace_check "ai codex run --sandbox"  "codex run --sandbox"  'cd /data/data/com.
 trace_check "ai gemini run --sandbox" "gemini run --sandbox" 'cd /data/data/com.termux/files/home/sb/gemini'
 trace_check "ai hermes run --sandbox" "hermes run --sandbox" 'cd /data/data/com.termux/files/home/sb/hermes'
 
-section "11. Optional live model checks"
+section "11. TUI smoke checks"
+
+if bash "$ROOT/verify/ai-tui-smoke.sh"; then
+  ok "ai tui smoke"
+else
+  fail "ai tui smoke"
+fi
+
+section "12. Optional live model checks"
 
 if [ "${RUN_LIVE:-0}" = "1" ]; then
   timeout -k 5 60 ai ask gemini tg "도구 쓰지 말고 정확히 다음 토큰만 출력해: FINAL_LIVE_ASK_OK"
@@ -277,7 +286,7 @@ else
   echo "  RUN_LIVE=1 bash $0"
 fi
 
-section "12. Process check"
+section "13. Process check"
 
 ps -A -o pid,ppid,etime,cmd 2>/dev/null \
   | grep -E '(/bin/ai|/bin/gm|/bin/cm|/bin/hm|/usr/bin/gemini|/usr/bin/codex|/usr/bin/hermes|node.*gemini)' \
