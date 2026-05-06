@@ -80,6 +80,7 @@ mkdir -p \
   "$HOME_FIXTURE/work/main" \
   "$HOME_FIXTURE/work/main/.hidden" \
   "$HOME_FIXTURE/work/main/src" \
+  "$HOME_FIXTURE/work/main/src/pkg" \
   "$HOME_FIXTURE/work/main/tests" \
   "$HOME_FIXTURE/work/other" \
   "$HOME_FIXTURE/work/work00" \
@@ -322,7 +323,7 @@ app.enter_workdir_parent()
 selected=app.filtered_workdir_children()[app.workdir_child_index].name
 print("{} {} {}".format(app.workdir_child_index, selected, ai_tui.short(app.current_workdir_path())))'
 )"
-[ "$WORKDIR_HOME_LEFT_OUT" = "1 work ~" ] && ok "workdir left at home is a no-op" || { fail "workdir left at home is a no-op"; printf 'actual: %s\n' "$WORKDIR_HOME_LEFT_OUT" >&2; }
+[ "$WORKDIR_HOME_LEFT_OUT" = "1 work ~/" ] && ok "workdir left at home is a no-op" || { fail "workdir left at home is a no-op"; printf 'actual: %s\n' "$WORKDIR_HOME_LEFT_OUT" >&2; }
 
 WORKDIR_PANEL_OUT="$TMP_BASE/workdir-panel.out"
 run_tui "\033OB\033OB\033OB\033" "$WORKDIR_PANEL_OUT"
@@ -335,7 +336,12 @@ assert_not_contains "workdir panel omits no-child status text" "no child" "$WORK
 WORKDIR_FILTER_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.last_builder_section=app.section; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/s"; app.workdir_child_index=0; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print("{} {} {}".format(app.section, ai_tui.short(app.current_workdir_path()), getattr(app, "workdir_text", "")))'
 )"
-[ "$WORKDIR_FILTER_OUT" = "3 ~/work/main ~/work/main/src" ] && ok "workdir tab completes typed prefix inline without switching panels" || { fail "workdir tab completes typed prefix inline without switching panels"; printf 'actual: %s\n' "$WORKDIR_FILTER_OUT" >&2; }
+[ "$WORKDIR_FILTER_OUT" = "3 ~/work/main ~/work/main/src/" ] && ok "workdir tab completes typed prefix inline without switching panels" || { fail "workdir tab completes typed prefix inline without switching panels"; printf 'actual: %s\n' "$WORKDIR_FILTER_OUT" >&2; }
+
+WORKDIR_TAB_LEAF_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.last_builder_section=app.section; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/t"; app.workdir_child_index=0; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print(getattr(app, "workdir_text", ""))'
+)"
+[ "$WORKDIR_TAB_LEAF_OUT" = "~/work/main/tests" ] && ok "workdir tab does not add slash for leaf directory" || { fail "workdir tab does not add slash for leaf directory"; printf 'actual: %s\n' "$WORKDIR_TAB_LEAF_OUT" >&2; }
 
 WORKDIR_TAB_FOCUS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.last_builder_section=ai_tui.SECTIONS.index("profile"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/s"; app.workdir_child_index=0; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print(app.section)'
@@ -401,6 +407,21 @@ WORKDIR_TAB_BOUNDARY_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/"; app.workdir_child_index=-1; app.handle_main_key(9); print("{} {}".format(app.workdir_text, ai_tui.short(app.current_workdir_path())))'
 )"
 [ "$WORKDIR_TAB_BOUNDARY_OUT" = "~/work/main/ ~/work/main" ] && ok "workdir tab at directory boundary does not descend into first child" || { fail "workdir tab at directory boundary does not descend into first child"; printf 'actual: %s\n' "$WORKDIR_TAB_BOUNDARY_OUT" >&2; }
+
+WORKDIR_DOWN_HINT_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/wo"; app.workdir_modified=True; app.workdir_child_index=-1; app.session_index=0; app.session_scroll=0; app.handle_main_key(curses.KEY_DOWN); print("{} {} {}".format(app.workdir_layer, app.workdir_child_index, app.filtered_workdir_children()[app.workdir_child_index].name))'
+)"
+[ "$WORKDIR_DOWN_HINT_OUT" = "children 1 work" ] && ok "workdir down selects inline hint candidate" || { fail "workdir down selects inline hint candidate"; printf 'actual: %s\n' "$WORKDIR_DOWN_HINT_OUT" >&2; }
+
+WORKDIR_DOWN_MEMORY_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work"; app.workdir_text="~/work/"; app.workdir_child_index=-1; app.workdir_child_memory={"'"$HOME_FIXTURE"'/work":"work05"}; app.session_index=0; app.session_scroll=0; app.handle_main_key(curses.KEY_DOWN); print("{} {}".format(app.workdir_child_index, app.filtered_workdir_children()[app.workdir_child_index].name))'
+)"
+[ "$WORKDIR_DOWN_MEMORY_OUT" = "7 work05" ] && ok "workdir down uses remembered child without prefix" || { fail "workdir down uses remembered child without prefix"; printf 'actual: %s\n' "$WORKDIR_DOWN_MEMORY_OUT" >&2; }
+
+WORKDIR_DOWN_WRAP_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/"; app.workdir_layer="children"; app.workdir_child_index=1; app.session_index=0; app.session_scroll=0; app.handle_main_key(curses.KEY_DOWN); print("{} {}".format(app.workdir_child_index, app.filtered_workdir_children()[app.workdir_child_index].name))'
+)"
+[ "$WORKDIR_DOWN_WRAP_OUT" = "0 src" ] && ok "workdir down wraps from last child to first" || { fail "workdir down wraps from last child to first"; printf 'actual: %s\n' "$WORKDIR_DOWN_WRAP_OUT" >&2; }
 
 RESUME_OUT="$TMP_BASE/resume.out"
 run_tui "sq" "$RESUME_OUT"

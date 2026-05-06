@@ -536,6 +536,9 @@ class App:
             return []
         return sorted(children, key=lambda p: p.name.lower())
 
+    def workdir_has_visible_children(self, path: Path) -> bool:
+        return bool(self.workdir_children(path))
+
     def filtered_workdir_children(self) -> list[Path]:
         text = getattr(self, "workdir_text", None)
         path, filter_text = self.workdir_text_base_and_prefix()
@@ -571,11 +574,11 @@ class App:
             name = child.name
             if name.lower().startswith(filter_text.lower()):
                 if len(name) == len(filter_text):
-                    if child.is_dir() and not text.endswith("/"):
+                    if self.workdir_has_visible_children(child) and not text.endswith("/"):
                         return "/"
                     continue
                 suffix = name[len(filter_text) :]
-                if child.is_dir():
+                if self.workdir_has_visible_children(child):
                     suffix += "/"
                 return suffix
         return ""
@@ -617,12 +620,35 @@ class App:
             return
         if self.workdir_child_index < 0:
             self.workdir_child_index = 0 if direction > 0 else len(children) - 1
+        elif direction > 0:
+            self.workdir_child_index = (self.workdir_child_index + direction) % len(children)
         else:
             self.workdir_child_index = max(
                 0,
                 min(self.workdir_child_index + direction, len(children) - 1),
             )
         self.message = f"child {self.workdir_child_index + 1}/{len(children)}: {children[self.workdir_child_index].name}"
+
+    def select_workdir_child_for_inline_down(self) -> None:
+        base, prefix = self.workdir_text_base_and_prefix()
+        children = self.workdir_children(base)
+        if prefix:
+            needle = prefix.lower()
+            self.workdir_child_index = -1
+            for idx, child in enumerate(children):
+                if child.name.lower().startswith(needle):
+                    self.workdir_child_index = idx
+                    return
+            return
+        remembered = getattr(self, "workdir_child_memory", {}).get(str(self.normalize_workdir_path(base)), "")
+        self.workdir_child_index = -1
+        if remembered:
+            for idx, child in enumerate(children):
+                if child.name == remembered:
+                    self.workdir_child_index = idx
+                    return
+        if children:
+            self.workdir_child_index = 0
 
     def enter_workdir_child(self) -> None:
         child = self.selected_workdir_child()
@@ -1301,10 +1327,10 @@ class App:
         elif section == "workdir":
             layer = getattr(self, "workdir_layer", "inline")
             if layer == "inline":
-                children = self.workdir_children()
+                children = self.filtered_workdir_children()
                 if direction > 0 and children:
                     self.workdir_layer = "children"
-                    self.workdir_child_index = 0
+                    self.select_workdir_child_for_inline_down()
                 elif direction < 0:
                     self.move_section(-1)
                 return
@@ -1341,6 +1367,11 @@ class App:
             head, sep, _ = text.rpartition("/")
             self._tab_base_str = head + sep if sep else ""
 
+        if not self._tab_prefix:
+            self.workdir_child_index = -1
+            self.message = "type a child prefix"
+            return
+
         try:
             path = self._tab_base
             prefix = self._tab_prefix
@@ -1370,7 +1401,7 @@ class App:
 
         # Use the fixed base string stored at the start of the cycle
         new_text = self._tab_base_str + child.name
-        if child.is_dir():
+        if self.workdir_has_visible_children(child):
             new_text += "/"
 
         self.workdir_text = new_text
