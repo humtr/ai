@@ -158,11 +158,14 @@ class App:
         self.workdir_child_index = -1
         self.workdir_text: str | None = None
         self.workdir_layer = "inline"
+        self.workdir_dropdown_base: str | None = None
         self.workdir_cursor: tuple[int, int] | None = None
         self.workdir_child_memory: dict[str, str] = {}
         self.last_builder_section = 0
-        self.session_index = 0
+        self.session_index = -1
         self.session_scroll = 0
+        self.pending_action: str | None = None
+        self.pending_cmd: list[str] | None = None
         self.workdir_override = env_truthy("AI_TUI_WORKDIR_OVERRIDE")
         self.mouse_drag_y: int | None = None
         self.natural_scroll = os.environ.get("AI_TUI_NATURAL_SCROLL", "1").lower() not in {
@@ -287,6 +290,13 @@ class App:
     def current_workdir_path(self) -> str:
         return str(self.current_workdir().get("path") or Path.cwd())
 
+    def effective_workdir_path(self) -> str:
+        if getattr(self, "workdir_layer", "inline") == "children":
+            child = self.selected_workdir_child()
+            if child is not None:
+                return str(child)
+        return str(self.current_workdir().get("path") or Path.cwd())
+
     def current_profile(self) -> str:
         return self.current_profile_label()
 
@@ -303,11 +313,11 @@ class App:
             self.indices["profile"] = 0
 
     def reset_sessions(self) -> None:
-        self.session_index = 0
+        self.session_index = -1
         self.session_scroll = 0
 
     def selected_workdir_is_cwd(self) -> bool:
-        return self.same_path(self.current_workdir_path(), str(Path.cwd()))
+        return self.same_path(self.effective_workdir_path(), str(Path.cwd()))
 
     def commit_workdir_text_if_present(self) -> bool:
         text = getattr(self, "workdir_text", None)
@@ -333,7 +343,7 @@ class App:
         if profile:
             args.extend(["--profile", profile])
         if not self.selected_workdir_is_cwd():
-            workdir = short(self.current_workdir_path()) if display else self.current_workdir_path()
+            workdir = short(self.effective_workdir_path()) if display else self.effective_workdir_path()
             args.extend(["--cwd", workdir])
         return args
 
@@ -342,6 +352,13 @@ class App:
 
     def resume_command_line(self, session_id: str) -> str:
         return " ".join(["ai", "resume", *self.common_args(display=True), session_id])
+
+    def selected_session_command_line(self) -> str:
+        selected = self.selected_session()
+        if not selected or selected.get("_kind") == "new":
+            return self.command_line()
+        session_id = str(selected.get("session_id") or "")
+        return self.resume_command_line(session_id)
 
     def refresh_sessions(self, silent: bool = False) -> None:
         try:
@@ -385,6 +402,11 @@ class App:
         curses.def_prog_mode()
         curses.endwin()
         os.execvp(cmd[0], cmd)
+
+    def confirm_exec_or_preview(self, cmd: list[str]) -> None:
+        self.pending_action = "exec"
+        self.pending_cmd = cmd
+        self.message = "Press Enter again to run; Esc cancels"
 
     def open_file(self, path: Path) -> None:
         editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
@@ -483,9 +505,48 @@ class App:
         self.workdir_child_index = -1
         self.workdir_text = text
         self.workdir_layer = layer
+        if layer != "children":
+            self.workdir_dropdown_base = None
         self.reset_sessions()
         if announce:
             self.message = f"workdir {verb}: {short(self.custom_workdir)}"
+
+    def focus_workdir_path(self) -> None:
+        self.set_custom_workdir(Path(self.current_workdir_path()), "set", text=short(self.current_workdir_path()), layer="path")
+        self.workdir_modified = False
+
+    def commit_focused_workdir(self) -> None:
+        child = self.selected_workdir_child()
+        if child is not None:
+            self.remember_workdir_child(child.parent, child.name)
+            self.set_custom_workdir(child, "set", text=short(str(child)), layer="path")
+        else:
+            self.focus_workdir_path()
+
+    def open_workdir_dropdown(self, base: Path | None = None, selected: Path | None = None, restore: bool = True) -> None:
+        base = self.normalize_workdir_path(base or Path(self.current_workdir_path()))
+        children = self.workdir_children(base)
+        if not children:
+            self.workdir_layer = "path"
+            self.workdir_child_index = -1
+            self.workdir_text = short(str(base))
+            self.workdir_dropdown_base = None
+            self.message = "no child directory"
+            return
+        self.workdir_text = short(str(base))
+        self.workdir_layer = "children"
+        self.workdir_dropdown_base = str(base)
+        self.workdir_child_index = -1
+        if selected is not None:
+            selected_name = selected.name
+            for idx, child in enumerate(children):
+                if child.name == selected_name:
+                    self.workdir_child_index = idx
+                    break
+        if restore and self.workdir_child_index < 0:
+            self.restore_workdir_child_selection(base)
+        if restore and self.workdir_child_index < 0:
+            self.workdir_child_index = 0
 
     def remember_workdir_child(self, parent: Path, child_name: str) -> None:
         if child_name:
@@ -539,22 +600,47 @@ class App:
     def workdir_has_visible_children(self, path: Path) -> bool:
         return bool(self.workdir_children(path))
 
+    def workdir_text_for_child(self, child: Path) -> str:
+        text = short(str(child))
+        if self.workdir_has_visible_children(child) and not text.endswith("/"):
+            text += "/"
+        return text
+
     def filtered_workdir_children(self) -> list[Path]:
         text = getattr(self, "workdir_text", None)
-        path, filter_text = self.workdir_text_base_and_prefix()
-        
-        # Always return all children if in selection mode (browsing)
         if getattr(self, "workdir_layer", "inline") == "children":
-            return self.workdir_children(path)
-
-        # Inline mode: show matches, but if no prefix, show all candidates anyway 
-        # (user wants to see candidates even if nothing is typed)
+            base_text = getattr(self, "workdir_dropdown_base", None)
+            base = self.normalize_workdir_path(Path(base_text)) if base_text else self.normalize_workdir_path(Path(self.current_workdir_path()))
+            return self.workdir_children(base)
+        path, filter_text = self.workdir_text_base_and_prefix()
+        if text == "":
+            return []
         children = self.workdir_children(path)
         if not filter_text:
             return children
             
         needle = filter_text.lower()
         return [child for child in children if child.name.lower().startswith(needle)]
+
+    def workdir_best_match(self) -> Path | None:
+        _, filter_text = self.workdir_text_base_and_prefix()
+        if not filter_text:
+            return None
+        children = self.filtered_workdir_children()
+        if not children:
+            return None
+        needle = filter_text.lower()
+        for child in children:
+            if child.name.lower() == needle:
+                return child
+        return children[0]
+
+    def workdir_text_with_child(self, child: Path) -> str:
+        text = getattr(self, "workdir_text", "") or ""
+        head, sep, _ = text.rpartition("/")
+        if sep:
+            return head + sep + child.name
+        return child.name
 
     def workdir_completion_suffix(self) -> str:
         text = getattr(self, "workdir_text", None)
@@ -563,25 +649,18 @@ class App:
         _, filter_text = self.workdir_text_base_and_prefix()
         if not filter_text:
             return ""
-        
-        # Use full children list for suffix logic to avoid inline filtering issues
-        path, _ = self.workdir_text_base_and_prefix()
-        children = [c for c in self.workdir_children(path) if c.name.lower().startswith(filter_text.lower())]
-        if not children:
+        child = self.workdir_best_match()
+        if child is None:
             return ""
-        
-        for child in children:
-            name = child.name
-            if name.lower().startswith(filter_text.lower()):
-                if len(name) == len(filter_text):
-                    if self.workdir_has_visible_children(child) and not text.endswith("/"):
-                        return "/"
-                    continue
-                suffix = name[len(filter_text) :]
-                if self.workdir_has_visible_children(child):
-                    suffix += "/"
-                return suffix
-        return ""
+        name = child.name
+        if not name.lower().startswith(filter_text.lower()):
+            return ""
+        if len(name) == len(filter_text):
+            return "/" if self.workdir_has_visible_children(child) and not text.endswith("/") else ""
+        suffix = name[len(filter_text) :]
+        if self.workdir_has_visible_children(child):
+            suffix += "/"
+        return suffix
 
     def workdir_inline_segment_offset(self) -> int:
         text = getattr(self, "workdir_text", "") or ""
@@ -597,6 +676,8 @@ class App:
         self.workdir_layer = "inline"
 
     def selected_workdir_child(self) -> Path | None:
+        if getattr(self, "workdir_layer", "path") != "children":
+            return None
         children = self.filtered_workdir_children()
         if not children or self.workdir_child_index < 0:
             return None
@@ -609,8 +690,14 @@ class App:
         child = self.selected_workdir_child()
         if child is None:
             return
+        self.remember_workdir_child(child.parent, child.name)
         self.workdir_text = short(str(child))
         self.workdir_child_index = -1
+
+    def remember_focused_workdir_child(self) -> None:
+        child = self.selected_workdir_child()
+        if child is not None:
+            self.remember_workdir_child(child.parent, child.name)
 
     def cycle_workdir_child(self, direction: int) -> None:
         children = self.filtered_workdir_children()
@@ -627,6 +714,7 @@ class App:
                 0,
                 min(self.workdir_child_index + direction, len(children) - 1),
             )
+        self.remember_focused_workdir_child()
         self.message = f"child {self.workdir_child_index + 1}/{len(children)}: {children[self.workdir_child_index].name}"
 
     def select_workdir_child_for_inline_down(self) -> None:
@@ -657,12 +745,7 @@ class App:
             return
         self.remember_workdir_child(child.parent, child.name)
         
-        # Fast completion: Always sync workdir_text during arrow navigation
-        new_text = short(str(child))
-        if child.is_dir() and not new_text.endswith("/"):
-            new_text += "/"
-            
-        self.set_custom_workdir(child, "entered", text=new_text, layer="children")
+        self.set_custom_workdir(child, "entered", text=self.workdir_text_for_child(child), layer="children")
         self.restore_workdir_child_selection()
         
         # If still no selection after restore, select the first item to allow fast Right-arrow chains
@@ -673,16 +756,34 @@ class App:
                 
         self.workdir_modified = True
 
+    def can_enter_focused_workdir_child(self) -> bool:
+        child = self.selected_workdir_child()
+        return child is not None and self.workdir_has_visible_children(child)
+
     def current_workdir_browser_path(self) -> Path:
         if getattr(self, "workdir_text", None) is not None:
+            if getattr(self, "workdir_layer", "inline") == "children":
+                try:
+                    path = self.normalize_workdir_path(expand_workdir(self.workdir_text or ""))
+                    if path.is_dir():
+                        return path
+                except (OSError, RuntimeError, ValueError):
+                    pass
             base, _ = self.workdir_text_base_and_prefix()
             return base
         return self.normalize_workdir_path(Path(self.current_workdir_path()))
 
     def enter_workdir_parent(self) -> None:
-        resolved = self.current_workdir_browser_path()
+        focused_child = self.selected_workdir_child()
+        if focused_child is not None:
+            resolved = self.normalize_workdir_path(focused_child)
+        else:
+            resolved = self.normalize_workdir_path(Path(self.current_workdir_path()))
         home = self.home_path()
+        self.remember_focused_workdir_child()
         if not getattr(self, "workdir_override", False) and resolved == home:
+            self.set_custom_workdir(home, "set", text=short(str(home)), layer="path")
+            self.workdir_modified = True
             return
         previous_child_name = resolved.name
         parent = resolved.parent
@@ -692,20 +793,13 @@ class App:
         if not getattr(self, "workdir_override", False) and not self.path_inside_home(parent):
             parent = home
             
-        # Fast completion: sync text to parent
-        new_text = short(str(parent))
-        if not new_text.endswith("/"):
-            new_text += "/"
-            
-        self.set_custom_workdir(parent, "parent", text=new_text, layer="children")
         self.remember_workdir_child(parent, previous_child_name)
-        self.restore_workdir_child_selection()
-        
-        # Ensure we have a selection to stay in browsing mode
-        if self.workdir_child_index < 0:
-            children = self.filtered_workdir_children()
-            if children:
-                self.workdir_child_index = 0
+        self.set_custom_workdir(parent, "parent", text=short(str(parent)), layer="path")
+        if not getattr(self, "workdir_override", False) and parent == home:
+            self.workdir_modified = True
+            return
+        self.open_workdir_dropdown(parent.parent, parent, restore=False)
+        self.workdir_modified = True
 
     def edit_workdir(self) -> None:
         current = self.current_workdir_path()
@@ -799,35 +893,58 @@ class App:
         ]
         if prompt:
             cmd.append(prompt)
-        self.exec_or_preview(cmd)
+        self.confirm_exec_or_preview(cmd)
 
     def current_sessions(self) -> list[dict[str, Any]]:
         try:
             sessions = ai_registry.recent_sessions(
                 self.current_provider(),
                 self.current_profile(),
-                self.current_workdir_path(),
+                self.effective_workdir_path(),
                 limit=60,
             )
         except Exception as exc:  # pragma: no cover - defensive TUI boundary
             self.message = f"session list failed: {exc}"
             return []
-        sessions = [s for s in sessions if s.get("profile") == self.current_profile()]
-        self.session_index = max(0, min(self.session_index, max(0, len(sessions) - 1)))
-        return sessions
+        return [s for s in sessions if s.get("profile") == self.current_profile()]
+
+    def session_rows(self) -> list[dict[str, Any]]:
+        sessions = self.current_sessions()
+        rows: list[dict[str, Any]] = []
+        if sessions:
+            latest = dict(sessions[0])
+            latest["_kind"] = "last"
+            latest["session_id"] = "last"
+            latest["title"] = f"Last session: {latest.get('title') or short_time(str(latest.get('updated') or ''))}"
+            rows.append(latest)
+        rows.append(
+            {
+                "_kind": "new",
+                "session_id": "",
+                "title": "New session",
+                "last_prompt_summary": "Start with the current command builder values.",
+                "last_response_summary": "",
+            }
+        )
+        rows.extend(dict(session, _kind="session") for session in sessions)
+        self.session_index = max(-1, min(self.session_index, len(rows) - 1))
+        return rows
 
     def selected_session(self) -> dict[str, Any] | None:
-        sessions = self.current_sessions()
-        if not sessions:
+        sessions = self.session_rows()
+        if not sessions or self.session_index < 0:
             return None
         return sessions[self.session_index]
 
     def resume_selected(self) -> None:
-        if not self.commit_workdir_text_if_present():
-            return
         item = self.selected_session()
         if not item:
             self.message = "no selected session"
+            return
+        if item.get("_kind") == "new":
+            self.launch()
+            return
+        if not self.commit_workdir_text_if_present():
             return
         session_id = str(item.get("session_id") or "")
         if not session_id:
@@ -839,7 +956,7 @@ class App:
             *self.common_args(display=False),
             session_id,
         ]
-        self.exec_or_preview(cmd)
+        self.confirm_exec_or_preview(cmd)
 
     def add_line(self, y: int, x: int, text: str, width: int, attr: int = 0) -> None:
         h, _ = self.stdscr.getmaxyx()
@@ -863,7 +980,7 @@ class App:
         return curses.A_REVERSE | (curses.A_BOLD if focused else curses.A_DIM)
 
     def workdir_child_focused(self) -> bool:
-        return self.active_section() == "workdir" and getattr(self, "workdir_layer", "inline") == "children"
+        return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") in {"path", "children"}
 
     def workdir_inline_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "inline") == "inline"
@@ -902,15 +1019,14 @@ class App:
         return lines
 
     def draw_header(self, width: int) -> None:
-        selected = self.selected_session()
         command = self.command_line()
-        if self.active_section() == "sessions" and selected:
-            command = self.resume_command_line(str(selected.get("session_id") or ""))
+        if self.active_section() == "sessions":
+            command = self.selected_session_command_line()
         self.add_line(0, 0, " " + command, width - 1, curses.A_BOLD | curses.A_REVERSE)
         self.add_line(
             1,
             0,
-            f"Provider {self.current_provider().title()} | Profile {self.current_profile()} | Cwd {short(self.current_workdir_path())}",
+            f"Provider {self.current_provider().title()} | Profile {self.current_profile()} | Cwd {short(self.effective_workdir_path())}",
             width - 1,
         )
 
@@ -982,20 +1098,14 @@ class App:
         }
 
     def selected_workdir_path(self) -> tuple[str, str, str]:
-        if getattr(self, "workdir_layer", "inline") == "inline":
-            self.ensure_workdir_text()
-            text = self.workdir_text or ""
-            base, prefix = self.workdir_text_base_and_prefix()
-            segment = prefix or base.name or short(str(base))
-            return text, segment, ""
-        children = self.filtered_workdir_children()
-        if children and self.workdir_child_index >= 0:
-            self.workdir_child_index = min(self.workdir_child_index, len(children) - 1)
-            child = children[self.workdir_child_index]
+        child = self.selected_workdir_child()
+        if child is not None:
             return short(str(child)), child.name, ""
-        path = Path(self.current_workdir_path()).expanduser()
-        segment = path.name or short(str(path))
-        return short(str(path)), segment, ""
+        self.ensure_workdir_text()
+        text = self.workdir_text or ""
+        path = self.normalize_workdir_path(Path(self.current_workdir_path()))
+        segment = "~" if path == self.home_path() else path.name or short(str(path))
+        return text, segment, ""
 
     def path_segments(self, display_path: str, selected_segment: str, width: int, base_attr: int) -> list[tuple[str, int]]:
         if width <= 0:
@@ -1035,31 +1145,29 @@ class App:
         x0 = getattr(self, "workdir_child_x", 2)
         x0 = max(2, min(x0, max(2, width - 12)))
         children = self.filtered_workdir_children()
-        all_children = self.workdir_children()
-        if not all_children:
-            self.add_line(y, x0, "", width - x0 - 1, curses.A_DIM)
-            for n in range(1, rows):
-                self.add_line(y + n, x0, "", width - x0 - 1)
-            return y + rows
         if not children:
             self.add_line(y, x0, "", width - x0 - 1, curses.A_DIM)
             for n in range(1, rows):
                 self.add_line(y + n, x0, "", width - x0 - 1)
             return y + rows
 
+        children_active = getattr(self, "workdir_layer", "path") == "children"
+        
+        if not children_active:
+            self.workdir_child_index = -1
         if self.workdir_child_index >= len(children):
             self.workdir_child_index = len(children) - 1
         center = rows // 2
-        selected_for_window = max(0, self.workdir_child_index)
+        selected_for_window = max(0, self.workdir_child_index if children_active else 0)
         start = max(0, min(selected_for_window - center, max(0, len(children) - rows)))
         visible = children[start : start + rows]
         for n, child in enumerate(visible):
             item_idx = start + n
-            selected = item_idx == self.workdir_child_index
+            selected = children_active and item_idx == self.workdir_child_index
             marker = "> " if selected else "  "
             self.add_line(y + n, x0, "", width - x0 - 1)
             self.add_text(y + n, x0, marker, 2, curses.A_BOLD if selected else 0)
-            attr = self.selection_attr(self.workdir_child_focused()) if selected else 0
+            attr = self.selection_attr(True) if selected else curses.A_DIM
             self.add_text(y + n, x0 + 2, child.name, max(1, width - x0 - 3), attr)
         for n in range(len(visible), rows):
             self.add_line(y + n, x0, "", width - x0 - 1)
@@ -1074,9 +1182,10 @@ class App:
         self.add_text(y, 0, prefix, min(width - 1, len(prefix)), curses.A_BOLD if active else 0)
         x = len(prefix)
         base_attr = curses.A_BOLD if active else 0
+
         display_path, selected_segment, status = self.selected_workdir_path()
         right_hint = f" {status}"
-        if self.workdir_inline_focused() and getattr(self, "workdir_text", None) is not None:
+        if False and self.workdir_inline_focused() and getattr(self, "workdir_text", None) is not None:
             text = self.workdir_text or ""
             _, typed = self.workdir_text_base_and_prefix()
             suffix = self.workdir_completion_suffix() if typed and self.workdir_inline_focused() else ""
@@ -1110,23 +1219,12 @@ class App:
         if status_width and sx < width - 1:
             self.add_text(y, sx, right_hint, min(status_width, width - 1 - sx), curses.A_DIM)
 
-        # In selection (children) mode, align list under the base directory's slash
         if getattr(self, "workdir_layer", "inline") == "children":
-            base_path_str = ""
-            if getattr(self, "workdir_text", None) is not None:
-                # Use current literal text up to last slash
-                head, sep, _ = self.workdir_text.rpartition("/")
-                base_path_str = head + sep
-            else:
-                # Use current real workdir path parent
-                path = Path(self.current_workdir_path())
-                base_path_str = short(str(path.parent))
-                if not base_path_str.endswith("/"):
-                    base_path_str += "/"
-            
-            # Find where base_path_str ends in the display_path
-            # Note: display_path includes the selected child
-            self.workdir_child_x = x + cell_width(base_path_str) - 2
+            base_text = getattr(self, "workdir_dropdown_base", None) or self.current_workdir_path()
+            base_path_str = short(base_text)
+            if not base_path_str.endswith("/"):
+                base_path_str += "/"
+            self.workdir_child_x = max(2, x + cell_width(base_path_str) - 2)
         else:
             selected_x = x
             for text, attr in segments:
@@ -1156,7 +1254,8 @@ class App:
         self.draw_choice_row(y + 3, width, "profile", "Profile", profiles, self.indices["profile"])
         self.draw_workdir_row(y + 4, width)
         next_y = y + 5
-        if self.active_section() == "workdir":
+        show_dropdown = self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "children"
+        if show_dropdown:
             next_y = self.draw_workdir_children(next_y, width, child_rows)
         else:
             for n in range(child_rows):
@@ -1167,56 +1266,73 @@ class App:
     def draw_sessions(self, y: int, width: int, rows: int) -> None:
         if rows <= 2:
             return
-        sessions = self.current_sessions()
+        real_sessions = self.current_sessions()
+        sessions = self.session_rows()
         active = self.active_section() == "sessions"
-        title = f"Sessions: {self.current_provider().title()}/{self.current_profile()} ({len(sessions)})"
-        self.add_line(y, 0, title, width - 1, curses.A_BOLD | (curses.A_REVERSE if active else 0))
+        title = f"Sessions: {self.current_provider().title()}/{self.current_profile()} ({len(real_sessions)})"
+        self.add_line(y, 0, title, width - 1, curses.A_BOLD)
         if not sessions:
-            self.add_line(y + 1, 0, "No summaries yet. Press r to refresh the index.", width - 1)
+            self.add_line(y + 1, 0, "No summaries yet.", width - 1)
             return
 
-        list_rows = 2 if rows <= 7 else max(3, min(10, rows - 8))
+        list_y = y + 1
+        list_rows = 2 if rows <= 7 else max(3, min(10, rows - 9))
         self.list_meta["sessions"] = {
-            "y": y + 1,
+            "y": list_y,
             "x": 0,
             "w": width,
             "rows": list_rows,
             "start": self.session_scroll,
             "count": len(sessions),
             "top": y,
-            "height": list_rows + 1,
+            "height": list_rows + 2,
         }
         self.session_scroll = max(
             0,
             min(self.session_scroll, max(0, len(sessions) - list_rows)),
         )
-        if self.session_index < self.session_scroll:
+        if self.session_index >= 0 and self.session_index < self.session_scroll:
             self.session_scroll = self.session_index
-        if self.session_index >= self.session_scroll + list_rows:
+        if self.session_index >= 0 and self.session_index >= self.session_scroll + list_rows:
             self.session_scroll = self.session_index - list_rows + 1
         self.list_meta["sessions"]["start"] = self.session_scroll
 
         for n in range(list_rows):
             item_idx = self.session_scroll + n
             if item_idx >= len(sessions):
-                self.add_line(y + 1 + n, 0, "", width - 1)
+                self.add_line(list_y + n, 0, "", width - 1)
                 continue
             item = sessions[item_idx]
-            selected_row = item_idx == self.session_index
+            selected_row = self.session_index >= 0 and item_idx == self.session_index
             marker = "> " if selected_row else "  "
-            where = short(str(item.get("workdir") or ""))
-            line = (
-                f"{marker}{short_time(str(item.get('updated') or ''))} "
-                f"{item.get('profile','')} {where} {item.get('title','')}"
-            )
+            if item.get("_kind") == "new":
+                line = f"{marker}New session"
+            elif item.get("_kind") == "last":
+                line = f"{marker}Last session {short_time(str(item.get('updated') or ''))} {item.get('title','')}"
+            else:
+                where = short(str(item.get("workdir") or ""))
+                line = (
+                    f"{marker}{short_time(str(item.get('updated') or ''))} "
+                    f"{item.get('profile','')} {where} {item.get('title','')}"
+                )
             attr = self.selection_attr(active) if selected_row else 0
-            self.add_line(y + 1 + n, 0, line, width - 1, attr)
+            self.add_line(list_y + n, 0, line, width - 1, attr)
 
-        preview_y = y + list_rows + 1
+        preview_y = list_y + list_rows + 1
+        self.add_line(preview_y - 1, 0, "", width - 1)
+        if self.session_index < 0:
+            self.add_line(preview_y, 0, "", width - 1)
+            return
         selected = sessions[self.session_index]
         session_id = str(selected.get("session_id") or "")
         selected_attr = self.selection_attr(active)
-        self.add_line(preview_y, 0, f"Selected: {session_id}", width - 1, selected_attr)
+        if selected.get("_kind") == "new":
+            selected_label = "New session"
+        elif selected.get("_kind") == "last":
+            selected_label = "Last session (resume --last)"
+        else:
+            selected_label = session_id
+        self.add_line(preview_y, 0, f"Selected: {selected_label}", width - 1, selected_attr)
         row = preview_y + 1
         preview_space = max(2, rows - list_rows - 3)
         max_prompt = max(1, preview_space // 2)
@@ -1248,8 +1364,8 @@ class App:
             child_rows = max(0, available_after_builder - 8)
         sessions_y = self.draw_controls(3, w, child_rows) + 1
         self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
-        self.add_line(h - 3, 0, "Shift+Tab builder/sessions | Arrows select/profile/cwd/session | Type filters cwd | Enter launch/resume | s resume | g manage | Esc quit", w - 1, curses.A_DIM)
-        self.add_line(h - 2, 0, "Workdir: inline typing first; Down enters folder list; Left/Right browse only in folder list; Tab completes typed prefix.", w - 1, curses.A_DIM)
+        self.add_line(h - 3, 0, "Tab cycles builder | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
+        self.add_line(h - 2, 0, "Workdir: Down opens sibling list; Left/Right moves directory levels; leaf Right keeps the list open.", w - 1, curses.A_DIM)
         self.add_line(h - 1, 0, self.message, w - 1)
         self.update_cursor()
         self.stdscr.refresh()
@@ -1261,13 +1377,7 @@ class App:
         lines = [
             "This page holds setup actions so the launch screen stays focused.",
             "",
-            "w  add workdir",
-            "d  edit workdirs registry",
-            "p  list provider profiles",
-            "v  list gateways",
-            "b  bridge status",
-            "",
-            "q or g  return to launcher",
+            "Esc  return to launcher",
         ]
         for n, line in enumerate(lines, start=2):
             self.add_line(n, 0, line, w - 1)
@@ -1301,111 +1411,116 @@ class App:
     def active_section(self) -> str:
         return SECTIONS[self.section]
 
+    def enter_sessions(self) -> None:
+        self.last_builder_section = min(self.section, len(BUILDER_SECTIONS) - 1)
+        self.section = SECTIONS.index("sessions")
+        sessions = self.session_rows()
+        self.session_index = 0 if sessions else -1
+        self.session_scroll = 0
+
+    def return_to_builder(self) -> None:
+        self.section = max(0, min(self.last_builder_section, len(BUILDER_SECTIONS) - 1))
+
     def move_section(self, direction: int) -> None:
         if self.active_section() == "sessions":
-            self.section = self.last_builder_section
+            self.return_to_builder()
             return
         current = min(self.section, len(BUILDER_SECTIONS) - 1)
         self.section = max(0, min(current + direction, len(BUILDER_SECTIONS) - 1))
         self.last_builder_section = self.section
         if self.active_section() == "workdir":
-            self.workdir_layer = "inline"
-            self.workdir_child_index = -1
-            self.workdir_modified = False
+            self.focus_workdir_path()
 
     def toggle_panel(self) -> None:
         if self.active_section() == "sessions":
-            self.section = self.last_builder_section
+            self.return_to_builder()
+            self.focus_workdir_path()
         else:
-            self.last_builder_section = min(self.section, len(BUILDER_SECTIONS) - 1)
-            self.section = SECTIONS.index("sessions")
+            self.enter_sessions()
+
+    def next_section(self) -> None:
+        if self.active_section() == "sessions":
+            return
+        if self.active_section() == "workdir":
+            self.commit_focused_workdir()
+            self.section = SECTIONS.index("mode")
+            self.last_builder_section = self.section
+            return
+        current = min(self.section, len(BUILDER_SECTIONS) - 1)
+        self.section = (current + 1) % len(BUILDER_SECTIONS)
+        self.last_builder_section = self.section
+        if self.active_section() == "workdir":
+            self.focus_workdir_path()
+
+    def previous_section(self) -> None:
+        if self.active_section() == "mode":
+            return
+        if self.active_section() == "sessions":
+            return
+        self.move_section(-1)
 
     def vertical_action(self, direction: int) -> None:
         section = self.active_section()
         if section == "sessions":
             self.move_selection(direction)
+        elif section == "profile" and direction > 0:
+            self.section = SECTIONS.index("workdir")
+            self.last_builder_section = self.section
+            self.focus_workdir_path()
         elif section == "workdir":
-            layer = getattr(self, "workdir_layer", "inline")
-            if layer == "inline":
-                children = self.filtered_workdir_children()
-                if direction > 0 and children:
-                    self.workdir_layer = "children"
-                    self.select_workdir_child_for_inline_down()
-                elif direction < 0:
-                    self.move_section(-1)
-                return
-            
-            # Layer is "children"
-            children = self.filtered_workdir_children() or self.workdir_children()
-            if direction < 0 and self.workdir_child_index <= 0:
-                self.workdir_child_index = -1
-                self.workdir_layer = "inline"
-            elif children:
+            if getattr(self, "workdir_layer", "path") == "children":
                 self.cycle_workdir_child(direction)
-            elif direction < 0:
-                self.workdir_child_index = -1
-                self.workdir_layer = "inline"
+            elif direction > 0:
+                current = self.normalize_workdir_path(Path(self.current_workdir_path()))
+                if not getattr(self, "workdir_override", False) and current == self.home_path():
+                    self.open_workdir_dropdown(current)
+                else:
+                    self.open_workdir_dropdown(current.parent, current)
+            else:
+                self.previous_section()
         else:
             self.move_section(direction)
 
     def complete_workdir_inline(self) -> None:
         if self.active_section() != "workdir":
-            self.message = "Shift+Tab switches sessions"
+            self.message = "inline completion is backup-only"
             return
         self.workdir_layer = "inline"
+        self.workdir_child_index = -1
         text = getattr(self, "workdir_text", "") or ""
-
-        # Improved Tab completion with cycling support
-        if hasattr(self, "_last_tab_text") and self._last_tab_text == text:
-            pass
-        else:
-            self._last_tab_text = text
-            self._tab_base, self._tab_prefix = self.workdir_text_base_and_prefix()
-            self.workdir_child_index = -1
-            
-            # Store the base string once so cycling doesn't infinitely append
-            head, sep, _ = text.rpartition("/")
-            self._tab_base_str = head + sep if sep else ""
-
-        if not self._tab_prefix:
+        base, prefix = self.workdir_text_base_and_prefix()
+        if not prefix:
+            try:
+                path = expand_workdir(text)
+                if path.is_dir():
+                    self.set_custom_workdir(path, "set", text=self.workdir_text_for_child(path), layer="inline")
+                    self.workdir_modified = True
+                    return
+            except (OSError, RuntimeError, ValueError):
+                pass
             self.workdir_child_index = -1
             self.message = "type a child prefix"
             return
 
-        try:
-            path = self._tab_base
-            prefix = self._tab_prefix
-            children = [child for child in path.iterdir() if child.is_dir() and self.visible_workdir_child(child)]
-            children = sorted(children, key=lambda p: p.name.lower())
-            if prefix:
-                needle = prefix.lower()
-                children = [child for child in children if child.name.lower().startswith(needle)]
-        except OSError:
-            return
-
-        if not children:
+        child = self.workdir_best_match()
+        if child is None:
             if text:
                 try:
                     p = expand_workdir(text)
                     if p.is_dir() and not text.endswith("/"):
-                        self.workdir_text = text + "/"
-                        self._last_tab_text = self.workdir_text
+                        self.set_custom_workdir(p, "set", text=text + "/", layer="inline")
+                        self.workdir_modified = True
                         return
-                except:
+                except (OSError, RuntimeError, ValueError):
                     pass
             self.message = "no matches"
             return
 
-        self.workdir_child_index = (self.workdir_child_index + 1) % len(children)
-        child = children[self.workdir_child_index]
-
-        # Use the fixed base string stored at the start of the cycle
-        new_text = self._tab_base_str + child.name
+        new_text = self.workdir_text_with_child(child)
         if self.workdir_has_visible_children(child):
             new_text += "/"
-
-        self.workdir_text = new_text
-        self._last_tab_text = new_text
+        self.set_custom_workdir(child, "set", text=new_text, layer="inline")
+        self.workdir_modified = True
 
     def change_option(self, section: str, direction: int) -> None:
         if section == "mode":
@@ -1426,12 +1541,15 @@ class App:
         if section in {"mode", "provider", "profile"}:
             self.change_option(section, direction)
         elif section == "workdir":
-            if getattr(self, "workdir_layer", "inline") != "children":
-                return
             if direction < 0:
                 self.enter_workdir_parent()
             else:
-                self.enter_workdir_child()
+                if getattr(self, "workdir_layer", "path") == "children":
+                    if not self.can_enter_focused_workdir_child():
+                        self.message = "no child directory"
+                        return
+                    self.commit_focused_workdir()
+                self.open_workdir_dropdown(self.normalize_workdir_path(Path(self.current_workdir_path())))
         elif section == "sessions":
             self.move_selection(direction)
 
@@ -1443,39 +1561,21 @@ class App:
         is_text_key = 32 <= ch <= 126
         if not is_edit_key and not is_text_key:
             return False
-
-        self.ensure_workdir_text()
-        self.materialize_workdir_child_for_text()
-        self.workdir_layer = "inline"
-        self.workdir_modified = True
-
-        if ch in (curses.KEY_BACKSPACE, 127, 8):
-            # Block deletion of ~/ prefix
-            if self.workdir_text == "~/":
-                if not getattr(self, "workdir_override", False):
-                    return True
-            self.workdir_text = self.workdir_text[:-1]
-            self.reset_workdir_child_selection_after_text_change()
-            return True
-        if ch in (curses.KEY_DC, 21):
-            self.workdir_text = "~/"
-            self.workdir_child_index = -1
-            return True
-        if 32 <= ch <= 126:
-            self.workdir_text += chr(ch)
-            self.reset_workdir_child_selection_after_text_change()
-            return True
-        return False
+        if is_text_key and ch == ord("/"):
+            return False
+        self.message = "press / to edit workdir"
+        return True
 
     def move_selection(self, direction: int) -> None:
         section = self.active_section()
         if section in {"mode", "provider", "profile"}:
             self.change_option(section, direction)
         elif section == "workdir":
-            self.cycle_workdir_child(direction)
+            self.vertical_action(direction)
         elif section == "sessions":
-            sessions = self.current_sessions()
-            self.session_index = max(0, min(self.session_index + direction, len(sessions) - 1))
+            sessions = self.session_rows()
+            current = self.session_index if self.session_index >= 0 else 0
+            self.session_index = max(0, min(current + direction, len(sessions) - 1))
 
     def move_to_edge(self, end: bool) -> None:
         section = self.active_section()
@@ -1492,11 +1592,10 @@ class App:
             self.remember_current_profile()
             self.reset_sessions()
         elif section == "workdir":
-            children = self.workdir_children()
-            self.workdir_child_index = max(0, len(children) - 1) if end else 0
-            self.workdir_layer = "children" if children else "inline"
+            self.workdir_layer = "inline"
+            self.workdir_child_index = -1
         elif section == "sessions":
-            sessions = self.current_sessions()
+            sessions = self.session_rows()
             self.session_index = max(0, len(sessions) - 1) if end else 0
 
     def page_size(self) -> int:
@@ -1557,7 +1656,7 @@ class App:
             self.session_index = 0
             self.session_scroll = 0
         elif section == "sessions":
-            sessions = self.current_sessions()
+            sessions = self.session_rows()
             self.session_index = max(0, min(item_idx, len(sessions) - 1))
 
     def mouse_scroll_delta(self, bstate: int) -> int:
@@ -1593,40 +1692,55 @@ class App:
             return
 
     def handle_manage_key(self, ch: int) -> int | None:
-        if ch in (ord("q"), ord("g"), 27):
+        if ch == 27:
             self.view = "main"
-        elif ch == ord("w"):
-            self.add_workdir()
-        elif ch == ord("d"):
-            self.open_file(ai_registry.WORKDIRS_FILE)
-        elif ch == ord("p"):
-            self.shell([AI_BIN, "profiles"])
-        elif ch == ord("v"):
-            self.shell([AI_BIN, "gateways"])
-        elif ch == ord("b"):
-            self.shell([AI_BIN, "bridge", "status"])
         return None
 
     def handle_main_key(self, ch: int) -> int | None:
         if ch == 3:
             return 130
+        if getattr(self, "pending_action", None):
+            action = self.pending_action
+            cmd = getattr(self, "pending_cmd", None)
+            if action == "exec" and ch in (10, 13) and cmd:
+                self.pending_action = None
+                self.pending_cmd = None
+                self.exec_or_preview(cmd)
+                return None
+            if action == "quit" and ch == 27:
+                return 0
+            self.pending_action = None
+            self.pending_cmd = None
+            self.message = "cancelled"
+            return None
         if ch == 27:
-            return 0
+            if self.active_section() == "sessions":
+                self.return_to_builder()
+                self.message = ""
+            else:
+                self.pending_action = "quit"
+                self.pending_cmd = None
+                self.message = "Press Esc again to quit"
+            return None
         if self.active_section() == "workdir" and self.handle_workdir_text_key(ch):
             return None
-        if ch == ord("q"):
-            return 0
+        if self.active_section() == "workdir" and ch == ord("/"):
+            if hasattr(self, "stdscr"):
+                self.edit_workdir()
+            else:
+                self.message = "press / to edit workdir"
+            return None
         if ch == curses.KEY_RIGHT:
             self.horizontal_action(1)
         elif ch == curses.KEY_LEFT:
             self.horizontal_action(-1)
         elif ch == 9:
-            self.complete_workdir_inline()
+            self.next_section()
         elif ch == curses.KEY_BTAB:
-            self.toggle_panel()
-        elif ch in (curses.KEY_DOWN, ord("j")):
+            self.message = "use Tab to move focus"
+        elif ch == curses.KEY_DOWN:
             self.vertical_action(1)
-        elif ch in (curses.KEY_UP, ord("k")):
+        elif ch == curses.KEY_UP:
             self.vertical_action(-1)
         elif ch == curses.KEY_NPAGE:
             self.move_selection(self.page_size())
@@ -1642,17 +1756,9 @@ class App:
             if self.active_section() == "sessions":
                 self.resume_selected()
             else:
-                self.launch()
-        elif ch == ord("l"):
-            self.launch()
-        elif ch == ord("s"):
-            self.resume_selected()
-        elif ch == ord("m"):
-            self.indices["mode"] = (self.indices["mode"] + 1) % len(MODES)
-        elif ch == ord("r"):
-            self.refresh_sessions()
-        elif ch == ord("g"):
-            self.view = "manage"
+                if self.active_section() == "workdir":
+                    self.commit_focused_workdir()
+                self.enter_sessions()
         return None
 
     def run(self) -> int:

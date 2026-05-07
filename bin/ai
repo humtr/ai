@@ -49,6 +49,7 @@ ai = AI Manager
 Default:
   ai                                  -> open TUI when attached to a terminal
   ai tui                              -> open TUI launcher/editor
+  ai wkd-intent [--output PATH]       -> open TUI-shaped workdir key recorder
 
 Core modes:
   ai ask [provider] [options] "prompt"  -> no-tool chat
@@ -1585,6 +1586,15 @@ tui_cmd() {
   python "$(ai_lib_file ai_tui.py)"
 }
 
+wkd_intent_cmd() {
+  if ! [ -t 0 ] || ! [ -t 1 ]; then
+    echo "ERROR: ai wkd-intent requires a TTY" >&2
+    return 2
+  fi
+  export AI_BIN="${AI_BIN:-$HOME/bin/ai}"
+  python "$(ai_lib_file wkd_key_intent.py)" "$@"
+}
+
 up_cmd() {
   need hgw || return $?
   hgw bridge start || true
@@ -1754,6 +1764,7 @@ case "$cmd" in
   hermes) provider_or_router hermes "$@" ;;
 
   tui) tui_cmd "$@" ;;
+  wkd-intent|wkd-intentions|intent) wkd_intent_cmd "$@" ;;
 
   hgw|gateway|gw) need hgw && exec hgw "$@" ;;
   hgb) need hgb && exec hgb "$@" ;;
