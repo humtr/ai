@@ -15,6 +15,11 @@ from typing import Any
 import ai_registry
 
 
+# Set ncurses ESC timeout to 50ms (default is 1000ms) to make Esc key responsive.
+# Must be set before curses is initialized.
+os.environ.setdefault("ESCDELAY", "50")
+
+
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 AI_BIN = os.environ.get("AI_BIN", str(HOME / "bin" / "ai"))
 MODES = ["run", "task", "ask", "plan"]
@@ -972,7 +977,7 @@ class App:
             pass
 
     def selection_attr(self, focused: bool) -> int:
-        return curses.A_REVERSE | (curses.A_BOLD if focused else curses.A_DIM)
+        return curses.A_REVERSE | curses.A_BOLD | (0 if focused else curses.A_DIM)
 
     def workdir_child_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") in {"path", "children"}
