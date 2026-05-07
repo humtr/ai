@@ -507,7 +507,7 @@ WORKDIR_TAB_CHILD_OUT="$(
 [ "$WORKDIR_TAB_CHILD_OUT" = "~/work/main/tests path -1 ~/work/main/tests 3" ] && ok "workdir tab commits focused dropdown child and stays in workdir section" || { fail "workdir tab commits focused dropdown child and stays in workdir section"; printf 'actual: %s\n' "$WORKDIR_TAB_CHILD_OUT" >&2; }
 
 WORKDIR_VISUAL_LIST_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'from pathlib import Path; import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.list_meta={}; app.workdir_text="~/wo"; app.workdir_modified=True; app.workdir_layer="inline"; app.workdir_child_index=-1; app.filtered_workdir_children=lambda:[Path("'"$HOME_FIXTURE"'/work")]; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.draw_workdir_row(0,100); app.draw_workdir_children(1,100,3); print(any(y == 1 and text == "work" for y,text,attr in calls), any(y == 1 and attr & curses.A_REVERSE for y,text,attr in calls))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'from pathlib import Path; import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.list_meta={}; app.workdir_text="~/wo"; app.workdir_modified=True; app.workdir_layer="inline"; app.workdir_child_index=-1; app.filtered_workdir_children=lambda:[Path("'"$HOME_FIXTURE"'/work")]; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.draw_workdir_row(0,100); app.draw_workdir_children(1,100,3); print(any(y == 1 and text == "work/" for y,text,attr in calls), any(y == 1 and attr & curses.A_REVERSE for y,text,attr in calls))'
 )"
 [ "$WORKDIR_VISUAL_LIST_OUT" = "True False" ] && ok "workdir completion list previews candidates before activation" || { fail "workdir completion list previews candidates before activation"; printf 'actual: %s\n' "$WORKDIR_VISUAL_LIST_OUT" >&2; }
 
@@ -606,8 +606,8 @@ app.add_text=lambda y,x,text,width,attr=0: calls.append((y,x,text,attr))
 app.draw_workdir_row(0,100)
 app.draw_workdir_children(1,100,3)
 text_x=[x for y,x,text,attr in calls if text == "~/work/main/" and y == 0][0]
-child_x=[x for y,x,text,attr in calls if text == "src" and y == 1][0]
-selected=any(text == "src" and attr & curses.A_REVERSE for y,x,text,attr in calls)
+child_x=[x for y,x,text,attr in calls if text == "src/" and y == 1][0]
+selected=any(text == "src/" and attr & curses.A_REVERSE for y,x,text,attr in calls)
 print(text_x + ai_tui.cell_width("~/work/main/"), child_x, selected)'
 )"
 [ "$WORKDIR_ROULETTE_X_OUT" = "26 26 True" ] && ok "workdir focused dropdown aligns under child segment with reverse highlight" || { fail "workdir focused dropdown aligns under child segment with reverse highlight"; printf 'actual: %s\n' "$WORKDIR_ROULETTE_X_OUT" >&2; }

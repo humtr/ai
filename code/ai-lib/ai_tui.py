@@ -1162,8 +1162,13 @@ class App:
             marker = "> " if selected else "  "
             self.add_line(y + n, x0, "", width - x0 - 1)
             self.add_text(y + n, x0, marker, 2, curses.A_BOLD if selected else 0)
+            
+            display_name = child.name
+            if self.workdir_has_visible_children(child):
+                display_name += "/"
+                
             attr = self.selection_attr(True) if selected else curses.A_DIM
-            self.add_text(y + n, x0 + 2, child.name, max(1, width - x0 - 3), attr)
+            self.add_text(y + n, x0 + 2, display_name, max(1, width - x0 - 3), attr)
         for n in range(len(visible), rows):
             self.add_line(y + n, x0, "", width - x0 - 1)
         return y + rows
