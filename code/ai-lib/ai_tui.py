@@ -24,7 +24,8 @@ HOME = Path(os.environ.get("HOME", str(Path.home())))
 AI_BIN = os.environ.get("AI_BIN", str(HOME / "bin" / "ai"))
 MODES = ["run", "task", "ask", "plan"]
 PROVIDERS = ["codex", "gemini", "hermes"]
-BUILDER_SECTIONS = ["mode", "provider", "profile", "workdir"]
+SESSION_CHOICES = ["resume", "new"]
+BUILDER_SECTIONS = ["mode", "provider", "profile", "session", "workdir"]
 SECTIONS = BUILDER_SECTIONS + ["sessions"]
 
 
@@ -156,7 +157,7 @@ class App:
         self.stdscr = stdscr
         self.view = "main"
         self.section = 0
-        self.indices = {"mode": 0, "provider": 0, "profile": 0, "workdir": 0}
+        self.indices = {"mode": 0, "provider": 0, "profile": 0, "session": 0, "workdir": 0}
         self.scroll_offsets = {section: 0 for section in SECTIONS}
         self.list_meta: dict[str, dict[str, int]] = {}
         self.custom_workdir: str | None = None
@@ -183,8 +184,13 @@ class App:
         self.profiles: list[str] = []
         self.profile_memory: dict[str, str] = {}
         self.workdirs: list[dict[str, Any]] = []
+        self.selection_active_attr = curses.A_REVERSE | curses.A_BOLD
+        self.selection_inactive_attr = curses.A_REVERSE | curses.A_DIM
         self.reload()
         self.refresh_sessions(silent=True)
+
+    def init_colors(self) -> None:
+        return
 
     def reload(self) -> None:
         ai_registry.ensure_registry()
@@ -250,6 +256,7 @@ class App:
         self.indices["mode"] = max(0, min(self.indices["mode"], len(MODES) - 1))
         self.indices["provider"] = max(0, min(self.indices["provider"], len(PROVIDERS) - 1))
         self.indices["profile"] = max(0, min(self.indices["profile"], len(self.profiles) - 1))
+        self.indices["session"] = max(0, min(self.indices["session"], len(SESSION_CHOICES) - 1))
         self.indices["workdir"] = max(0, min(self.indices["workdir"], len(self.workdirs) - 1))
         for section in SECTIONS:
             self.scroll_offsets[section] = max(0, self.scroll_offsets.get(section, 0))
@@ -305,6 +312,9 @@ class App:
     def current_profile(self) -> str:
         return self.current_profile_label()
 
+    def current_session_choice(self) -> str:
+        return SESSION_CHOICES[getattr(self, "indices", {}).get("session", 0)]
+
     def remember_current_profile(self) -> None:
         if self.profiles:
             self.profile_memory[self.current_provider()] = self.current_profile_label()
@@ -355,6 +365,9 @@ class App:
     def command_line(self) -> str:
         return " ".join(["ai", self.current_mode(), *self.common_args(display=True)])
 
+    def run_command(self) -> list[str]:
+        return [AI_BIN, self.current_mode(), *self.common_args(display=False)]
+
     def resume_command_line(self, session_id: str) -> str:
         return " ".join(["ai", "resume", *self.common_args(display=True), session_id])
 
@@ -364,6 +377,14 @@ class App:
             return self.command_line()
         session_id = str(selected.get("session_id") or "")
         return self.resume_command_line(session_id)
+
+    def session_choice_command_line(self) -> str:
+        if self.current_session_choice() == "resume":
+            selected = self.selected_session()
+            if selected and selected.get("session_id"):
+                return self.resume_command_line(str(selected.get("session_id") or ""))
+            return " ".join(["ai", "resume", *self.common_args(display=True)])
+        return self.command_line()
 
     def refresh_sessions(self, silent: bool = False) -> None:
         try:
@@ -910,22 +931,7 @@ class App:
 
     def session_rows(self) -> list[dict[str, Any]]:
         sessions = self.current_sessions()
-        rows: list[dict[str, Any]] = []
-        if sessions:
-            latest = dict(sessions[0])
-            latest["_kind"] = "last"
-            latest["title"] = f"Last session: {latest.get('title') or short_time(str(latest.get('updated') or ''))}"
-            rows.append(latest)
-        rows.append(
-            {
-                "_kind": "new",
-                "session_id": "",
-                "title": "New session",
-                "last_prompt_summary": "Start with the current command builder values.",
-                "last_response_summary": "",
-            }
-        )
-        rows.extend(dict(session, _kind="session") for session in sessions)
+        rows = [dict(session, _kind="session") for session in sessions]
         self.session_index = max(-1, min(self.session_index, len(rows) - 1))
         return rows
 
@@ -940,9 +946,6 @@ class App:
         if not item:
             self.message = "no selected session"
             return
-        if item.get("_kind") == "new":
-            self.launch()
-            return
         if not self.commit_workdir_text_if_present():
             return
         session_id = str(item.get("session_id") or "")
@@ -956,6 +959,11 @@ class App:
             session_id,
         ]
         self.confirm_exec_or_preview(cmd)
+
+    def execute_new_session(self) -> None:
+        if not self.commit_workdir_text_if_present():
+            return
+        self.confirm_exec_or_preview(self.run_command())
 
     def add_line(self, y: int, x: int, text: str, width: int, attr: int = 0) -> None:
         h, _ = self.stdscr.getmaxyx()
@@ -976,7 +984,13 @@ class App:
             pass
 
     def selection_attr(self, focused: bool) -> int:
-        return curses.A_REVERSE | curses.A_BOLD | (0 if focused else curses.A_DIM)
+        if not hasattr(self, "selection_active_attr"):
+            self.selection_active_attr = curses.A_REVERSE | curses.A_BOLD
+        if not hasattr(self, "selection_inactive_attr"):
+            self.selection_inactive_attr = curses.A_REVERSE | curses.A_DIM
+        if focused:
+            return self.selection_active_attr
+        return self.selection_inactive_attr
 
     def workdir_child_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") in {"path", "children"}
@@ -1076,11 +1090,15 @@ class App:
             if x >= width - 1:
                 break
             item_width = min(cell_width(item), max(0, width - 1 - x))
-            attr = self.selection_attr(active) if item_idx == idx else (curses.A_BOLD if active else curses.A_DIM)
+            if item_idx == idx:
+                attr = self.selection_attr(active)
+            else:
+                attr = 0 if active else curses.A_DIM
             self.add_text(y, x, item, item_width, attr)
             x += item_width
             if offset + 1 < len(visible_items) and x < width - 1:
-                self.add_text(y, x, " " * gap, min(gap, width - 1 - x), (curses.A_BOLD if active else curses.A_DIM))
+                gap_attr = 0 if active else curses.A_DIM
+                self.add_text(y, x, " " * gap, min(gap, width - 1 - x), gap_attr)
                 x += gap
         if visible_start + len(visible_items) < len(items) and x < width - 1:
             self.add_text(y, x, "...", min(3, width - 1 - x), curses.A_DIM)
@@ -1189,6 +1207,8 @@ class App:
         self.add_text(y, 0, prefix, min(width - 1, len(prefix)), curses.A_BOLD if active else 0)
         x = len(prefix)
         base_attr = curses.A_BOLD if active else 0
+        if getattr(self, "workdir_layer", "inline") == "children":
+            base_attr |= curses.A_DIM
 
         display_path, selected_segment, status = self.selected_workdir_path()
         right_hint = f" {status}"
@@ -1259,8 +1279,10 @@ class App:
         self.draw_choice_row(y + 2, width, "provider", "Provider", [p.title() for p in PROVIDERS], self.indices["provider"])
         profiles = getattr(self, "profiles", ["default"])
         self.draw_choice_row(y + 3, width, "profile", "Profile", profiles, self.indices["profile"])
-        self.draw_workdir_row(y + 4, width)
-        next_y = y + 5
+        session_idx = getattr(self, "indices", {}).get("session", 0)
+        self.draw_choice_row(y + 4, width, "session", "Session", [choice.title() for choice in SESSION_CHOICES], session_idx)
+        self.draw_workdir_row(y + 5, width)
+        next_y = y + 6
         show_dropdown = self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "children"
         if show_dropdown:
             next_y = self.draw_workdir_children(next_y, width, child_rows)
@@ -1312,16 +1334,11 @@ class App:
             item = sessions[item_idx]
             selected_row = self.session_index >= 0 and item_idx == self.session_index
             marker = "> " if selected_row else "  "
-            if item.get("_kind") == "new":
-                line = f"{marker}New session"
-            elif item.get("_kind") == "last":
-                line = f"{marker}Last session {short_time(str(item.get('updated') or ''))} {item.get('title','')}"
-            else:
-                where = short(str(item.get("workdir") or ""))
-                line = (
-                    f"{marker}{short_time(str(item.get('updated') or ''))} "
-                    f"{item.get('profile','')} {where} {item.get('title','')}"
-                )
+            where = short(str(item.get("workdir") or ""))
+            line = (
+                f"{marker}{short_time(str(item.get('updated') or ''))} "
+                f"{item.get('profile','')} {where} {item.get('title','')}"
+            )
             attr = self.selection_attr(active) if selected_row else 0
             self.add_line(list_y + n, 0, line, width - 1, attr)
 
@@ -1333,15 +1350,15 @@ class App:
         selected = sessions[self.session_index]
         session_id = str(selected.get("session_id") or "")
         selected_attr = self.selection_attr(active)
-        if selected.get("_kind") == "new":
-            selected_label = "New session"
-        elif selected.get("_kind") == "last":
-            selected_label = "Last session (resume --last)"
-        else:
-            selected_label = session_id
-        self.add_line(preview_y, 0, f"Selected: {selected_label}", width - 1, selected_attr)
-        row = preview_y + 1
-        preview_space = max(2, rows - list_rows - 3)
+        selected_summary = (
+            f"{short_time(str(selected.get('updated') or ''))} "
+            f"{selected.get('profile','')} {short(str(selected.get('workdir') or ''))} {selected.get('title','')}"
+        ).strip()
+        self.add_line(preview_y, 0, "Selected session", width - 1, selected_attr)
+        self.add_line(preview_y + 1, 2, f"ID: {session_id or '-'}", width - 3)
+        self.add_line(preview_y + 2, 2, f"Meta: {selected_summary or '-'}", width - 3)
+        row = preview_y + 3
+        preview_space = max(2, rows - list_rows - 5)
         max_prompt = max(1, preview_space // 2)
         max_answer = max(1, preview_space - max_prompt)
         for line in self.wrap_lines("Prompt", str(selected.get("last_prompt_summary") or ""), width - 3, max_prompt):
@@ -1369,7 +1386,8 @@ class App:
         child_rows = max(3, min(8, available_after_builder // 3))
         if available_after_builder - child_rows < 8:
             child_rows = max(0, available_after_builder - 8)
-        sessions_y = self.draw_controls(3, w, child_rows) + 1
+        self.add_line(2, 0, "", w - 1)
+        sessions_y = self.draw_controls(4, w, child_rows) + 1
         self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
         self.add_line(h - 3, 0, "Tab cycles builder | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
         self.add_line(h - 2, 0, "Workdir: Down opens sibling list; Left/Right moves directory levels; leaf Right keeps the list open.", w - 1, curses.A_DIM)
@@ -1464,13 +1482,20 @@ class App:
             return
         if self.active_section() == "sessions":
             return
-        self.move_section(-1)
+        current = min(self.section, len(BUILDER_SECTIONS) - 1)
+        self.section = (current - 1) % len(BUILDER_SECTIONS)
+        self.last_builder_section = self.section
+        if self.active_section() == "workdir":
+            self.focus_workdir_path()
 
     def vertical_action(self, direction: int) -> None:
         section = self.active_section()
         if section == "sessions":
             self.move_selection(direction)
         elif section == "profile" and direction > 0:
+            self.section = SECTIONS.index("session")
+            self.last_builder_section = self.section
+        elif section == "session" and direction > 0:
             self.section = SECTIONS.index("workdir")
             self.last_builder_section = self.section
             self.focus_workdir_path()
@@ -1484,7 +1509,9 @@ class App:
                 else:
                     self.open_workdir_dropdown(current.parent, current)
             else:
-                self.previous_section()
+                if self.active_section() == "workdir":
+                    self.section = SECTIONS.index("session")
+                    self.last_builder_section = self.section
         else:
             self.move_section(direction)
 
@@ -1542,10 +1569,12 @@ class App:
             self.indices["profile"] = (self.indices["profile"] + direction) % len(self.profiles)
             self.remember_current_profile()
             self.reset_sessions()
+        elif section == "session":
+            self.indices["session"] = (self.indices["session"] + direction) % len(SESSION_CHOICES)
 
     def horizontal_action(self, direction: int) -> None:
         section = self.active_section()
-        if section in {"mode", "provider", "profile"}:
+        if section in {"mode", "provider", "profile", "session"}:
             self.change_option(section, direction)
         elif section == "workdir":
             if direction < 0:
@@ -1575,7 +1604,7 @@ class App:
 
     def move_selection(self, direction: int) -> None:
         section = self.active_section()
-        if section in {"mode", "provider", "profile"}:
+        if section in {"mode", "provider", "profile", "session"}:
             self.change_option(section, direction)
         elif section == "workdir":
             self.vertical_action(direction)
@@ -1771,12 +1800,16 @@ class App:
             else:
                 if self.active_section() == "workdir":
                     self.commit_focused_workdir()
-                self.enter_sessions()
+                if self.current_session_choice() == "resume":
+                    self.enter_sessions()
+                else:
+                    self.execute_new_session()
         return None
 
     def run(self) -> int:
         curses.curs_set(0)
         self.stdscr.keypad(True)
+        self.init_colors()
         try:
             mouse_events = getattr(curses, "BUTTON4_PRESSED", 0) | getattr(curses, "BUTTON5_PRESSED", 0)
             mouse_events |= getattr(curses, "BUTTON1_PRESSED", 0) | getattr(curses, "BUTTON1_RELEASED", 0)
