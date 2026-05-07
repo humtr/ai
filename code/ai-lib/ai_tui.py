@@ -977,6 +977,9 @@ class App:
     def workdir_child_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") in {"path", "children"}
 
+    def workdir_child_focused(self) -> bool:
+        return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "path"
+
     def workdir_inline_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "inline") == "inline"
 
@@ -1069,11 +1072,11 @@ class App:
             if x >= width - 1:
                 break
             item_width = min(cell_width(item), max(0, width - 1 - x))
-            attr = self.selection_attr(active) if item_idx == idx else curses.A_BOLD if active else 0
+            attr = self.selection_attr(active) if item_idx == idx else (curses.A_BOLD if active else curses.A_DIM)
             self.add_text(y, x, item, item_width, attr)
             x += item_width
             if offset + 1 < len(visible_items) and x < width - 1:
-                self.add_text(y, x, " " * gap, min(gap, width - 1 - x), curses.A_BOLD if active else 0)
+                self.add_text(y, x, " " * gap, min(gap, width - 1 - x), (curses.A_BOLD if active else curses.A_DIM))
                 x += gap
         if visible_start + len(visible_items) < len(items) and x < width - 1:
             self.add_text(y, x, "...", min(3, width - 1 - x), curses.A_DIM)
@@ -1717,6 +1720,9 @@ class App:
             if self.active_section() == "sessions":
                 self.return_to_builder()
                 self.message = ""
+            elif self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "children":
+                self.focus_workdir_path()
+                self.message = "workdir focus"
             else:
                 self.pending_action = "quit"
                 self.pending_cmd = None
