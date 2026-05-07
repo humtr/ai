@@ -374,9 +374,9 @@ WORKDIR_TAB_FOCUS_OUT="$(
 [ "$WORKDIR_TAB_FOCUS_OUT" = "0" ] && ok "workdir tab cycles inside builder" || { fail "workdir tab cycles inside builder"; printf 'actual: %s\n' "$WORKDIR_TAB_FOCUS_OUT" >&2; }
 
 WORKDIR_BAD_INPUT_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.last_builder_section=app.section; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_layer="children"; app.workdir_child_index=0; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print("{} {}".format(app.section, ai_tui.short(app.current_workdir_path())))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.last_builder_section=app.section; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_layer="children"; app.workdir_child_index=0; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print("{} {} {}".format(app.section, ai_tui.short(app.current_workdir_path()), app.workdir_layer))'
 )"
-[ "$WORKDIR_BAD_INPUT_OUT" = "0 ~/work/main/src" ] && ok "workdir tab commits focused dropdown child and cycles builder" || { fail "workdir tab commits focused dropdown child and cycles builder"; printf 'actual: %s\n' "$WORKDIR_BAD_INPUT_OUT" >&2; }
+[ "$WORKDIR_BAD_INPUT_OUT" = "3 ~/work/main/src path" ] && ok "workdir tab commits focused dropdown child and stays in workdir section" || { fail "workdir tab commits focused dropdown child and stays in workdir section"; printf 'actual: %s\n' "$WORKDIR_BAD_INPUT_OUT" >&2; }
 
 WORKDIR_TYPE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_child_index=0; app.handle_main_key(ord("w")); print("{} {}".format(getattr(app, "workdir_text", None), app.workdir_child_index))'
@@ -479,7 +479,7 @@ WORKDIR_UP_FOCUS_COMMAND_OUT="$(
 WORKDIR_UP_TOP_INLINE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/"; app.workdir_layer="children"; app.workdir_child_index=0; app.session_index=0; app.session_scroll=0; app.handle_main_key(curses.KEY_UP); print("{} {}".format(app.workdir_layer, app.workdir_child_index))'
 )"
-[ "$WORKDIR_UP_TOP_INLINE_OUT" = "children 0" ] && ok "workdir up at first child keeps dropdown focus" || { fail "workdir up at first child keeps dropdown focus"; printf 'actual: %s\n' "$WORKDIR_UP_TOP_INLINE_OUT" >&2; }
+[ "$WORKDIR_UP_TOP_INLINE_OUT" = "children 1" ] && ok "workdir up at first child cycles to bottom" || { fail "workdir up at first child cycles to bottom"; printf 'actual: %s\n' "$WORKDIR_UP_TOP_INLINE_OUT" >&2; }
 
 WORKDIR_LEFT_RIGHT_MEMORY_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/"; app.workdir_layer="children"; app.workdir_child_index=0; app.session_index=0; app.session_scroll=0; app.handle_main_key(curses.KEY_DOWN); app.handle_main_key(curses.KEY_LEFT); app.handle_main_key(curses.KEY_RIGHT); print("{} {}".format(ai_tui.short(app.current_workdir_path()), app.filtered_workdir_children()[app.workdir_child_index].name))'
@@ -502,9 +502,9 @@ WORKDIR_HOME_PREFIX_LEFT_RIGHT_OUT="$(
 [ "$WORKDIR_HOME_PREFIX_LEFT_RIGHT_OUT" = "~/ ~/ children work" ] && ok "workdir right from home restores remembered child focus" || { fail "workdir right from home restores remembered child focus"; printf 'actual: %s\n' "$WORKDIR_HOME_PREFIX_LEFT_RIGHT_OUT" >&2; }
 
 WORKDIR_TAB_CHILD_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/"; app.workdir_layer="children"; app.workdir_child_index=1; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print("{} {} {} {}".format(app.workdir_text, app.workdir_layer, app.workdir_child_index, ai_tui.short(app.current_workdir_path())))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/"; app.workdir_layer="children"; app.workdir_child_index=1; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print("{} {} {} {} {}".format(app.workdir_text, app.workdir_layer, app.workdir_child_index, ai_tui.short(app.current_workdir_path()), app.section))'
 )"
-[ "$WORKDIR_TAB_CHILD_OUT" = "~/work/main/tests path -1 ~/work/main/tests" ] && ok "workdir tab commits focused dropdown child" || { fail "workdir tab commits focused dropdown child"; printf 'actual: %s\n' "$WORKDIR_TAB_CHILD_OUT" >&2; }
+[ "$WORKDIR_TAB_CHILD_OUT" = "~/work/main/tests path -1 ~/work/main/tests 3" ] && ok "workdir tab commits focused dropdown child and stays in workdir section" || { fail "workdir tab commits focused dropdown child and stays in workdir section"; printf 'actual: %s\n' "$WORKDIR_TAB_CHILD_OUT" >&2; }
 
 WORKDIR_VISUAL_LIST_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'from pathlib import Path; import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.list_meta={}; app.workdir_text="~/wo"; app.workdir_modified=True; app.workdir_layer="inline"; app.workdir_child_index=-1; app.filtered_workdir_children=lambda:[Path("'"$HOME_FIXTURE"'/work")]; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.draw_workdir_row(0,100); app.draw_workdir_children(1,100,3); print(any(y == 1 and text == "work" for y,text,attr in calls), any(y == 1 and attr & curses.A_REVERSE for y,text,attr in calls))'

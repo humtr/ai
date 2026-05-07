@@ -707,13 +707,8 @@ class App:
             return
         if self.workdir_child_index < 0:
             self.workdir_child_index = 0 if direction > 0 else len(children) - 1
-        elif direction > 0:
-            self.workdir_child_index = (self.workdir_child_index + direction) % len(children)
         else:
-            self.workdir_child_index = max(
-                0,
-                min(self.workdir_child_index + direction, len(children) - 1),
-            )
+            self.workdir_child_index = (self.workdir_child_index + direction) % len(children)
         self.remember_focused_workdir_child()
         self.message = f"child {self.workdir_child_index + 1}/{len(children)}: {children[self.workdir_child_index].name}"
 
@@ -1735,7 +1730,10 @@ class App:
         elif ch == curses.KEY_LEFT:
             self.horizontal_action(-1)
         elif ch == 9:
-            self.next_section()
+            if self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "children":
+                self.commit_focused_workdir()
+            else:
+                self.next_section()
         elif ch == curses.KEY_BTAB:
             self.message = "use Tab to move focus"
         elif ch == curses.KEY_DOWN:
