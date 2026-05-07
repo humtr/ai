@@ -518,7 +518,7 @@ assert_not_contains "new session dry-run does not resume" "resume codex" "$NEW_S
 
 LAST_RESUME_OUT="$TMP_BASE/last-resume.out"
 run_tui "\r\r\r\033\033\033" "$LAST_RESUME_OUT"
-assert_contains "last session dry-run uses resume last" "dry-run: $BIN_FIXTURE/ai resume codex last" "$LAST_RESUME_OUT"
+assert_contains "last session dry-run uses real id" "dry-run: $BIN_FIXTURE/ai resume codex smoke-session-two" "$LAST_RESUME_OUT"
 assert_not_contains "last session dry-run omits default profile" "resume codex --profile default" "$LAST_RESUME_OUT"
 
 CONCRETE_RESUME_OUT="$TMP_BASE/concrete-resume.out"

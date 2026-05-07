@@ -1260,33 +1260,32 @@ provider_resume_session() {
   local kind="$1"
   local profile="$2"
   local workdir="$3"
-  local session="$4"
-  shift 4
+  local session="${4:-}"
+  shift 4 || true
 
-  case "$kind" in
-    codex)
-      if [ -z "$session" ] && [ -t 0 ] && [ -t 1 ]; then
-        provider_native_project codex "$profile" "$workdir" resume "$@"
-      elif [ -z "$session" ] || [ "$session" = "latest" ] || [ "$session" = "last" ]; then
-        provider_native_project codex "$profile" "$workdir" resume --last "$@"
-      else
-        provider_native_project codex "$profile" "$workdir" resume "$session" "$@"
-      fi
-      ;;
-    gemini)
-      [ -n "$session" ] || session="latest"
-      provider_native_project gemini "$profile" "$workdir" --resume "$session" "$@"
-      ;;
-    hermes)
-      if [ -z "$session" ] || [ "$session" = "latest" ] || [ "$session" = "last" ]; then
-        provider_native_project hermes "$profile" "$workdir" --continue "$@"
-      else
-        provider_native_project hermes "$profile" "$workdir" --resume "$session" "$@"
-      fi
+  if [ -z "$session" ]; then
+    case "$kind" in
+      codex)  provider_native_project codex  "$profile" "$workdir" resume "$@" ;;
+      gemini) provider_browse_sessions gemini "$profile" "$workdir" ;;
+      hermes) provider_native_project hermes "$profile" "$workdir" sessions browse ;;
+    esac
+    return $?
+  fi
+
+  case "$session" in
+    last|latest)
+      case "$kind" in
+        codex)  provider_native_project codex  "$profile" "$workdir" resume --last "$@" ;;
+        gemini) provider_native_project gemini "$profile" "$workdir" --resume latest "$@" ;;
+        hermes) provider_native_project hermes "$profile" "$workdir" --continue "$@" ;;
+      esac
       ;;
     *)
-      echo "ERROR: unknown provider kind: $kind" >&2
-      return 2
+      case "$kind" in
+        codex)  provider_native_project codex  "$profile" "$workdir" resume "$session" "$@" ;;
+        gemini) provider_native_project gemini "$profile" "$workdir" --resume "$session" "$@" ;;
+        hermes) provider_native_project hermes "$profile" "$workdir" --resume "$session" "$@" ;;
+      esac
       ;;
   esac
 }

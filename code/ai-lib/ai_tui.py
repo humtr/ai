@@ -914,7 +914,6 @@ class App:
         if sessions:
             latest = dict(sessions[0])
             latest["_kind"] = "last"
-            latest["session_id"] = "last"
             latest["title"] = f"Last session: {latest.get('title') or short_time(str(latest.get('updated') or ''))}"
             rows.append(latest)
         rows.append(
