@@ -1119,8 +1119,7 @@ class App:
     def session_rows(self) -> list[dict[str, Any]]:
         sessions = self.current_sessions()
         rows = [dict(session, _kind="session") for session in sessions]
-        self.restore_session_selection(rows)
-        self.remember_session_selection(sessions=rows)
+        self.session_index = max(-1, min(self.session_index, len(rows) - 1))
         return rows
 
     def selected_session(self) -> dict[str, Any] | None:
@@ -1258,26 +1257,23 @@ class App:
             return
 
         gap = 3
-        full_width = sum(cell_width(item) for item in items) + gap * max(0, len(items) - 1)
-        if full_width <= remaining:
-            visible_start = 0
-            visible_items = items
-        else:
-            visible_start = idx
-            while visible_start > 0:
-                trial = items[visible_start - 1 : idx + 1]
-                trial_width = sum(cell_width(item) for item in trial) + gap * max(0, len(trial) - 1)
-                if trial_width + 4 > remaining:
-                    break
-                visible_start -= 1
-            visible_end = idx + 1
-            while visible_end < len(items):
-                trial = items[visible_start : visible_end + 1]
-                trial_width = sum(cell_width(item) for item in trial) + gap * max(0, len(trial) - 1)
-                if trial_width + (4 if visible_start > 0 else 0) + (3 if visible_end + 1 < len(items) else 0) > remaining:
-                    break
-                visible_end += 1
-            visible_items = items[visible_start:visible_end]
+        visible_start = max(0, min(idx, len(items) - 1))
+        visible_end = visible_start + 1
+        while True:
+            trial_start = max(0, visible_start - 1)
+            trial_end = min(len(items), visible_end + 1)
+            trial_items = items[trial_start:trial_end]
+            trial_width = sum(cell_width(item) for item in trial_items) + gap * max(0, len(trial_items) - 1)
+            if trial_start > 0:
+                trial_width += 4
+            if trial_end < len(items):
+                trial_width += 3
+            if trial_width > remaining:
+                break
+            visible_start, visible_end = trial_start, trial_end
+            if visible_start == 0 and visible_end == len(items):
+                break
+        visible_items = items[visible_start:visible_end]
 
         x = start_x
         if visible_start > 0 and remaining >= 4:
@@ -1659,6 +1655,7 @@ class App:
         self.last_builder_section = min(self.section, len(BUILDER_SECTIONS) - 1)
         self.section = SECTIONS.index("sessions")
         sessions = self.session_rows()
+        self.restore_session_selection(sessions)
         if self.session_index < 0 and sessions:
             self.session_index = 0
         self.session_scroll = max(0, min(self.session_scroll, max(0, len(sessions) - 1)))
@@ -1832,7 +1829,9 @@ class App:
             self.vertical_action(direction)
         elif section == "sessions":
             sessions = self.session_rows()
-            current = self.session_index if self.session_index >= 0 else 0
+            if sessions and self.session_index >= 0:
+                self.remember_session_selection(sessions=sessions)
+            current = self.session_index if self.session_index >= 0 else -1
             self.session_index = max(0, min(current + direction, len(sessions) - 1))
 
     def move_to_edge(self, end: bool) -> None:
@@ -1856,7 +1855,10 @@ class App:
             self.workdir_child_index = -1
         elif section == "sessions":
             sessions = self.session_rows()
-            self.session_index = max(0, len(sessions) - 1) if end else 0
+            if sessions and self.session_index >= 0:
+                self.remember_session_selection(sessions=sessions)
+            if sessions:
+                self.session_index = max(0, len(sessions) - 1) if end else 0
 
     def page_size(self) -> int:
         if self.active_section() == "workdir":
