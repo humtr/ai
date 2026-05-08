@@ -24,7 +24,7 @@ HOME = Path(os.environ.get("HOME", str(Path.home())))
 AI_BIN = os.environ.get("AI_BIN", str(HOME / "bin" / "ai"))
 MODES = ["run", "task", "ask", "plan"]
 PROVIDERS = ["codex", "gemini", "hermes"]
-SESSION_CHOICES = ["resume", "new"]
+SESSION_CHOICES = ["profile", "provider", "all", "new"]
 BUILDER_SECTIONS = ["mode", "provider", "profile", "session", "workdir"]
 SECTIONS = BUILDER_SECTIONS + ["sessions"]
 
@@ -271,7 +271,11 @@ class App:
         return ["default", *ai_registry.existing_provider_profiles(provider)]
 
     def current_profile_label(self) -> str:
-        return self.profiles[self.indices["profile"]] if self.profiles else "default"
+        profiles = getattr(self, "profiles", [])
+        indices = getattr(self, "indices", {})
+        if not profiles:
+            return "default"
+        return profiles[indices.get("profile", 0)]
 
     def current_profile_arg(self) -> str:
         profile = self.current_profile_label()
@@ -314,6 +318,102 @@ class App:
 
     def current_session_choice(self) -> str:
         return SESSION_CHOICES[getattr(self, "indices", {}).get("session", 0)]
+
+    def current_session_scope(self) -> str:
+        choice = self.current_session_choice()
+        if choice in {"profile", "provider", "all"}:
+            return choice
+        return "profile"
+
+    def session_scope_context(self) -> str:
+        scope = self.current_session_scope()
+        if scope == "profile":
+            return f"Profile scope: {self.current_provider().title()} / {self.current_profile_label()}"
+        if scope == "provider":
+            return f"Provider scope: {self.current_provider().title()} / all profiles"
+        return "All scope: all providers / all profiles"
+
+    def session_scope_columns(self, scope: str | None = None) -> str:
+        scope = scope or self.current_session_scope()
+        if scope == "profile":
+            return "Time | Workdir | Title"
+        if scope == "provider":
+            return "Time | Profile | Workdir | Title"
+        return "Time | Provider | Profile | Workdir | Title"
+
+    def session_scope_field_keys(self, scope: str | None = None) -> list[str]:
+        scope = scope or self.current_session_scope()
+        keys = ["time"]
+        if scope == "provider":
+            keys.append("profile")
+        elif scope == "all":
+            keys.extend(["provider", "profile"])
+        keys.extend(["workdir", "title"])
+        return keys
+
+    def session_field_labels(self, scope: str | None = None) -> list[str]:
+        labels = {
+            "time": "Time",
+            "provider": "Provider",
+            "profile": "Profile",
+            "workdir": "Workdir",
+            "title": "Title",
+        }
+        return [labels[key] for key in self.session_scope_field_keys(scope)]
+
+    def session_field_value(self, item: dict[str, Any], key: str, scope: str | None = None) -> str:
+        if key == "time":
+            return short_time(str(item.get("updated") or ""))
+        if key == "provider":
+            return str(item.get("provider") or self.current_provider())
+        if key == "profile":
+            return str(item.get("profile") or "-")
+        if key == "workdir":
+            return short(str(item.get("workdir") or ""))
+        if key == "title":
+            value = str(item.get("title") or "")
+            return value or str(item.get("session_id") or "")
+        return ""
+
+    def session_column_specs(self, scope: str | None = None, sessions: list[dict[str, Any]] | None = None, width: int | None = None) -> list[tuple[str, str, int]]:
+        scope = scope or self.current_session_scope()
+        sessions = sessions or []
+        field_specs = {
+            "time": ("Time", 16),
+            "provider": ("Provider", 10),
+            "profile": ("Profile", 14),
+            "workdir": ("Workdir", 18),
+            "title": ("Title", 32),
+        }
+        keys = self.session_scope_field_keys(scope)
+        specs: list[tuple[str, str, int]] = []
+        for key in keys:
+            label, cap = field_specs[key]
+            content_width = max(
+                [cell_width(self.session_field_value(item, key, scope)) for item in sessions] or [0]
+            )
+            column_width = min(max(cell_width(label), content_width), cap)
+            specs.append((key, label, column_width))
+        if width is not None and specs:
+            available = max(0, width - 2 - 2 * max(0, len(specs) - 1))
+            min_widths = [cell_width(label) for _, label, _ in specs]
+            current = [col_width for _, _, col_width in specs]
+            while sum(current) > available:
+                shrinkable = [i for i in range(len(current) - 1, -1, -1) if current[i] > min_widths[i]]
+                if not shrinkable:
+                    break
+                idx = shrinkable[0]
+                current[idx] -= 1
+            specs = [(key, label, current[i]) for i, (key, label, _) in enumerate(specs)]
+        return specs
+
+    def session_header_segments(self, scope: str, sessions: list[dict[str, Any]], width: int) -> list[tuple[str, int]]:
+        segments: list[tuple[str, int]] = [("  ", 0)]
+        for idx, (_key, label, col_width) in enumerate(self.session_column_specs(scope, sessions, width)):
+            segments.append((pad_cells(label, col_width), curses.A_DIM))
+            if idx + 1 < len(self.session_scope_field_keys(scope)):
+                segments.append(("  ", 0))
+        return segments
 
     def remember_current_profile(self) -> None:
         if self.profiles:
@@ -379,11 +479,6 @@ class App:
         return self.resume_command_line(session_id)
 
     def session_choice_command_line(self) -> str:
-        if self.current_session_choice() == "resume":
-            selected = self.selected_session()
-            if selected and selected.get("session_id"):
-                return self.resume_command_line(str(selected.get("session_id") or ""))
-            return " ".join(["ai", "resume", *self.common_args(display=True)])
         return self.command_line()
 
     def refresh_sessions(self, silent: bool = False) -> None:
@@ -533,7 +628,6 @@ class App:
         self.workdir_layer = layer
         if layer != "children":
             self.workdir_dropdown_base = None
-        self.reset_sessions()
         if announce:
             self.message = f"workdir {verb}: {short(self.custom_workdir)}"
 
@@ -918,16 +1012,37 @@ class App:
 
     def current_sessions(self) -> list[dict[str, Any]]:
         try:
-            sessions = ai_registry.recent_sessions(
-                self.current_provider(),
-                self.current_profile(),
-                self.effective_workdir_path(),
-                limit=60,
-            )
+            scope = self.current_session_scope()
+            provider = self.current_provider() if scope in {"profile", "provider"} else None
+            profile = self.current_profile_label() if scope == "profile" else None
+            sessions = ai_registry.recent_sessions(provider, profile, None, limit=60)
         except Exception as exc:  # pragma: no cover - defensive TUI boundary
             self.message = f"session list failed: {exc}"
             return []
-        return [s for s in sessions if s.get("profile") == self.current_profile()]
+        if scope == "profile":
+            sessions = [s for s in sessions if s.get("profile") == self.current_profile_label()]
+        return sessions
+
+    def session_row_segments(
+        self,
+        item: dict[str, Any],
+        width: int,
+        selected: bool = False,
+        focused: bool = False,
+        scope: str | None = None,
+        specs: list[tuple[str, str, int]] | None = None,
+    ) -> list[tuple[str, int]]:
+        scope = scope or self.current_session_scope()
+        marker = "> " if selected else "  "
+        attr = self.selection_attr(focused) if selected else 0
+        specs = specs or self.session_column_specs(scope, [item], width)
+        segments: list[tuple[str, int]] = [(marker, attr)]
+        for idx, (key, _label, col_width) in enumerate(specs):
+            value = self.session_field_value(item, key, scope)
+            segments.append((pad_cells(value, col_width), attr))
+            if idx + 1 < len(specs):
+                segments.append(("  ", 0))
+        return segments
 
     def session_rows(self) -> list[dict[str, Any]]:
         sessions = self.current_sessions()
@@ -995,13 +1110,22 @@ class App:
     def workdir_child_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") in {"path", "children"}
 
-    def workdir_child_focused(self) -> bool:
-        return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "path"
-
     def workdir_inline_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "inline") == "inline"
 
     def add_segments(self, y: int, x: int, segments: list[tuple[str, int]], width: int) -> int:
+        if not hasattr(self, "stdscr"):
+            used = 0
+            for text, attr in segments:
+                remaining = width - used
+                if remaining <= 0:
+                    break
+                visible = fit_cells(text, remaining)
+                if not visible:
+                    continue
+                self.add_text(y, x + used, visible, remaining, attr)
+                used += cell_width(visible)
+            return used
         used = 0
         for text, attr in segments:
             remaining = width - used
@@ -1118,12 +1242,16 @@ class App:
         }
 
     def selected_workdir_path(self) -> tuple[str, str, str]:
-        child = self.selected_workdir_child()
-        if child is not None:
-            return short(str(child)), child.name, ""
         self.ensure_workdir_text()
-        text = self.workdir_text or ""
         path = self.normalize_workdir_path(Path(self.current_workdir_path()))
+        if getattr(self, "workdir_text", None) == "":
+            return "", "", ""
+        if getattr(self, "workdir_layer", "inline") == "children":
+            text = short(str(path))
+            if not text.endswith("/"):
+                text += "/"
+            return text, "", ""
+        text = self.workdir_text or short(str(path))
         segment = "~" if path == self.home_path() else path.name or short(str(path))
         return text, segment, ""
 
@@ -1295,10 +1423,21 @@ class App:
     def draw_sessions(self, y: int, width: int, rows: int) -> None:
         if rows <= 2:
             return
-        real_sessions = self.current_sessions()
+        if self.current_session_choice() == "new":
+            self.list_meta["sessions"] = {
+                "y": y,
+                "x": 0,
+                "w": width,
+                "rows": 0,
+                "start": 0,
+                "count": 0,
+                "top": y,
+                "height": 0,
+            }
+            return
         sessions = self.session_rows()
         active = self.active_section() == "sessions"
-        title = f"Sessions: {self.current_provider().title()}/{self.current_profile()} ({len(real_sessions)})"
+        title = f"Sessions: {self.session_scope_context()}"
         self.add_line(y, 0, title, width - 1, curses.A_BOLD)
         if not sessions:
             self.add_line(y + 1, 0, "No summaries yet.", width - 1)
@@ -1306,6 +1445,8 @@ class App:
 
         list_y = y + 1
         list_rows = 2 if rows <= 7 else max(3, min(10, rows - 9))
+        scope = self.current_session_scope()
+        specs = self.session_column_specs(scope, sessions, width)
         self.list_meta["sessions"] = {
             "y": list_y,
             "x": 0,
@@ -1326,6 +1467,12 @@ class App:
             self.session_scroll = self.session_index - list_rows + 1
         self.list_meta["sessions"]["start"] = self.session_scroll
 
+        if hasattr(self, "stdscr"):
+            self.add_segments(list_y, 0, self.session_header_segments(scope, sessions, width), width - 1)
+        else:
+            self.add_line(list_y, 0, "  " + self.session_scope_columns(scope), width - 1, curses.A_DIM)
+        list_y += 1
+
         for n in range(list_rows):
             item_idx = self.session_scroll + n
             if item_idx >= len(sessions):
@@ -1333,14 +1480,12 @@ class App:
                 continue
             item = sessions[item_idx]
             selected_row = self.session_index >= 0 and item_idx == self.session_index
-            marker = "> " if selected_row else "  "
-            where = short(str(item.get("workdir") or ""))
-            line = (
-                f"{marker}{short_time(str(item.get('updated') or ''))} "
-                f"{item.get('profile','')} {where} {item.get('title','')}"
-            )
-            attr = self.selection_attr(active) if selected_row else 0
-            self.add_line(list_y + n, 0, line, width - 1, attr)
+            if hasattr(self, "stdscr"):
+                segments = self.session_row_segments(item, width, selected_row, active, scope, specs)
+                self.add_segments(list_y + n, 0, segments, width - 1)
+            else:
+                row = self.session_row_text(item, width, selected_row, scope)
+                self.add_line(list_y + n, 0, row, width - 1)
 
         preview_y = list_y + list_rows + 1
         self.add_line(preview_y - 1, 0, "", width - 1)
@@ -1350,15 +1495,10 @@ class App:
         selected = sessions[self.session_index]
         session_id = str(selected.get("session_id") or "")
         selected_attr = self.selection_attr(active)
-        selected_summary = (
-            f"{short_time(str(selected.get('updated') or ''))} "
-            f"{selected.get('profile','')} {short(str(selected.get('workdir') or ''))} {selected.get('title','')}"
-        ).strip()
-        self.add_line(preview_y, 0, "Selected session", width - 1, selected_attr)
+        self.add_line(preview_y, 0, f"Selected session: {self.session_scope_context()}", width - 1, selected_attr)
         self.add_line(preview_y + 1, 2, f"ID: {session_id or '-'}", width - 3)
-        self.add_line(preview_y + 2, 2, f"Meta: {selected_summary or '-'}", width - 3)
-        row = preview_y + 3
-        preview_space = max(2, rows - list_rows - 5)
+        row = preview_y + 2
+        preview_space = max(2, rows - list_rows - 4)
         max_prompt = max(1, preview_space // 2)
         max_answer = max(1, preview_space - max_prompt)
         for line in self.wrap_lines("Prompt", str(selected.get("last_prompt_summary") or ""), width - 3, max_prompt):
@@ -1371,6 +1511,10 @@ class App:
                 return
             self.add_line(row, 2, line, width - 3)
             row += 1
+
+    def session_row_text(self, item: dict[str, Any], width: int, selected: bool = False, scope: str | None = None) -> str:
+        segments = self.session_row_segments(item, width, selected, False, scope)
+        return "".join(text for text, _attr in segments)
 
     def draw_main(self) -> None:
         self.stdscr.erase()
@@ -1388,7 +1532,8 @@ class App:
             child_rows = max(0, available_after_builder - 8)
         self.add_line(2, 0, "", w - 1)
         sessions_y = self.draw_controls(4, w, child_rows) + 1
-        self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
+        if self.current_session_choice() != "new":
+            self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
         self.add_line(h - 3, 0, "Tab cycles builder | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
         self.add_line(h - 2, 0, "Workdir: Down opens sibling list; Left/Right moves directory levels; leaf Right keeps the list open.", w - 1, curses.A_DIM)
         self.add_line(h - 1, 0, self.message, w - 1)
@@ -1440,8 +1585,9 @@ class App:
         self.last_builder_section = min(self.section, len(BUILDER_SECTIONS) - 1)
         self.section = SECTIONS.index("sessions")
         sessions = self.session_rows()
-        self.session_index = 0 if sessions else -1
-        self.session_scroll = 0
+        if self.session_index < 0 and sessions:
+            self.session_index = 0
+        self.session_scroll = max(0, min(self.session_scroll, max(0, len(sessions) - 1)))
 
     def return_to_builder(self) -> None:
         self.section = max(0, min(self.last_builder_section, len(BUILDER_SECTIONS) - 1))
@@ -1689,8 +1835,6 @@ class App:
                 item_idx -= 1
                 self.custom_workdir = None
             self.indices["workdir"] = max(0, min(item_idx, len(self.workdirs) - 1))
-            self.session_index = 0
-            self.session_scroll = 0
         elif section == "sessions":
             sessions = self.session_rows()
             self.session_index = max(0, min(item_idx, len(sessions) - 1))
@@ -1800,10 +1944,10 @@ class App:
             else:
                 if self.active_section() == "workdir":
                     self.commit_focused_workdir()
-                if self.current_session_choice() == "resume":
-                    self.enter_sessions()
-                else:
+                if self.current_session_choice() == "new":
                     self.execute_new_session()
+                else:
+                    self.enter_sessions()
         return None
 
     def run(self) -> int:

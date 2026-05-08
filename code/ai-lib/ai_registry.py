@@ -23,7 +23,7 @@ WORKDIRS_FILE = AI_HOME / "workdirs.json"
 GATEWAYS_FILE = AI_HOME / "gateways.json"
 SESSION_INDEX_DIR = AI_HOME / "session-index"
 SESSION_INDEX_FILE = SESSION_INDEX_DIR / "sessions.json"
-SESSION_INDEX_VERSION = 6
+SESSION_INDEX_VERSION = 7
 SESSION_SCAN_LIMIT = int(os.environ.get("AI_SESSION_SCAN_LIMIT", "500"))
 
 
@@ -90,8 +90,23 @@ def text_summary(value: Any, limit: int = 260) -> str:
     return text[: max(1, limit - 1)].rstrip() + "..."
 
 
+def headline_summary(value: Any, limit: int = 80) -> str:
+    text = compact_text(value)
+    if not text:
+        return ""
+    text = text.split("\n", 1)[0].strip()
+    text = re.split(r"[。！？!?;；]", text, 1)[0].strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(1, limit - 1)].rstrip() + "..."
+
+
 def iso_from_mtime(path: Path) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(path.stat().st_mtime))
+    stat = safe_stat(path)
+    if stat is None:
+        return ""
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(stat.st_mtime))
 
 
 def safe_stat(path: Path) -> os.stat_result | None:
@@ -328,14 +343,21 @@ def entry_from_messages(record: dict[str, Any], meta: dict[str, Any], messages: 
     session_id = str(meta.get("session_id") or path.stem)
     last_user = users[-1].get("text", "") if users else ""
     last_assistant = assistants[-1].get("text", "") if assistants else ""
-    title = users[0].get("text", "") if users else last_user or session_id
+    title = (
+        meta.get("title")
+        or meta.get("session_title")
+        or meta.get("summary")
+        or (users[0].get("text", "") if users else "")
+        or last_user
+        or session_id
+    )
     workdir = str(meta.get("workdir") or record.get("workdir_hint") or "")
     updated = str(meta.get("updated") or last_msg.get("timestamp") or iso_from_mtime(path))
     return {
         "provider": record["provider"],
         "profile": record["profile"],
         "session_id": session_id,
-        "title": text_summary(title, 120) or session_id,
+        "title": headline_summary(title, 120) or session_id,
         "last_prompt_summary": text_summary(last_user, 360),
         "last_response_summary": text_summary(last_assistant, 360),
         "updated": updated,
@@ -348,7 +370,7 @@ def entry_from_messages(record: dict[str, Any], meta: dict[str, Any], messages: 
 
 def parse_codex_session(record: dict[str, Any]) -> dict[str, Any]:
     path = Path(record["path"])
-    meta = {"session_id": codex_session_id(path), "workdir": "", "updated": ""}
+    meta = {"session_id": codex_session_id(path), "workdir": "", "updated": "", "title": ""}
     messages: list[dict[str, str]] = []
     fallback: list[dict[str, str]] = []
     try:
@@ -365,6 +387,7 @@ def parse_codex_session(record: dict[str, Any]) -> dict[str, Any]:
                 if item.get("type") == "session_meta":
                     meta["session_id"] = str(payload.get("id") or meta["session_id"])
                     meta["workdir"] = str(payload.get("cwd") or meta["workdir"])
+                    meta["title"] = str(payload.get("title") or payload.get("name") or payload.get("summary") or meta["title"])
                     continue
                 if item.get("type") == "response_item" and payload.get("type") == "message":
                     add_message(messages, str(payload.get("role") or ""), payload.get("content"), timestamp)
@@ -382,7 +405,7 @@ def parse_codex_session(record: dict[str, Any]) -> dict[str, Any]:
 
 def parse_gemini_session(record: dict[str, Any]) -> dict[str, Any]:
     path = Path(record["path"])
-    meta = {"session_id": path.stem, "workdir": record.get("workdir_hint") or gemini_project_root(path), "updated": ""}
+    meta = {"session_id": path.stem, "workdir": record.get("workdir_hint") or gemini_project_root(path), "updated": "", "title": ""}
     messages: list[dict[str, str]] = []
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
@@ -394,6 +417,7 @@ def parse_gemini_session(record: dict[str, Any]) -> dict[str, Any]:
                 if line_no == 0:
                     meta["session_id"] = str(item.get("sessionId") or meta["session_id"])
                     meta["updated"] = str(item.get("lastUpdated") or item.get("startTime") or meta["updated"])
+                    meta["title"] = str(item.get("title") or item.get("summary") or item.get("name") or meta["title"])
                     continue
                 timestamp = str(item.get("timestamp") or "")
                 if timestamp:
@@ -410,7 +434,7 @@ def parse_gemini_session(record: dict[str, Any]) -> dict[str, Any]:
 
 def parse_hermes_session(record: dict[str, Any]) -> dict[str, Any]:
     path = Path(record["path"])
-    meta = {"session_id": hermes_session_id(path), "workdir": "", "updated": ""}
+    meta = {"session_id": hermes_session_id(path), "workdir": "", "updated": "", "title": ""}
     messages: list[dict[str, str]] = []
     try:
         if path.suffix == ".jsonl":
@@ -426,6 +450,7 @@ def parse_hermes_session(record: dict[str, Any]) -> dict[str, Any]:
                     role = str(item.get("role") or "")
                     if role == "session_meta":
                         meta["session_id"] = str(item.get("session_id") or meta["session_id"])
+                        meta["title"] = str(item.get("title") or item.get("name") or item.get("summary") or meta["title"])
                         continue
                     add_message(messages, role, item.get("content"), timestamp)
         else:
@@ -433,6 +458,7 @@ def parse_hermes_session(record: dict[str, Any]) -> dict[str, Any]:
             meta["session_id"] = str(item.get("session_id") or meta["session_id"])
             meta["updated"] = str(item.get("last_updated") or item.get("session_start") or "")
             meta["workdir"] = str(item.get("cwd") or item.get("workdir") or item.get("working_directory") or "")
+            meta["title"] = str(item.get("title") or item.get("name") or item.get("summary") or meta["title"])
             for message in item.get("messages") or []:
                 add_message(messages, str(message.get("role") or ""), message.get("content"))
     except OSError:
