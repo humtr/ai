@@ -253,7 +253,7 @@ assert_contains "main shows profile split" "Profile default" "$MAIN_OUT"
 assert_not_contains "main has no account row" "Account" "$MAIN_OUT"
 assert_contains "main shows all mode choices without shifting window" "task   ask" "$MAIN_OUT"
 assert_contains "main shows all provider choices without shifting window" "Gemini   Hermes" "$MAIN_OUT"
-assert_contains "main shows sessions panel" "Sessions: Profile scope: Codex / default" "$MAIN_OUT"
+assert_contains "main shows sessions panel" "SESSION LIST" "$MAIN_OUT"
 assert_not_contains "main shows no new session row" "New session" "$MAIN_OUT"
 assert_not_contains "main shows no latest session row" "Latest:" "$MAIN_OUT"
 assert_contains "main still shows session preview rows" "smoke prompt summary" "$MAIN_OUT"
@@ -265,10 +265,10 @@ NARROW_OUT="$TMP_BASE/narrow.out"
 run_tui "\033\033" "$NARROW_OUT" 80 24
 assert_contains "narrow screen shows command builder" "Command builder" "$NARROW_OUT"
 assert_contains "narrow screen shows workdir row" "Workdir" "$NARROW_OUT"
-assert_contains "narrow screen keeps sessions visible" "Sessions: Profile scope: Codex / default" "$NARROW_OUT"
+assert_contains "narrow screen keeps sessions visible" "SESSION LIST" "$NARROW_OUT"
 
 NEW_PANEL_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; FakeStdout=type("FakeStdout", (), {"getmaxyx": lambda self: (40, 160), "erase": lambda self: None, "refresh": lambda self: None, "keypad": lambda self, *args: None, "move": lambda self, *args: None, "addnstr": lambda self, *args, **kwargs: None}); app=ai_tui.App.__new__(ai_tui.App); app.stdscr=FakeStdout(); app.view="main"; app.section=0; app.message=""; app.indices={"mode":0,"provider":0,"profile":0,"session":3,"workdir":0}; app.profiles=["default"]; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.list_meta={}; calls=[]; app.add_line=lambda y,x,text,width,attr=0: calls.append(text); app.add_text=lambda y,x,text,width,attr=0: calls.append(text); app.draw_main(); print(any(text.startswith("Sessions:") for text in calls))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; FakeStdout=type("FakeStdout", (), {"getmaxyx": lambda self: (40, 160), "erase": lambda self: None, "refresh": lambda self: None, "keypad": lambda self, *args: None, "move": lambda self, *args: None, "addnstr": lambda self, *args, **kwargs: None}); app=ai_tui.App.__new__(ai_tui.App); app.stdscr=FakeStdout(); app.view="main"; app.section=0; app.message=""; app.sync_terminal_title=lambda: None; app.indices={"mode":0,"provider":0,"profile":0,"session":3,"workdir":0}; app.profiles=["default"]; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.list_meta={}; calls=[]; app.add_line=lambda y,x,text,width,attr=0: calls.append(text); app.add_text=lambda y,x,text,width,attr=0: calls.append(text); app.draw_main(); print(any(text == "SESSION LIST" for text in calls))'
 )"
 [ "$NEW_PANEL_OUT" = "False" ] && ok "new session skips session panel rendering" || { fail "new session skips session panel rendering"; printf 'actual: %s\n' "$NEW_PANEL_OUT" >&2; }
 
@@ -611,6 +611,11 @@ SESSION_SCOPE_COLUMNS_OUT="$(
 )"
 [ "$SESSION_SCOPE_COLUMNS_OUT" = "Time | Workdir | Title|Time | Profile | Workdir | Title|Time | Provider | Profile | Workdir | Title" ] && ok "session scope columns differ by scope" || { fail "session scope columns differ by scope"; printf 'actual: %s\n' "$SESSION_SCOPE_COLUMNS_OUT" >&2; }
 
+SESSION_WINDOW_TITLE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.view="main"; app.section=ai_tui.SECTIONS.index("sessions"); app.indices={"mode":0,"provider":0,"profile":0,"session":0,"workdir":0}; app._terminal_title=None; app.command_line=lambda:"ai task codex --profile default"; app.selected_session_command_line=lambda:"ai resume codex --profile default abc123"; out=[]; ai_tui.set_terminal_title=lambda title: out.append(title); app.sync_terminal_title(); print(out[0])'
+)"
+[ "$SESSION_WINDOW_TITLE_OUT" = "ai resume codex --profile default abc123" ] && ok "termux title follows selected CLI command" || { fail "termux title follows selected CLI command"; printf 'actual: %s\n' "$SESSION_WINDOW_TITLE_OUT" >&2; }
+
 SESSION_SCOPE_ALIGNMENT_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 <<'PY'
 import ai_tui
@@ -704,13 +709,18 @@ INACTIVE_CHOICE_ATTR_OUT="$(
 )"
 [ "$INACTIVE_CHOICE_ATTR_OUT" = "True True False" ] && ok "inactive selected choice uses softened highlight" || { fail "inactive selected choice uses softened highlight"; printf 'actual: %s\n' "$INACTIVE_CHOICE_ATTR_OUT" >&2; }
 
-SESSION_ATTR_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("mode"); app.session_index=-1; app.session_scroll=0; app.list_meta={}; calls=[]; app.current_provider=lambda:"codex"; app.current_session_scope=lambda:"profile"; app.current_sessions=lambda:[{"session_id":"s","updated":"2026-05-05T00:00:00Z","title":"session","last_prompt_summary":"prompt","last_response_summary":"answer"}]; app.add_line=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.draw_sessions(0,100,10); title_attr=[attr for y,text,attr in calls if text.startswith("Sessions:")][0]; selected_rows=[text for y,text,attr in calls if text.startswith("> ")]; selected_label=any("Selected session" in text for y,text,attr in calls); spacer=any(y == 1 and text.strip() == "" for y,text,attr in calls); print(bool(title_attr & curses.A_REVERSE), len(selected_rows), selected_label, spacer)'
+SESSION_PADDING_ATTR_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); item={"session_id":"s","updated":"2026-05-05T00:00:00Z","provider":"codex","profile":"default","workdir":"/tmp/workdir","title":"title"}; specs=app.session_column_specs("all",[item],80); segs=app.session_row_segments(item,80,True,True,"all",specs); print(any(text.strip()=="" and attr for text,attr in segs), any(text.strip()=="" and attr == 0 for text,attr in segs))'
 )"
-[ "$SESSION_ATTR_OUT" = "False 0 False False" ] && ok "initial session list has builder-style title and no selected row" || { fail "initial session list has builder-style title and no selected row"; printf 'actual: %s\n' "$SESSION_ATTR_OUT" >&2; }
+[ "$SESSION_PADDING_ATTR_OUT" = "False True" ] && ok "session row padding stays unhighlighted" || { fail "session row padding stays unhighlighted"; printf 'actual: %s\n' "$SESSION_PADDING_ATTR_OUT" >&2; }
+
+SESSION_ATTR_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("mode"); app.session_index=-1; app.session_scroll=0; app.list_meta={}; calls=[]; app.current_provider=lambda:"codex"; app.current_session_scope=lambda:"profile"; app.current_sessions=lambda:[{"session_id":"s","updated":"2026-05-05T00:00:00Z","title":"session","last_prompt_summary":"prompt","last_response_summary":"answer"}]; app.add_line=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.draw_sessions(0,100,10); title_attr=[attr for y,text,attr in calls if text == "SESSION LIST"][0]; selected_rows=[text for y,text,attr in calls if text.startswith(">")]; selected_label=any(text == "SESSION SELECTED" for y,text,attr in calls); print(bool(title_attr & curses.A_REVERSE), len(selected_rows), selected_label)'
+)"
+[ "$SESSION_ATTR_OUT" = "False 0 False" ] && ok "initial session list has plain title and no selected row" || { fail "initial session list has plain title and no selected row"; printf 'actual: %s\n' "$SESSION_ATTR_OUT" >&2; }
 
 SESSION_SELECTED_SPACING_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("sessions"); app.session_index=0; app.session_scroll=0; app.list_meta={}; calls=[]; app.current_provider=lambda:"codex"; app.current_session_scope=lambda:"profile"; app.current_sessions=lambda:[{"session_id":"s","updated":"2026-05-05T00:00:00Z","title":"session","last_prompt_summary":"prompt","last_response_summary":"answer"}]; app.add_line=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.add_segments=lambda y,x,segments,width: calls.append((y,"".join(text for text,attr in segments),0)); app.draw_sessions(0,100,10); selected_y=[y for y,text,attr in calls if text.startswith("Selected session:")][0]; has_id=any(text.startswith("ID:") for y,text,attr in calls); has_prompt=any(text.startswith("Prompt:") for y,text,attr in calls); has_answer=any(text.startswith("Answer:") for y,text,attr in calls); print(selected_y, has_id, has_prompt, has_answer)'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("sessions"); app.session_index=0; app.session_scroll=0; app.list_meta={}; calls=[]; app.current_provider=lambda:"codex"; app.current_session_scope=lambda:"profile"; app.current_sessions=lambda:[{"session_id":"s","updated":"2026-05-05T00:00:00Z","title":"session","last_prompt_summary":"prompt","last_response_summary":"answer"}]; app.add_line=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.add_segments=lambda y,x,segments,width: calls.append((y,"".join(text for text,attr in segments),0)); app.draw_sessions(0,100,10); selected_y=[y for y,text,attr in calls if text == "SESSION SELECTED"][0]; has_id=any(text.startswith("ID:") for y,text,attr in calls); has_prompt=any(text.startswith("Prompt:") for y,text,attr in calls); has_answer=any(text.startswith("Answer:") for y,text,attr in calls); print(selected_y, has_id, has_prompt, has_answer)'
 )"
 [ "$SESSION_SELECTED_SPACING_OUT" = "6 True True True" ] && ok "session list exposes selected metadata and summaries" || { fail "session list exposes selected metadata and summaries"; printf 'actual: %s\n' "$SESSION_SELECTED_SPACING_OUT" >&2; }
 

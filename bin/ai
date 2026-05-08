@@ -167,6 +167,14 @@ Notes:
 USAGE
 }
 
+set_terminal_title() {
+  local title="${1:-}"
+  title="${title//$'\n'/ }"
+  title="${title//$'\r'/ }"
+  [ -n "$title" ] || return 0
+  printf '\033]0;%s\033\\' "$title"
+}
+
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: missing command: $1" >&2
@@ -1579,6 +1587,8 @@ tui_cmd() {
     return 2
   fi
   export AI_BIN="${AI_BIN:-$HOME/bin/ai}"
+  export AI_TUI_TITLE="${AI_TUI_TITLE:-ai tui}"
+  set_terminal_title "$AI_TUI_TITLE"
   if [ "$workdir_override" = "true" ]; then
     export AI_TUI_WORKDIR_OVERRIDE=1
   fi

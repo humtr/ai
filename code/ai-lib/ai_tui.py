@@ -48,6 +48,17 @@ def short_time(value: str) -> str:
     return value.replace("T", " ")[:16]
 
 
+def set_terminal_title(title: str) -> None:
+    title = " ".join(title.split())
+    if not title:
+        return
+    try:
+        sys.stdout.write(f"\033]0;{title}\033\\")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def expand_workdir(value: str) -> Path:
     if value == "~":
         path = HOME
@@ -170,6 +181,7 @@ class App:
         self.last_builder_section = 0
         self.session_index = -1
         self.session_scroll = 0
+        self.session_memory: dict[str, str] = {}
         self.pending_action: str | None = None
         self.pending_cmd: list[str] | None = None
         self.workdir_override = env_truthy("AI_TUI_WORKDIR_OVERRIDE")
@@ -333,6 +345,20 @@ class App:
             return f"Provider scope: {self.current_provider().title()} / all profiles"
         return "All scope: all providers / all profiles"
 
+    def session_scope_key(self, scope: str | None = None) -> str:
+        scope = scope or self.current_session_scope()
+        indices = getattr(self, "indices", {})
+        provider_index = indices.get("provider", 0)
+        profile_index = indices.get("profile", 0)
+        provider = PROVIDERS[provider_index] if 0 <= provider_index < len(PROVIDERS) else PROVIDERS[0]
+        profiles = getattr(self, "profiles", ["default"]) or ["default"]
+        profile = profiles[profile_index] if 0 <= profile_index < len(profiles) else profiles[0]
+        if scope == "profile":
+            return f"profile:{provider}:{profile}"
+        if scope == "provider":
+            return f"provider:{provider}"
+        return "all"
+
     def session_scope_columns(self, scope: str | None = None) -> str:
         scope = scope or self.current_session_scope()
         if scope == "profile":
@@ -407,6 +433,32 @@ class App:
             specs = [(key, label, current[i]) for i, (key, label, _) in enumerate(specs)]
         return specs
 
+    def remember_session_selection(self, scope: str | None = None, sessions: list[dict[str, Any]] | None = None) -> None:
+        if not hasattr(self, "session_memory"):
+            self.session_memory = {}
+        sessions = sessions if sessions is not None else self.current_sessions()
+        if not sessions or self.session_index < 0 or self.session_index >= len(sessions):
+            return
+        session_id = str(sessions[self.session_index].get("session_id") or "")
+        if not session_id:
+            return
+        self.session_memory[self.session_scope_key(scope)] = session_id
+
+    def restore_session_selection(self, sessions: list[dict[str, Any]], scope: str | None = None) -> None:
+        if not hasattr(self, "session_memory"):
+            self.session_memory = {}
+        if not sessions:
+            self.session_index = -1
+            self.session_scroll = 0
+            return
+        remembered = self.session_memory.get(self.session_scope_key(scope), "")
+        if remembered:
+            for idx, item in enumerate(sessions):
+                if str(item.get("session_id") or "") == remembered:
+                    self.session_index = idx
+                    return
+        self.session_index = max(-1, min(self.session_index, len(sessions) - 1))
+
     def session_header_segments(self, scope: str, sessions: list[dict[str, Any]], width: int) -> list[tuple[str, int]]:
         segments: list[tuple[str, int]] = [("  ", 0)]
         for idx, (_key, label, col_width) in enumerate(self.session_column_specs(scope, sessions, width)):
@@ -476,7 +528,23 @@ class App:
         if not selected or selected.get("_kind") == "new":
             return self.command_line()
         session_id = str(selected.get("session_id") or "")
+        if not session_id:
+            return self.command_line()
         return self.resume_command_line(session_id)
+
+    def window_title(self) -> str:
+        if self.view == "manage":
+            return "ai manage"
+        if self.active_section() == "sessions":
+            return self.selected_session_command_line()
+        return self.command_line()
+
+    def sync_terminal_title(self) -> None:
+        title = self.window_title()
+        if getattr(self, "_terminal_title", None) == title:
+            return
+        self._terminal_title = title
+        set_terminal_title(title)
 
     def session_choice_command_line(self) -> str:
         return self.command_line()
@@ -1033,13 +1101,17 @@ class App:
         specs: list[tuple[str, str, int]] | None = None,
     ) -> list[tuple[str, int]]:
         scope = scope or self.current_session_scope()
-        marker = "> " if selected else "  "
+        marker = ">" if selected else " "
         attr = self.selection_attr(focused) if selected else 0
         specs = specs or self.session_column_specs(scope, [item], width)
-        segments: list[tuple[str, int]] = [(marker, attr)]
+        segments: list[tuple[str, int]] = [(marker, attr), (" ", 0)]
         for idx, (key, _label, col_width) in enumerate(specs):
             value = self.session_field_value(item, key, scope)
-            segments.append((pad_cells(value, col_width), attr))
+            visible = fit_cells(value, col_width)
+            segments.append((visible, attr))
+            padding = col_width - cell_width(visible)
+            if padding > 0:
+                segments.append((" " * padding, 0))
             if idx + 1 < len(specs):
                 segments.append(("  ", 0))
         return segments
@@ -1047,7 +1119,8 @@ class App:
     def session_rows(self) -> list[dict[str, Any]]:
         sessions = self.current_sessions()
         rows = [dict(session, _kind="session") for session in sessions]
-        self.session_index = max(-1, min(self.session_index, len(rows) - 1))
+        self.restore_session_selection(rows)
+        self.remember_session_selection(sessions=rows)
         return rows
 
     def selected_session(self) -> dict[str, Any] | None:
@@ -1159,6 +1232,7 @@ class App:
         return lines
 
     def draw_header(self, width: int) -> None:
+        self.sync_terminal_title()
         command = self.command_line()
         if self.active_section() == "sessions":
             command = self.selected_session_command_line()
@@ -1437,8 +1511,7 @@ class App:
             return
         sessions = self.session_rows()
         active = self.active_section() == "sessions"
-        title = f"Sessions: {self.session_scope_context()}"
-        self.add_line(y, 0, title, width - 1, curses.A_BOLD)
+        self.add_line(y, 0, "SESSION LIST", width - 1)
         if not sessions:
             self.add_line(y + 1, 0, "No summaries yet.", width - 1)
             return
@@ -1446,7 +1519,6 @@ class App:
         list_y = y + 1
         list_rows = 2 if rows <= 7 else max(3, min(10, rows - 9))
         scope = self.current_session_scope()
-        specs = self.session_column_specs(scope, sessions, width)
         self.list_meta["sessions"] = {
             "y": list_y,
             "x": 0,
@@ -1466,9 +1538,11 @@ class App:
         if self.session_index >= 0 and self.session_index >= self.session_scroll + list_rows:
             self.session_scroll = self.session_index - list_rows + 1
         self.list_meta["sessions"]["start"] = self.session_scroll
+        visible_sessions = sessions[self.session_scroll : self.session_scroll + list_rows]
+        specs = self.session_column_specs(scope, visible_sessions, width)
 
         if hasattr(self, "stdscr"):
-            self.add_segments(list_y, 0, self.session_header_segments(scope, sessions, width), width - 1)
+            self.add_segments(list_y, 0, self.session_header_segments(scope, visible_sessions, width), width - 1)
         else:
             self.add_line(list_y, 0, "  " + self.session_scope_columns(scope), width - 1, curses.A_DIM)
         list_y += 1
@@ -1494,8 +1568,7 @@ class App:
             return
         selected = sessions[self.session_index]
         session_id = str(selected.get("session_id") or "")
-        selected_attr = self.selection_attr(active)
-        self.add_line(preview_y, 0, f"Selected session: {self.session_scope_context()}", width - 1, selected_attr)
+        self.add_line(preview_y, 0, "SESSION SELECTED", width - 1)
         self.add_line(preview_y + 1, 2, f"ID: {session_id or '-'}", width - 3)
         row = preview_y + 2
         preview_space = max(2, rows - list_rows - 4)
@@ -1573,6 +1646,7 @@ class App:
             self.hide_cursor()
 
     def draw(self) -> None:
+        self.sync_terminal_title()
         if self.view == "manage":
             self.draw_manage()
         else:
@@ -1706,12 +1780,14 @@ class App:
         if section == "mode":
             self.indices["mode"] = (self.indices["mode"] + direction) % len(MODES)
         elif section == "provider":
+            self.remember_session_selection()
             self.remember_current_profile()
             self.indices["provider"] = (self.indices["provider"] + direction) % len(PROVIDERS)
             self.profiles = self.discover_profiles(self.current_provider())
             self.restore_profile_for_provider()
             self.reset_sessions()
         elif section == "profile":
+            self.remember_session_selection()
             self.indices["profile"] = (self.indices["profile"] + direction) % len(self.profiles)
             self.remember_current_profile()
             self.reset_sessions()
@@ -1764,12 +1840,14 @@ class App:
         if section == "mode":
             self.indices["mode"] = len(MODES) - 1 if end else 0
         elif section == "provider":
+            self.remember_session_selection()
             self.remember_current_profile()
             self.indices["provider"] = len(PROVIDERS) - 1 if end else 0
             self.profiles = self.discover_profiles(self.current_provider())
             self.restore_profile_for_provider()
             self.reset_sessions()
         elif section == "profile":
+            self.remember_session_selection()
             self.indices["profile"] = len(self.profiles) - 1 if end else 0
             self.remember_current_profile()
             self.reset_sessions()
@@ -1817,6 +1895,7 @@ class App:
         if section == "mode":
             self.indices["mode"] = item_idx
         elif section == "provider":
+            self.remember_session_selection()
             self.remember_current_profile()
             self.indices["provider"] = item_idx
             self.profiles = self.discover_profiles(self.current_provider())
@@ -1824,6 +1903,7 @@ class App:
             self.session_index = 0
             self.session_scroll = 0
         elif section == "profile":
+            self.remember_session_selection()
             self.indices["profile"] = item_idx
             self.remember_current_profile()
             self.session_index = 0
