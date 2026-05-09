@@ -522,8 +522,19 @@ class App:
         self.session_scroll = 0
         self.invalidate_session_cache()
 
+    def directory_is_cwd(self, directory: str) -> bool:
+        if not directory:
+            return True
+        return self.same_path(directory, str(Path.cwd()))
+
+    def directory_args(self, directory: str, display: bool = False) -> list[str]:
+        if not directory or self.directory_is_cwd(directory):
+            return []
+        value = short(directory) if display else directory
+        return ["-d", value]
+
     def selected_workdir_is_cwd(self) -> bool:
-        return self.same_path(self.effective_workdir_path(), str(Path.cwd()))
+        return self.directory_is_cwd(self.effective_workdir_path())
 
     def commit_workdir_text_if_present(self) -> bool:
         text = getattr(self, "workdir_text", None)
@@ -548,9 +559,7 @@ class App:
         profile = self.current_profile_arg()
         if profile:
             args.extend(["-p", profile])
-        if not self.selected_workdir_is_cwd():
-            workdir = short(self.effective_workdir_path()) if display else self.effective_workdir_path()
-            args.extend(["-d", workdir])
+        args.extend(self.directory_args(self.effective_workdir_path(), display))
         return args
 
     def command_line(self) -> str:
@@ -562,13 +571,13 @@ class App:
     def session_args(self, item: dict[str, Any], display: bool = False) -> list[str]:
         provider = str(item.get("provider") or self.current_provider())
         profile = str(item.get("profile") or "default")
-        workdir = str(item.get("workdir") or self.effective_workdir_path())
+        workdir = str(item.get("workdir") or "")
         ref = str(item.get("native_session_ref") or item.get("session_id") or "")
         args = [provider]
         if profile and profile != "default":
             args.extend(["-p", profile])
         if workdir:
-            args.extend(["-d", short(workdir) if display else workdir])
+            args.extend(self.directory_args(workdir, display))
         if ref:
             args.extend(["-s", ref])
         return args
