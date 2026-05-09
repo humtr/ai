@@ -1,0 +1,32 @@
+{
+  "commands": {
+    "run": {
+      "type": "launch",
+      "tui_visible": true,
+      "accepts_session": true,
+      "accepts_prompt": false,
+      "accepts_native_args": false
+    },
+    "ask": {
+      "type": "inline_prompt",
+      "tui_visible": false,
+      "accepts_session": false,
+      "accepts_prompt": true,
+      "accepts_native_args": false
+    },
+    "chat": {
+      "type": "inline_prompt",
+      "tui_visible": false,
+      "accepts_session": false,
+      "accepts_prompt": true,
+      "accepts_native_args": false
+    },
+    "raw": {
+      "type": "native_passthrough",
+      "tui_visible": false,
+      "accepts_session": false,
+      "accepts_prompt": false,
+      "accepts_native_args": true
+    }
+  }
+}

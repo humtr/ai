@@ -1,0 +1,62 @@
+{
+  "providers": {
+    "codex": {
+      "label": "Codex",
+      "binary": "codex",
+      "profile": {
+        "supported": true,
+        "base_dir": "~/.codex-profiles",
+        "strategy": "env_home",
+        "env_var": "CODEX_HOME",
+        "default_uses_native_home": true
+      },
+      "session": {
+        "supported": true,
+        "strategy": "codex_resume",
+        "supports_all": true,
+        "supports_specific_ref": true,
+        "supports_picker": true,
+        "supports_last": true
+      }
+    },
+    "gemini": {
+      "label": "Gemini",
+      "binary": "gemini",
+      "profile": {
+        "supported": true,
+        "base_dir": "~/.gemini-profiles",
+        "strategy": "temp_home_symlink",
+        "symlink_name": ".gemini",
+        "temp_home_base": "~/.cache/ai/gemini-home",
+        "default_uses_native_home": true
+      },
+      "session": {
+        "supported": true,
+        "strategy": "gemini_resume",
+        "supports_all": false,
+        "supports_specific_ref": true,
+        "supports_picker": true,
+        "supports_last": true
+      }
+    },
+    "hermes": {
+      "label": "Hermes",
+      "binary": "hermes",
+      "profile": {
+        "supported": true,
+        "base_dir": "~/.hermes/profiles",
+        "strategy": "native_arg",
+        "arg": "--profile",
+        "fallback_strategy": "profile_use"
+      },
+      "session": {
+        "supported": true,
+        "strategy": "hermes_resume",
+        "supports_all": false,
+        "supports_specific_ref": true,
+        "supports_picker": true,
+        "supports_last": true
+      }
+    }
+  }
+}

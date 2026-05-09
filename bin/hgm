@@ -1,59 +1,59 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# hgw = Hermes Gateway Manager
+# hgm = Hermes Gateway Manager
 set -euo pipefail
 
 SESSION="hermes-gw"
 PROFILE_DIR="$HOME/.hermes/profiles"
-CONFIG_DIR="$HOME/.config/hgw"
+CONFIG_DIR="$HOME/.config/hgm"
 ALIASES_FILE="$CONFIG_DIR/aliases.tsv"
 BRIDGE_ENV="$CONFIG_DIR/bridge.env"
 BRIDGE_BIN="$HOME/bin/hgb"
-INTERNAL_PREFIX="hgw-"
+INTERNAL_PREFIX="hgm-"
 
 mkdir -p "$CONFIG_DIR"
 
 usage() {
   cat <<USAGE
-hgw = Hermes Gateway Manager
+hgm = Hermes Gateway Manager
 
 Usage:
-  hgw bind <profile> <alias>
-  hgw unbind <alias>
-  hgw list
+  hgm bind <profile> <alias>
+  hgm unbind <alias>
+  hgm list
 
-  hgw run <profile|alias|all>
-  hgw stop <profile|alias|all>
-  hgw restart <profile|alias|all>
-  hgw status
-  hgw web <url>
-  hgw approve <request|allow|deny|list|show|cleanup>
-  hgw auto <on|off|status|run>
-  hgw logs <profile|alias>
-  hgw view <profile|alias>
+  hgm run <profile|alias|all>
+  hgm stop <profile|alias|all>
+  hgm restart <profile|alias|all>
+  hgm status
+  hgm web <url>
+  hgm approve <request|allow|deny|list|show|cleanup>
+  hgm auto <on|off|status|run>
+  hgm logs <profile|alias>
+  hgm view <profile|alias>
 
-  hgw bridge start
-  hgw bridge stop
-  hgw bridge restart
-  hgw bridge status
-  hgw bridge logs [N]
-  hgw bridge test [PROMPT]
-  hgw bridge config
-  hgw bridge set profile|model|port|host|public-model|session|profiles VALUE
+  hgm bridge start
+  hgm bridge stop
+  hgm bridge restart
+  hgm bridge status
+  hgm bridge logs [N]
+  hgm bridge test [PROMPT]
+  hgm bridge config
+  hgm bridge set profile|model|port|host|public-model|session|profiles VALUE
 
 Examples:
-  hgw bind tg tg
-  hgw bind tg2 tg2
+  hgm bind tg tg
+  hgm bind tg2 tg2
 
-  hgw run tg
-  hgw run tg2
-  hgw run all
-  hgw logs tg
-  hgw view tg2
-  hgw stop all
+  hgm run tg
+  hgm run tg2
+  hgm run all
+  hgm logs tg
+  hgm view tg2
+  hgm stop all
 
-  hgw bridge start
-  hgw bridge test "Reply with only: HGB_OK"
-  hgw bridge set model gemini-2.5-flash-lite
+  hgm bridge start
+  hgm bridge test "Reply with only: HGB_OK"
+  hgm bridge set model gemini-2.5-flash-lite
 USAGE
 }
 
@@ -235,7 +235,7 @@ bridge_status() {
   local tmpbase tmp
   tmpbase="${TMPDIR:-$HOME/tmp}"
   mkdir -p "$tmpbase"
-  tmp="$tmpbase/hgw-bridge-health.$$"
+  tmp="$tmpbase/hgm-bridge-health.$$"
 
   if bridge_health > "$tmp" 2>/dev/null; then
     echo "health:       OK"
@@ -264,7 +264,7 @@ bridge_start() {
 
   if bridge_running; then
     echo "hgb tmux session exists but health check failed: $HGB_SESSION"
-    echo "Try: hgw bridge restart"
+    echo "Try: hgm bridge restart"
     return 1
   fi
 
@@ -330,7 +330,7 @@ bridge_test() {
 
   bridge_health >/dev/null 2>&1 || {
     echo "Bridge is not healthy. Try:"
-    echo "  hgw bridge start"
+    echo "  hgm bridge start"
     exit 1
   }
 
@@ -362,7 +362,7 @@ bridge_set() {
   local val="${2:-}"
 
   if [ -z "$key" ] || [ -z "$val" ]; then
-    echo "Usage: hgw bridge set profile|model|port|host|public-model|session|profiles VALUE" >&2
+    echo "Usage: hgm bridge set profile|model|port|host|public-model|session|profiles VALUE" >&2
     exit 2
   fi
 
@@ -422,14 +422,14 @@ bridge_cmd() {
     *)
       cat >&2 <<USAGE
 Usage:
-  hgw bridge start
-  hgw bridge stop
-  hgw bridge restart
-  hgw bridge status
-  hgw bridge logs [N]
-  hgw bridge test [PROMPT]
-  hgw bridge config
-  hgw bridge set profile|model|port|host|public-model|session|profiles VALUE
+  hgm bridge start
+  hgm bridge stop
+  hgm bridge restart
+  hgm bridge status
+  hgm bridge logs [N]
+  hgm bridge test [PROMPT]
+  hgm bridge config
+  hgm bridge set profile|model|port|host|public-model|session|profiles VALUE
 USAGE
       exit 2
       ;;
@@ -464,7 +464,7 @@ bind_alias() {
   local alias_name="${2:-}"
 
   [ -n "$profile" ] && [ -n "$alias_name" ] || {
-    echo "Usage: hgw bind <profile> <alias>"
+    echo "Usage: hgm bind <profile> <alias>"
     exit 1
   }
 
@@ -498,7 +498,7 @@ unbind_alias() {
   local alias_name="${1:-}"
 
   [ -n "$alias_name" ] || {
-    echo "Usage: hgw unbind <alias>"
+    echo "Usage: hgm unbind <alias>"
     exit 1
   }
 
@@ -507,7 +507,7 @@ unbind_alias() {
     mv "$ALIASES_FILE.tmp" "$ALIASES_FILE"
   fi
 
-  echo "Unbound from hgw: $alias_name"
+  echo "Unbound from hgm: $alias_name"
   echo "Note: Hermes alias executable itself was not removed."
 }
 
@@ -568,7 +568,7 @@ logs_one() {
 
   if ! window_exists "$profile"; then
     echo "Not running: $SESSION:$profile"
-    echo "Start with: hgw run $target"
+    echo "Start with: hgm run $target"
     exit 1
   fi
 
@@ -583,7 +583,7 @@ view_one() {
 
   if ! window_exists "$profile"; then
     echo "Not running: $SESSION:$profile"
-    echo "Start with: hgw run $target"
+    echo "Start with: hgm run $target"
     exit 1
   fi
 
@@ -663,19 +663,19 @@ cmd="${1:-help}"
 shift || true
 
 
-# hgw web/approve early dispatch
+# hgm web/approve early dispatch
 # Keep this outside the main case block so it survives case layout changes.
 if [ "$cmd" = "approve" ]; then
-  "$HOME/.config/hgw/lib/approve.py" "$@"
+  "$HOME/.config/hgm/lib/approve.py" "$@"
   exit $?
 fi
 
 if [ "$cmd" = "web" ]; then
   [ -n "${1:-}" ] || {
-    echo "Usage: hgw web <url>"
+    echo "Usage: hgm web <url>"
     exit 2
   }
-  "$HOME/.config/hgw/lib/web_fetch.py" "$@"
+  "$HOME/.config/hgm/lib/web_fetch.py" "$@"
   exit $?
 fi
 
