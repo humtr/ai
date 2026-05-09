@@ -42,7 +42,6 @@ Resource names are singular by design.
 - `ai_resource.py`: resource command implementation.
 - `ai_cli.py`: CLI frontend.
 - `ai_tui.py`: TUI frontend only.
-- `ai_registry.py`: compatibility shim.
 
 ## Gateway changes
 
@@ -65,3 +64,10 @@ AI_DRY_RUN=1 bin/ai run hermes -p main
 bin/ai provider list
 bin/ai session refresh
 ```
+
+## Stage 6.2 notes
+
+- The old monolithic registry facade has been removed. New code imports `ai_spec`, `ai_provider`, `ai_store`, and `ai_session` directly.
+- TUI is forward-ported from the original UI/UX: `Provider / Profile / Session / Workdir / Sessions`; the old `Mode` row is removed.
+- TUI commands are always generated as `ai run ...`. Existing sessions use `-s`; directories use `-d`.
+- TUI session rows are cached by scope/provider/profile to avoid reloading on every draw or row movement.

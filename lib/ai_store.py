@@ -53,13 +53,13 @@ def default_gateways() -> dict[str, Any]:
         {"id":"gemini-bridge","kind":"openai-compatible-bridge","command":"hgb","manager":"hgm","hidden":False},
     ]}
 
-def ensure_registry() -> None:
+def ensure_store() -> None:
     if not WORKDIRS_FILE.exists(): write_json(WORKDIRS_FILE, default_workdirs())
     if not GATEWAYS_FILE.exists(): write_json(GATEWAYS_FILE, default_gateways())
 
 def load_workdirs() -> dict[str, Any]:
-    ensure_registry(); data=read_json(WORKDIRS_FILE, default_workdirs()); data.setdefault("workdirs", []); return data
+    ensure_store(); data=read_json(WORKDIRS_FILE, default_workdirs()); data.setdefault("workdirs", []); return data
 
 def save_workdirs(data: dict[str, Any]) -> None: write_json(WORKDIRS_FILE, data)
 def load_gateways() -> dict[str, Any]:
-    ensure_registry(); data=read_json(GATEWAYS_FILE, default_gateways()); data.setdefault("gateways", []); return data
+    ensure_store(); data=read_json(GATEWAYS_FILE, default_gateways()); data.setdefault("gateways", []); return data
