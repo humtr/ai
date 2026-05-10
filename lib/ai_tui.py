@@ -656,10 +656,171 @@ class App:
         curses.endwin()
         os.execvp(cmd[0], cmd)
 
-    def confirm_exec_or_preview(self, cmd: list[str]) -> None:
+
+    # Stage 6.4 TUI structural helpers
+    def section_name(self) -> str:
+        sections = list(SECTIONS)
+        try:
+            section = int(getattr(self, "section", 0))
+        except (TypeError, ValueError):
+            section = 0
+        if section < 0 or section >= len(sections):
+            section = 0
+            self.section = section
+        return sections[section]
+
+    def set_section(self, name: str) -> None:
+        sections = list(SECTIONS)
+        if name not in sections:
+            name = sections[0]
+        self.section = sections.index(name)
+        if name in BUILDER_SECTIONS:
+            self.last_builder_section = BUILDER_SECTIONS.index(name)
+
+    def can_focus_sessions(self) -> bool:
+        if self.current_session_choice() == "new":
+            return False
+        try:
+            return bool(self.current_sessions())
+        except Exception:
+            return False
+
+    def tab_sections(self) -> list[str]:
+        sections = list(BUILDER_SECTIONS)
+        if self.can_focus_sessions():
+            sections.append("sessions")
+        return sections
+
+    def normalize_focus(self) -> None:
+        sections = self.tab_sections()
+        current = self.section_name()
+        if current not in sections:
+            self.set_section(sections[0])
+
+    def move_focus_next(self) -> None:
+        sections = self.tab_sections()
+        current = self.section_name()
+        if current not in sections:
+            self.set_section(sections[0])
+            return
+        self.set_section(sections[(sections.index(current) + 1) % len(sections)])
+
+    def move_focus_prev(self) -> None:
+        sections = self.tab_sections()
+        current = self.section_name()
+        if current not in sections:
+            self.set_section(sections[-1])
+            return
+        self.set_section(sections[(sections.index(current) - 1) % len(sections)])
+
+    def in_run_confirm(self) -> bool:
+        return self.pending_action == "exec" and bool(self.pending_cmd)
+
+    def enter_run_confirm(self, cmd: list[str] | None) -> None:
+        if not cmd:
+            self.message = "nothing to run"
+            return
         self.pending_action = "exec"
-        self.pending_cmd = cmd
-        self.message = "Press Enter again to run; Esc cancels"
+        self.pending_cmd = list(cmd)
+        self.message = "RUN ready: Enter to run | Esc cancel | Tab cancel + next"
+
+    def leave_run_confirm(self, message: str = "run cancelled") -> None:
+        self.pending_action = None
+        self.pending_cmd = None
+        self.message = message
+
+    def execute_run_confirm(self) -> None:
+        cmd = list(self.pending_cmd or [])
+        self.pending_action = None
+        self.pending_cmd = None
+        if not cmd:
+            self.message = "nothing to run"
+            return
+        self.exec_or_preview(cmd)
+
+    def workdir_dropdown_open(self) -> bool:
+        return getattr(self, "workdir_layer", "inline") == "children"
+
+    def commit_workdir_dropdown(self) -> bool:
+        if not self.workdir_dropdown_open():
+            return False
+        self.commit_focused_workdir()
+        self.set_section("workdir")
+        return True
+
+    def cancel_workdir_dropdown(self) -> bool:
+        if not self.workdir_dropdown_open():
+            return False
+        self.focus_workdir_path()
+        self.set_section("workdir")
+        self.message = "workdir selection cancelled"
+        return True
+
+    def command_for_current_focus(self) -> list[str] | None:
+        if self.section_name() == "workdir" and not self.commit_workdir_text_if_present():
+            return None
+        if self.section_name() == "sessions":
+            selected = self.selected_session()
+            if (
+                selected
+                and selected.get("_kind") != "new"
+                and str(selected.get("native_session_ref") or selected.get("session_id") or "")
+            ):
+                return self.session_command(selected)
+        return self.run_command()
+
+    def key_is_tab(self, key: object) -> bool:
+        return key in (9, "\t")
+
+    def key_is_enter(self, key: object) -> bool:
+        return key in (10, 13, "\n", "\r", getattr(curses, "KEY_ENTER", 343))
+
+    def key_is_escape(self, key: object) -> bool:
+        return key in (27, "\x1b")
+
+    def handle_navigation_key(self, key: object) -> bool:
+        if self.key_is_tab(key):
+            return self.handle_tab()
+        if self.key_is_enter(key):
+            return self.handle_enter()
+        if self.key_is_escape(key):
+            return self.handle_escape()
+        return False
+
+    def handle_tab(self) -> bool:
+        if self.in_run_confirm():
+            self.leave_run_confirm("run cancelled")
+            self.move_focus_next()
+            return True
+        if self.workdir_dropdown_open():
+            self.commit_workdir_dropdown()
+            return True
+        self.move_focus_next()
+        return True
+
+    def handle_enter(self) -> bool:
+        if self.in_run_confirm():
+            self.execute_run_confirm()
+            return True
+        if self.workdir_dropdown_open():
+            if self.commit_workdir_dropdown():
+                self.enter_run_confirm(self.run_command())
+            return True
+        cmd = self.command_for_current_focus()
+        if cmd is not None:
+            self.enter_run_confirm(cmd)
+        return True
+
+    def handle_escape(self) -> bool:
+        if self.in_run_confirm():
+            self.leave_run_confirm("run cancelled")
+            return True
+        if self.cancel_workdir_dropdown():
+            return True
+        return False
+
+    def confirm_exec_or_preview(self, cmd: list[str]) -> None:
+        self.enter_run_confirm(cmd)
 
     def open_file(self, path: Path) -> None:
         editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
@@ -2091,6 +2252,8 @@ class App:
             self.draw()
             try:
                 ch = self.stdscr.getch()
+                if self.view == "main" and self.handle_navigation_key(ch):
+                    continue
             except KeyboardInterrupt:
                 return 130
             result = self.handle_manage_key(ch) if self.view == "manage" else self.handle_main_key(ch)
