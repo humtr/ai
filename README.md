@@ -71,3 +71,30 @@ bin/ai session refresh
 - TUI is forward-ported from the original UI/UX: `Provider / Profile / Session / Workdir / Sessions`; the old `Mode` row is removed.
 - TUI commands are always generated as `ai run ...`. Existing sessions use `-s`; directories use `-d`.
 - TUI session rows are cached by scope/provider/profile to avoid reloading on every draw or row movement.
+
+## Termux install
+
+Install the current working tree into the Termux runtime:
+
+```bash
+./scripts/install-termux.sh
+```
+
+Default install paths:
+
+```text
+~/bin/ai
+~/.config/ai/lib
+```
+
+The installer backs up existing runtime files under:
+
+```text
+~/.config/ai/backups/
+```
+
+Override destinations when needed:
+
+```bash
+AI_BIN_DEST="$HOME/bin/ai" AI_LIB_DEST="$HOME/.config/ai/lib" ./scripts/install-termux.sh
+```
