@@ -59,7 +59,7 @@ RESOLVED="$(command -v ai || true)"
 say "command -v ai: ${RESOLVED:-not found}"
 if [ -n "$RESOLVED" ] && [ "$RESOLVED" != "$DEST_BIN" ]; then
   say "WARNING: PATH resolves ai to a different file:"
-  say "  resolved:  $RESOLVED"
+  say "  resolved: $RESOLVED"
   say "  installed: $DEST_BIN"
   say "Set AI_BIN_DEST to the resolved path, or adjust PATH, if this is not intended."
 fi
