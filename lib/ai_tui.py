@@ -398,6 +398,26 @@ class App:
             parts.append(f"Profile: {self.current_profile_label()}")
         return "Session list  " + "  ".join(parts)
 
+    def path_is_nested_workdir(self, child: str, parent: str) -> bool:
+        child_norm = ai_store.normalize_path(child)
+        parent_norm = ai_store.normalize_path(parent)
+        if not child_norm or not parent_norm or child_norm == parent_norm:
+            return False
+        try:
+            Path(child_norm).relative_to(Path(parent_norm))
+            return True
+        except ValueError:
+            return False
+
+    def nested_workdir_label(self, workdir: str) -> str:
+        base = ai_store.normalize_path(self.effective_workdir_path())
+        value = ai_store.normalize_path(workdir)
+        try:
+            relative = Path(value).relative_to(Path(base))
+            return str(relative) or "."
+        except ValueError:
+            return short(value)
+
     def session_scope_key(self, scope: str | None = None) -> str:
         scope = scope or self.current_session_scope()
         indices = getattr(self, "indices", {})
@@ -445,6 +465,8 @@ class App:
         return [labels[key] for key in self.session_policy_field_keys()]
 
     def session_field_value(self, item: dict[str, Any], key: str, scope: str | None = None) -> str:
+        if item.get("_kind") == "header":
+            return str(item.get("title") or "") if key == "title" else ""
         if key == "time":
             if item.get("_kind") == "new":
                 return ""
@@ -494,6 +516,8 @@ class App:
         return specs
 
     def stable_session_key(self, item: dict[str, Any]) -> str:
+        if item.get("_kind") == "header":
+            return str(item.get("stable_key") or item.get("title") or "header")
         if item.get("_kind") == "new":
             return "new"
         native_ref = str(item.get("native_session_ref") or item.get("session_id") or "")
@@ -521,7 +545,7 @@ class App:
         sessions = sessions if sessions is not None else self.current_sessions()
         if not sessions or self.session_index < 0 or self.session_index >= len(sessions):
             return
-        if sessions[self.session_index].get("_kind") == "new":
+        if sessions[self.session_index].get("_kind") in {"new", "header"}:
             return
         session_key = self.stable_session_key(sessions[self.session_index])
         if not session_key:
@@ -538,12 +562,40 @@ class App:
         remembered = self.session_memory.get(self.session_scope_key(scope), "")
         if remembered:
             for idx, item in enumerate(sessions):
-                if self.stable_session_key(item) == remembered:
+                if item.get("_kind") != "header" and self.stable_session_key(item) == remembered:
                     self.session_index = idx
                     self.session_scroll = 0
                     return
-        self.session_index = 0
+        self.session_index = self.first_selectable_session_index(sessions)
         self.session_scroll = 0
+
+    def first_selectable_session_index(self, sessions: list[dict[str, Any]]) -> int:
+        for idx, item in enumerate(sessions):
+            if item.get("_kind") != "header":
+                return idx
+        return -1
+
+    def clamp_session_index_to_selectable(self, sessions: list[dict[str, Any]], direction: int = 1) -> None:
+        if not sessions:
+            self.session_index = -1
+            return
+        self.session_index = max(0, min(self.session_index, len(sessions) - 1))
+        if sessions[self.session_index].get("_kind") != "header":
+            return
+        step = 1 if direction >= 0 else -1
+        idx = self.session_index
+        while 0 <= idx < len(sessions):
+            if sessions[idx].get("_kind") != "header":
+                self.session_index = idx
+                return
+            idx += step
+        idx = self.session_index - step
+        while 0 <= idx < len(sessions):
+            if sessions[idx].get("_kind") != "header":
+                self.session_index = idx
+                return
+            idx -= step
+        self.session_index = -1
 
     def session_header_segments(self, scope: str, sessions: list[dict[str, Any]], width: int) -> list[tuple[str, int]]:
         segments: list[tuple[str, int]] = [("  ", 0)]
@@ -1397,12 +1449,50 @@ class App:
             self.message = f"session list failed: {exc}"
             sessions = []
         rows = [self.new_session_row(), *[dict(session, _kind="session") for session in sessions]]
+        rows.extend(self.nested_session_rows(provider, profile, workdir))
         self._session_cache_key = key
         self._session_cache_rows = rows
         if rows and self.session_index < 0:
             self.restore_session_selection(rows, scope)
         else:
             self.session_index = max(-1, min(self.session_index, len(rows) - 1))
+            self.clamp_session_index_to_selectable(rows)
+        return rows
+
+    def nested_session_rows(self, provider: str | None, profile: str | None, workdir: str | None) -> list[dict[str, Any]]:
+        if not workdir:
+            return []
+        try:
+            candidates = ai_session.recent_sessions(provider, profile, None, limit=240, ranking="strict")
+        except Exception:
+            return []
+        nested = [
+            dict(session, _kind="session")
+            for session in candidates
+            if self.path_is_nested_workdir(str(session.get("workdir") or ""), workdir)
+        ]
+        if not nested:
+            return []
+        nested.sort(
+            key=lambda item: (
+                self.nested_workdir_label(str(item.get("workdir") or "")).lower(),
+                -float(item.get("mtime") or 0),
+            )
+        )
+        rows: list[dict[str, Any]] = []
+        current_label = ""
+        for item in nested[:40]:
+            label = self.nested_workdir_label(str(item.get("workdir") or ""))
+            if label != current_label:
+                current_label = label
+                rows.append(
+                    {
+                        "_kind": "header",
+                        "title": f"Nested workdir: {label}",
+                        "stable_key": f"nested:{label}",
+                    }
+                )
+            rows.append(item)
         return rows
 
     def new_session_row(self) -> dict[str, Any]:
@@ -1430,7 +1520,10 @@ class App:
     ) -> list[tuple[str, int]]:
         scope = scope or self.current_session_scope()
         marker = ">" if selected else " "
-        attr = self.selection_attr(focused) if selected else 0
+        if item.get("_kind") == "header":
+            attr = curses.A_DIM | curses.A_BOLD
+        else:
+            attr = self.selection_attr(focused) if selected else 0
         specs = specs or self.session_column_specs(scope, [item], width)
         segments: list[tuple[str, int]] = [(marker, attr), (" ", 0)]
         for idx, (key, _label, col_width) in enumerate(specs):
@@ -1447,6 +1540,7 @@ class App:
     def session_rows(self) -> list[dict[str, Any]]:
         rows = self.current_sessions()
         self.session_index = max(-1, min(self.session_index, len(rows) - 1))
+        self.clamp_session_index_to_selectable(rows)
         return rows
 
     def selected_session(self) -> dict[str, Any] | None:
@@ -1459,6 +1553,9 @@ class App:
         item = self.selected_session()
         if not item:
             self.message = "no selected session"
+            return
+        if item.get("_kind") == "header":
+            self.message = "select a session"
             return
         if not self.commit_workdir_text_if_present():
             return
@@ -2149,6 +2246,7 @@ class App:
                 self.remember_session_selection(sessions=sessions)
             current = self.session_index if self.session_index >= 0 else -1
             self.session_index = max(0, min(current + direction, len(sessions) - 1))
+            self.clamp_session_index_to_selectable(sessions, direction)
 
     def move_to_edge(self, end: bool) -> None:
         section = self.active_section()
@@ -2178,6 +2276,7 @@ class App:
                 self.remember_session_selection(sessions=sessions)
             if sessions:
                 self.session_index = max(0, len(sessions) - 1) if end else 0
+                self.clamp_session_index_to_selectable(sessions, -1 if end else 1)
 
     def page_size(self) -> int:
         if self.active_section() == "workdir":
@@ -2242,6 +2341,7 @@ class App:
         elif section == "sessions":
             sessions = self.session_rows()
             self.session_index = max(0, min(item_idx, len(sessions) - 1))
+            self.clamp_session_index_to_selectable(sessions)
 
     def mouse_scroll_delta(self, bstate: int) -> int:
         button4 = getattr(curses, "BUTTON4_PRESSED", 0)
