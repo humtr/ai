@@ -1393,8 +1393,16 @@ class App:
         profile = self.current_profile_label() if "profile" in fields else None
         workdir = self.effective_workdir_path() if "workdir" in fields else None
         key = (scope, provider or "", profile or "", ai_store.normalize_path(workdir))
+        if not hasattr(self, "_session_cache_key"):
+            self._session_cache_key = None
+        if not hasattr(self, "_session_cache_rows"):
+            self._session_cache_rows = []
         if self._session_cache_key == key:
             return self._session_cache_rows
+        if not hasattr(self, "session_index"):
+            self.session_index = -1
+        if not hasattr(self, "session_scroll"):
+            self.session_scroll = 0
         try:
             sessions = ai_session.recent_sessions(provider, profile, workdir, limit=60, ranking="strict")
         except Exception as exc:  # pragma: no cover - defensive TUI boundary
@@ -1434,7 +1442,7 @@ class App:
     ) -> list[tuple[str, int]]:
         scope = scope or self.current_session_scope()
         marker = ">" if selected else " "
-        attr = self.selection_attr(focused) if selected else 0
+        attr = self.selection_attr(focused) if selected else self.subdued_attr(focused)
         specs = specs or self.session_column_specs(scope, [item], width)
         segments: list[tuple[str, int]] = [(marker, attr), (" ", 0)]
         for idx, (key, _label, col_width) in enumerate(specs):
@@ -1510,6 +1518,16 @@ class App:
             return self.selection_active_attr
         return self.selection_inactive_attr
 
+    def section_label_attr(self, active: bool) -> int:
+        return curses.A_BOLD if active else curses.A_DIM
+
+    def subdued_attr(self, active: bool) -> int:
+        return 0 if active else curses.A_DIM
+
+    def panel_title(self, label: str, active: bool) -> str:
+        marker = "> " if active else "  "
+        return marker + label
+
     def workdir_child_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") in {"path", "children"}
 
@@ -1580,7 +1598,7 @@ class App:
         label_width = 10
         prefix = f"{marker}{label:<{label_width}}  "
         self.add_line(y, 0, "", width - 1)
-        self.add_text(y, 0, prefix, min(width - 1, len(prefix)), curses.A_BOLD if active else 0)
+        self.add_text(y, 0, prefix, min(width - 1, len(prefix)), self.section_label_attr(active))
 
         start_x = len(prefix)
         remaining = max(0, width - start_x - 1)
@@ -1618,11 +1636,11 @@ class App:
             if item_idx == idx:
                 attr = self.selection_attr(active)
             else:
-                attr = 0 if active else curses.A_DIM
+                attr = self.subdued_attr(active)
             self.add_text(y, x, item, item_width, attr)
             x += item_width
             if offset + 1 < len(visible_items) and x < width - 1:
-                gap_attr = 0 if active else curses.A_DIM
+                gap_attr = self.subdued_attr(active)
                 self.add_text(y, x, " " * gap, min(gap, width - 1 - x), gap_attr)
                 x += gap
         if visible_start + len(visible_items) < len(items) and x < width - 1:
@@ -1733,7 +1751,7 @@ class App:
         label_width = 10
         prefix = f"{marker}{'Workdir':<{label_width}}  "
         self.add_line(y, 0, "", width - 1)
-        self.add_text(y, 0, prefix, min(width - 1, len(prefix)), curses.A_BOLD if active else 0)
+        self.add_text(y, 0, prefix, min(width - 1, len(prefix)), self.section_label_attr(active))
         x = len(prefix)
         base_attr = curses.A_BOLD if active else 0
         if getattr(self, "workdir_layer", "inline") == "children":
@@ -1803,7 +1821,8 @@ class App:
 
     def draw_controls(self, y: int, width: int, rows: int) -> int:
         child_rows = max(0, rows)
-        self.add_line(y, 0, "Command", width - 1, curses.A_BOLD)
+        command_active = self.active_section() != "sessions"
+        self.add_line(y, 0, self.panel_title("Command", command_active), width - 1, self.section_label_attr(command_active))
         session_idx = getattr(self, "indices", {}).get("session", 0)
         self.draw_choice_row(y + 1, width, "session", "Scope", SESSION_SCOPE_LABELS, session_idx)
         providers = getattr(self, "providers", []) or [self.current_provider()]
@@ -1824,7 +1843,7 @@ class App:
             return
         sessions = self.session_rows()
         active = self.active_section() == "sessions"
-        self.add_line(y, 0, self.session_list_title(), width - 1, curses.A_BOLD)
+        self.add_line(y, 0, self.panel_title(self.session_list_title(), active), width - 1, self.section_label_attr(active))
         if not sessions:
             self.list_meta["sessions"] = {
                 "y": y + 1,
@@ -1893,8 +1912,10 @@ class App:
             return
         selected = sessions[self.session_index]
         session_id = str(selected.get("session_id") or "")
-        self.add_line(preview_y, 0, "Selected session", width - 1, curses.A_BOLD)
-        self.add_line(preview_y + 1, 2, f"ID: {session_id or '-'}", width - 3)
+        preview_attr = self.section_label_attr(active)
+        preview_text_attr = self.subdued_attr(active)
+        self.add_line(preview_y, 0, self.panel_title("Selected session", active), width - 1, preview_attr)
+        self.add_line(preview_y + 1, 2, f"ID: {session_id or '-'}", width - 3, preview_text_attr)
         row = preview_y + 2
         preview_space = max(2, rows - list_rows - 4)
         max_prompt = max(1, preview_space // 2)
@@ -1902,12 +1923,12 @@ class App:
         for line in self.wrap_lines("Prompt", str(selected.get("last_prompt_summary") or ""), width - 3, max_prompt):
             if row >= y + rows:
                 return
-            self.add_line(row, 2, line, width - 3)
+            self.add_line(row, 2, line, width - 3, preview_text_attr)
             row += 1
         for line in self.wrap_lines("Answer", str(selected.get("last_response_summary") or ""), width - 3, max_answer):
             if row >= y + rows:
                 return
-            self.add_line(row, 2, line, width - 3)
+            self.add_line(row, 2, line, width - 3, preview_text_attr)
             row += 1
 
     def session_row_text(self, item: dict[str, Any], width: int, selected: bool = False, scope: str | None = None) -> str:
