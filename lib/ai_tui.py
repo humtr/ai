@@ -25,8 +25,7 @@ os.environ.setdefault("ESCDELAY", "50")
 
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 AI_BIN = os.environ.get("AI_BIN", str(HOME / "bin" / "ai"))
-SESSION_CHOICES = ["profile", "provider", "all", "new"]
-BUILDER_SECTIONS = ["provider", "profile", "session", "workdir"]
+BUILDER_SECTIONS = ["provider", "profile", "workdir"]
 SECTIONS = BUILDER_SECTIONS + ["sessions"]
 
 
@@ -169,7 +168,7 @@ class App:
         self.stdscr = stdscr
         self.view = "main"
         self.section = 0
-        self.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+        self.indices = {"workdir": 0, "provider": 0, "profile": 0}
         self.scroll_offsets = {section: 0 for section in SECTIONS}
         self.list_meta: dict[str, dict[str, int]] = {}
         self.custom_workdir: str | None = None
@@ -183,6 +182,7 @@ class App:
         self.session_index = -1
         self.session_scroll = 0
         self.session_memory: dict[str, str] = {}
+        self.session_extra_fields: set[str] = set()
         self.pending_action: str | None = None
         self.pending_cmd: list[str] | None = None
         self.workdir_override = env_truthy("AI_TUI_WORKDIR_OVERRIDE")
@@ -197,7 +197,7 @@ class App:
         self.providers: list[str] = []
         self.profiles: list[str] = []
         self.profile_memory: dict[str, str] = {}
-        self._session_cache_key: tuple[str, str, str] | None = None
+        self._session_cache_key: tuple[str, ...] | None = None
         self._session_cache_rows: list[dict[str, Any]] = []
         self.workdirs: list[dict[str, Any]] = []
         self.selection_active_attr = curses.A_REVERSE | curses.A_BOLD
@@ -273,7 +273,6 @@ class App:
         providers = getattr(self, "providers", []) or ["codex", "gemini", "hermes"]
         self.indices["provider"] = max(0, min(self.indices["provider"], len(providers) - 1))
         self.indices["profile"] = max(0, min(self.indices["profile"], len(self.profiles) - 1))
-        self.indices["session"] = max(0, min(self.indices["session"], len(SESSION_CHOICES) - 1))
         self.indices["workdir"] = max(0, min(self.indices["workdir"], len(self.workdirs) - 1))
         for section in SECTIONS:
             self.scroll_offsets[section] = max(0, self.scroll_offsets.get(section, 0))
@@ -291,11 +290,42 @@ class App:
         return providers or ["codex", "gemini", "hermes"]
 
     def discover_profiles(self, provider: str) -> list[str]:
+        names: list[str] = []
+        seen: set[str] = set()
+        for candidate in self.discover_providers():
+            try:
+                profiles = ai_provider.list_profiles(candidate)
+            except Exception:
+                profiles = ["default"]
+            for profile in profiles or ["default"]:
+                if profile not in seen:
+                    seen.add(profile)
+                    names.append(profile)
+        if "default" in names:
+            names.remove("default")
+        return ["default", *sorted(names, key=str.lower)]
+
+    def provider_profiles(self, provider: str) -> list[str]:
         try:
             profiles = ai_provider.list_profiles(provider)
         except Exception:
             profiles = ["default"]
         return profiles or ["default"]
+
+    def current_profile_valid_for_provider(self) -> bool:
+        profile = self.current_profile_label()
+        if profile == "default":
+            return True
+        return profile in self.provider_profiles(self.current_provider())
+
+    def validate_builder_profile(self) -> bool:
+        if self.current_profile_valid_for_provider():
+            return True
+        self.message = (
+            "profile not available for provider: "
+            f"{self.current_provider()}/{self.current_profile_label()}"
+        )
+        return False
 
     def current_profile_label(self) -> str:
         profiles = getattr(self, "profiles", [])
@@ -343,22 +373,30 @@ class App:
     def current_profile(self) -> str:
         return self.current_profile_label()
 
-    def current_session_choice(self) -> str:
-        return SESSION_CHOICES[getattr(self, "indices", {}).get("session", 0)]
-
     def current_session_scope(self) -> str:
-        choice = self.current_session_choice()
-        if choice in {"profile", "provider", "all"}:
-            return choice
-        return "profile"
+        return "workdir"
 
-    def session_scope_context(self) -> str:
-        scope = self.current_session_scope()
-        if scope == "profile":
-            return f"Profile scope: {self.current_provider().title()} / {self.current_profile_label()}"
-        if scope == "provider":
-            return f"Provider scope: {self.current_provider().title()} / all profiles"
-        return "All scope: all providers / all profiles"
+    def current_session_filter_fields(self) -> set[str]:
+        fields = {"workdir"}
+        fields.update(getattr(self, "session_extra_fields", set()))
+        return fields
+
+    def promote_session_scope(self, field: str) -> None:
+        if not hasattr(self, "session_extra_fields"):
+            self.session_extra_fields = set()
+        if field != "workdir":
+            self.session_extra_fields.add(field)
+
+    def session_list_title(self) -> str:
+        parts = []
+        fields = self.current_session_filter_fields()
+        if "workdir" in fields:
+            parts.append(f"Workdir: {short(self.effective_workdir_path())}")
+        if "provider" in fields:
+            parts.append(f"Provider: {self.current_provider()}")
+        if "profile" in fields:
+            parts.append(f"Profile: {self.current_profile_label()}")
+        return "Session list  " + "  ".join(parts)
 
     def session_scope_key(self, scope: str | None = None) -> str:
         scope = scope or self.current_session_scope()
@@ -369,29 +407,32 @@ class App:
         provider = providers[provider_index] if 0 <= provider_index < len(providers) else providers[0]
         profiles = getattr(self, "profiles", ["default"]) or ["default"]
         profile = profiles[profile_index] if 0 <= profile_index < len(profiles) else profiles[0]
-        if scope == "profile":
-            return f"profile:{provider}:{profile}"
-        if scope == "provider":
-            return f"provider:{provider}"
-        return "all"
+        fields = self.current_session_filter_fields()
+        parts = [scope]
+        if "workdir" in fields:
+            parts.append(ai_store.normalize_path(self.effective_workdir_path()))
+        if "provider" in fields:
+            parts.append(provider)
+        if "profile" in fields:
+            parts.append(profile)
+        if scope == "none":
+            return "none"
+        return ":".join(parts)
+
+    def session_policy_field_keys(self, policy: str | None = None) -> list[str]:
+        keys = ["time", "provider", "profile", "workdir", "title"]
+        fields = self.current_session_filter_fields()
+        for field in fields:
+            if field in keys:
+                keys.remove(field)
+        return keys
 
     def session_scope_columns(self, scope: str | None = None) -> str:
-        scope = scope or self.current_session_scope()
-        if scope == "profile":
-            return "Time | Workdir | Title"
-        if scope == "provider":
-            return "Time | Profile | Workdir | Title"
-        return "Time | Provider | Profile | Workdir | Title"
+        labels = self.session_field_labels()
+        return " | ".join(labels)
 
     def session_scope_field_keys(self, scope: str | None = None) -> list[str]:
-        scope = scope or self.current_session_scope()
-        keys = ["time"]
-        if scope == "provider":
-            keys.append("profile")
-        elif scope == "all":
-            keys.extend(["provider", "profile"])
-        keys.extend(["workdir", "title"])
-        return keys
+        return self.session_policy_field_keys()
 
     def session_field_labels(self, scope: str | None = None) -> list[str]:
         labels = {
@@ -401,10 +442,12 @@ class App:
             "workdir": "Workdir",
             "title": "Title",
         }
-        return [labels[key] for key in self.session_scope_field_keys(scope)]
+        return [labels[key] for key in self.session_policy_field_keys()]
 
     def session_field_value(self, item: dict[str, Any], key: str, scope: str | None = None) -> str:
         if key == "time":
+            if item.get("_kind") == "new":
+                return ""
             return short_time(str(item.get("updated") or ""))
         if key == "provider":
             return str(item.get("provider") or self.current_provider())
@@ -413,12 +456,13 @@ class App:
         if key == "workdir":
             return short(str(item.get("workdir") or ""))
         if key == "title":
+            if item.get("_kind") == "new":
+                return "New session"
             value = str(item.get("title") or "")
             return value or str(item.get("session_id") or "")
         return ""
 
     def session_column_specs(self, scope: str | None = None, sessions: list[dict[str, Any]] | None = None, width: int | None = None) -> list[tuple[str, str, int]]:
-        scope = scope or self.current_session_scope()
         sessions = sessions or []
         field_specs = {
             "time": ("Time", 16),
@@ -427,7 +471,7 @@ class App:
             "workdir": ("Workdir", 18),
             "title": ("Title", 32),
         }
-        keys = self.session_scope_field_keys(scope)
+        keys = self.session_policy_field_keys()
         specs: list[tuple[str, str, int]] = []
         for key in keys:
             label, cap = field_specs[key]
@@ -450,6 +494,8 @@ class App:
         return specs
 
     def stable_session_key(self, item: dict[str, Any]) -> str:
+        if item.get("_kind") == "new":
+            return "new"
         native_ref = str(item.get("native_session_ref") or item.get("session_id") or "")
         return str(
             item.get("stable_session_key")
@@ -474,6 +520,8 @@ class App:
             self.session_memory = {}
         sessions = sessions if sessions is not None else self.current_sessions()
         if not sessions or self.session_index < 0 or self.session_index >= len(sessions):
+            return
+        if sessions[self.session_index].get("_kind") == "new":
             return
         session_key = self.stable_session_key(sessions[self.session_index])
         if not session_key:
@@ -603,6 +651,15 @@ class App:
             return self.selected_session_command_line()
         return self.command_line()
 
+    def selected_session_summary(self) -> str:
+        selected = self.selected_session()
+        if not selected or not str(selected.get("native_session_ref") or selected.get("session_id") or ""):
+            return f"Provider {self.current_provider().title()} | Profile {self.current_profile()} | Cwd {short(self.effective_workdir_path())}"
+        provider = str(selected.get("provider") or self.current_provider())
+        profile = str(selected.get("profile") or "default")
+        workdir = str(selected.get("workdir") or self.effective_workdir_path())
+        return f"Provider {provider.title()} | Profile {profile} | Cwd {short(workdir)}"
+
     def sync_terminal_title(self) -> None:
         title = self.window_title()
         if getattr(self, "_terminal_title", None) == title:
@@ -678,8 +735,6 @@ class App:
             self.last_builder_section = BUILDER_SECTIONS.index(name)
 
     def can_focus_sessions(self) -> bool:
-        if self.current_session_choice() == "new":
-            return False
         try:
             return bool(self.current_sessions())
         except Exception:
@@ -703,7 +758,11 @@ class App:
         if current not in sections:
             self.set_section(sections[0])
             return
-        self.set_section(sections[(sections.index(current) + 1) % len(sections)])
+        target = sections[(sections.index(current) + 1) % len(sections)]
+        if target == "sessions":
+            self.enter_sessions()
+        else:
+            self.set_section(target)
 
     def move_focus_prev(self) -> None:
         sections = self.tab_sections()
@@ -711,7 +770,11 @@ class App:
         if current not in sections:
             self.set_section(sections[-1])
             return
-        self.set_section(sections[(sections.index(current) - 1) % len(sections)])
+        target = sections[(sections.index(current) - 1) % len(sections)]
+        if target == "sessions":
+            self.enter_sessions()
+        else:
+            self.set_section(target)
 
     def in_run_confirm(self) -> bool:
         return self.pending_action == "exec" and bool(self.pending_cmd)
@@ -767,6 +830,8 @@ class App:
                 and str(selected.get("native_session_ref") or selected.get("session_id") or "")
             ):
                 return self.session_command(selected)
+        if not self.validate_builder_profile():
+            return None
         return self.run_command()
 
     def key_is_tab(self, key: object) -> bool:
@@ -804,11 +869,21 @@ class App:
             return True
         if self.workdir_dropdown_open():
             if self.commit_workdir_dropdown():
-                self.enter_run_confirm(self.run_command())
+                cmd = self.command_for_current_focus()
+                if cmd is not None:
+                    self.enter_run_confirm(cmd)
             return True
-        cmd = self.command_for_current_focus()
-        if cmd is not None:
-            self.enter_run_confirm(cmd)
+        if self.section_name() == "sessions":
+            cmd = self.command_for_current_focus()
+            if cmd is not None:
+                self.enter_run_confirm(cmd)
+            return True
+        if self.section_name() == "workdir" and not self.commit_workdir_text_if_present():
+            return True
+        if self.can_focus_sessions():
+            self.enter_sessions()
+        else:
+            self.message = "no sessions"
         return True
 
     def handle_escape(self) -> bool:
@@ -911,18 +986,37 @@ class App:
                 return path
         return raw
 
-    def set_custom_workdir(self, path: Path, verb: str = "set", announce: bool = False, text: str = None, layer: str = "inline") -> None:
+    def set_custom_workdir(
+        self,
+        path: Path,
+        verb: str = "set",
+        announce: bool = False,
+        text: str = None,
+        layer: str = "inline",
+        promote: bool = True,
+    ) -> None:
+        previous = getattr(self, "custom_workdir", None)
         self.custom_workdir = str(self.normalize_workdir_path(path))
         self.workdir_child_index = -1
         self.workdir_text = text
         self.workdir_layer = layer
         if layer != "children":
             self.workdir_dropdown_base = None
+        if previous != self.custom_workdir:
+            if promote:
+                self.promote_session_scope("workdir")
+                self.invalidate_session_cache(reset=True)
         if announce:
             self.message = f"workdir {verb}: {short(self.custom_workdir)}"
 
     def focus_workdir_path(self) -> None:
-        self.set_custom_workdir(Path(self.current_workdir_path()), "set", text=short(self.current_workdir_path()), layer="path")
+        self.set_custom_workdir(
+            Path(self.current_workdir_path()),
+            "set",
+            text=short(self.current_workdir_path()),
+            layer="path",
+            promote=False,
+        )
         self.workdir_modified = False
 
     def commit_focused_workdir(self) -> None:
@@ -1284,27 +1378,46 @@ class App:
     def launch(self) -> None:
         if not self.commit_workdir_text_if_present():
             return
+        if not self.validate_builder_profile():
+            return
         self.confirm_exec_or_preview(self.run_command())
 
     def current_sessions(self) -> list[dict[str, Any]]:
         scope = self.current_session_scope()
-        if self.current_session_choice() == "new":
-            return []
-        provider = self.current_provider() if scope in {"profile", "provider"} else None
-        profile = self.current_profile_label() if scope == "profile" else None
-        key = (scope, provider or "", profile or "")
+        fields = self.current_session_filter_fields()
+        provider = self.current_provider() if "provider" in fields else None
+        profile = self.current_profile_label() if "profile" in fields else None
+        workdir = self.effective_workdir_path() if "workdir" in fields else None
+        key = (scope, provider or "", profile or "", ai_store.normalize_path(workdir))
         if self._session_cache_key == key:
             return self._session_cache_rows
         try:
-            sessions = ai_session.recent_sessions(provider, profile, None, limit=60, ranking="strict")
+            sessions = ai_session.recent_sessions(provider, profile, workdir, limit=60, ranking="strict")
         except Exception as exc:  # pragma: no cover - defensive TUI boundary
             self.message = f"session list failed: {exc}"
             sessions = []
-        rows = [dict(session, _kind="session") for session in sessions]
+        rows = [self.new_session_row(), *[dict(session, _kind="session") for session in sessions]]
         self._session_cache_key = key
         self._session_cache_rows = rows
-        self.session_index = max(-1, min(self.session_index, len(rows) - 1))
+        if rows and self.session_index < 0:
+            self.restore_session_selection(rows, scope)
+        else:
+            self.session_index = max(-1, min(self.session_index, len(rows) - 1))
         return rows
+
+    def new_session_row(self) -> dict[str, Any]:
+        return {
+            "_kind": "new",
+            "provider": self.current_provider(),
+            "profile": self.current_profile_label(),
+            "workdir": self.effective_workdir_path(),
+            "session_id": "",
+            "native_session_ref": "",
+            "updated": "",
+            "title": "New session",
+            "last_prompt_summary": self.command_line(),
+            "last_response_summary": "",
+        }
 
     def session_row_segments(
         self,
@@ -1349,6 +1462,10 @@ class App:
             return
         if not self.commit_workdir_text_if_present():
             return
+        if item.get("_kind") == "new":
+            if self.validate_builder_profile():
+                self.confirm_exec_or_preview(self.run_command())
+            return
         session_ref = str(item.get("native_session_ref") or item.get("session_id") or "")
         if not session_ref:
             self.message = "selected session has no id"
@@ -1357,6 +1474,8 @@ class App:
 
     def execute_new_session(self) -> None:
         if not self.commit_workdir_text_if_present():
+            return
+        if not self.validate_builder_profile():
             return
         self.confirm_exec_or_preview(self.run_command())
 
@@ -1447,7 +1566,7 @@ class App:
         self.add_line(
             1,
             0,
-            f"Provider {self.current_provider().title()} | Profile {self.current_profile()} | Cwd {short(self.effective_workdir_path())}",
+            self.selected_session_summary() if self.active_section() == "sessions" else f"Provider {self.current_provider().title()} | Profile {self.current_profile()} | Cwd {short(self.effective_workdir_path())}",
             width - 1,
         )
 
@@ -1680,44 +1799,40 @@ class App:
 
     def draw_controls(self, y: int, width: int, rows: int) -> int:
         child_rows = max(0, rows)
-        self.add_line(y, 0, "Command builder", width - 1, curses.A_BOLD)
+        self.add_line(y, 0, "Command", width - 1, curses.A_BOLD)
         providers = getattr(self, "providers", []) or [self.current_provider()]
         self.draw_choice_row(y + 1, width, "provider", "Provider", [p.title() for p in providers], self.indices["provider"])
         profiles = getattr(self, "profiles", ["default"])
         self.draw_choice_row(y + 2, width, "profile", "Profile", profiles, self.indices["profile"])
-        session_idx = getattr(self, "indices", {}).get("session", 0)
-        self.draw_choice_row(y + 3, width, "session", "Session", [choice.title() for choice in SESSION_CHOICES], session_idx)
-        self.draw_workdir_row(y + 4, width)
-        next_y = y + 5
+        self.draw_workdir_row(y + 3, width)
+        next_y = y + 4
         show_dropdown = self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "children"
         if show_dropdown:
-            next_y = self.draw_workdir_children(next_y, width, child_rows)
-        else:
-            for n in range(child_rows):
-                self.add_line(next_y + n, 2, "", width - 3)
-            next_y += child_rows
-        return next_y
+            return self.draw_workdir_children(next_y, width, child_rows)
+        for n in range(child_rows):
+            self.add_line(next_y + n, 2, "", width - 3)
+        return next_y + child_rows
 
     def draw_sessions(self, y: int, width: int, rows: int) -> None:
         if rows <= 2:
             return
-        if self.current_session_choice() == "new":
+        sessions = self.session_rows()
+        active = self.active_section() == "sessions"
+        self.add_line(y, 0, self.session_list_title(), width - 1, curses.A_BOLD)
+        if not sessions:
             self.list_meta["sessions"] = {
-                "y": y,
+                "y": y + 1,
                 "x": 0,
                 "w": width,
                 "rows": 0,
                 "start": 0,
                 "count": 0,
                 "top": y,
-                "height": 0,
+                "height": 2,
             }
-            return
-        sessions = self.session_rows()
-        active = self.active_section() == "sessions"
-        self.add_line(y, 0, "SESSION LIST", width - 1)
-        if not sessions:
             self.add_line(y + 1, 0, "No summaries yet.", width - 1)
+            for n in range(2, rows):
+                self.add_line(y + n, 0, "", width - 1)
             return
 
         list_y = y + 1
@@ -1772,7 +1887,7 @@ class App:
             return
         selected = sessions[self.session_index]
         session_id = str(selected.get("session_id") or "")
-        self.add_line(preview_y, 0, "SESSION SELECTED", width - 1)
+        self.add_line(preview_y, 0, "Selected session", width - 1, curses.A_BOLD)
         self.add_line(preview_y + 1, 2, f"ID: {session_id or '-'}", width - 3)
         row = preview_y + 2
         preview_space = max(2, rows - list_rows - 4)
@@ -1809,7 +1924,7 @@ class App:
             child_rows = max(0, available_after_builder - 8)
         self.add_line(2, 0, "", w - 1)
         sessions_y = self.draw_controls(4, w, child_rows) + 1
-        if self.current_session_choice() != "new":
+        if self.current_session_scope() != "none":
             self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
         self.add_line(h - 3, 0, "Tab cycles builder | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
         self.add_line(h - 2, 0, "Workdir: Down opens sibling list; Left/Right moves directory levels; leaf Right keeps the list open.", w - 1, curses.A_DIM)
@@ -1917,13 +2032,6 @@ class App:
         section = self.active_section()
         if section == "sessions":
             self.move_selection(direction)
-        elif section == "profile" and direction > 0:
-            self.section = SECTIONS.index("session")
-            self.last_builder_section = self.section
-        elif section == "session" and direction > 0:
-            self.section = SECTIONS.index("workdir")
-            self.last_builder_section = self.section
-            self.focus_workdir_path()
         elif section == "workdir":
             if getattr(self, "workdir_layer", "path") == "children":
                 self.cycle_workdir_child(direction)
@@ -1934,9 +2042,7 @@ class App:
                 else:
                     self.open_workdir_dropdown(current.parent, current)
             else:
-                if self.active_section() == "workdir":
-                    self.section = SECTIONS.index("session")
-                    self.last_builder_section = self.section
+                self.move_section(direction)
         else:
             self.move_section(direction)
 
@@ -1984,25 +2090,26 @@ class App:
     def change_option(self, section: str, direction: int) -> None:
         if section == "provider":
             self.remember_session_selection()
-            self.remember_current_profile()
+            current_profile = self.current_profile_label()
             providers = getattr(self, "providers", []) or [self.current_provider()]
             self.indices["provider"] = (self.indices["provider"] + direction) % len(providers)
             self.profiles = self.discover_profiles(self.current_provider())
-            self.restore_profile_for_provider()
+            if current_profile in self.profiles:
+                self.indices["profile"] = self.profiles.index(current_profile)
+            else:
+                self.indices["profile"] = 0
+            self.promote_session_scope("provider")
             self.invalidate_session_cache(reset=True)
         elif section == "profile":
             self.remember_session_selection()
             self.indices["profile"] = (self.indices["profile"] + direction) % len(self.profiles)
             self.remember_current_profile()
-            self.invalidate_session_cache(reset=True)
-        elif section == "session":
-            self.remember_session_selection()
-            self.indices["session"] = (self.indices["session"] + direction) % len(SESSION_CHOICES)
+            self.promote_session_scope("profile")
             self.invalidate_session_cache(reset=True)
 
     def horizontal_action(self, direction: int) -> None:
         section = self.active_section()
-        if section in {"provider", "profile", "session"}:
+        if section in {"provider", "profile"}:
             self.change_option(section, direction)
         elif section == "workdir":
             if direction < 0:
@@ -2032,7 +2139,7 @@ class App:
 
     def move_selection(self, direction: int) -> None:
         section = self.active_section()
-        if section in {"provider", "profile", "session"}:
+        if section in {"provider", "profile"}:
             self.change_option(section, direction)
         elif section == "workdir":
             self.vertical_action(direction)
@@ -2047,15 +2154,20 @@ class App:
         section = self.active_section()
         if section == "provider":
             self.remember_session_selection()
-            self.remember_current_profile()
+            current_profile = self.current_profile_label()
             self.indices["provider"] = len(self.providers) - 1 if end else 0
             self.profiles = self.discover_profiles(self.current_provider())
-            self.restore_profile_for_provider()
+            if current_profile in self.profiles:
+                self.indices["profile"] = self.profiles.index(current_profile)
+            else:
+                self.indices["profile"] = 0
+            self.promote_session_scope("provider")
             self.reset_sessions()
         elif section == "profile":
             self.remember_session_selection()
             self.indices["profile"] = len(self.profiles) - 1 if end else 0
             self.remember_current_profile()
+            self.promote_session_scope("profile")
             self.reset_sessions()
         elif section == "workdir":
             self.workdir_layer = "inline"
@@ -2103,18 +2215,21 @@ class App:
             return
         if section == "provider":
             self.remember_session_selection()
-            self.remember_current_profile()
+            current_profile = self.current_profile_label()
             self.indices["provider"] = item_idx
             self.profiles = self.discover_profiles(self.current_provider())
-            self.restore_profile_for_provider()
-            self.session_index = 0
-            self.session_scroll = 0
+            if current_profile in self.profiles:
+                self.indices["profile"] = self.profiles.index(current_profile)
+            else:
+                self.indices["profile"] = 0
+            self.promote_session_scope("provider")
+            self.invalidate_session_cache(reset=True)
         elif section == "profile":
             self.remember_session_selection()
             self.indices["profile"] = item_idx
             self.remember_current_profile()
-            self.session_index = 0
-            self.session_scroll = 0
+            self.promote_session_scope("profile")
+            self.invalidate_session_cache(reset=True)
         elif section == "workdir":
             if self.custom_workdir:
                 if item_idx == 0:
@@ -2122,6 +2237,8 @@ class App:
                 item_idx -= 1
                 self.custom_workdir = None
             self.indices["workdir"] = max(0, min(item_idx, len(self.workdirs) - 1))
+            self.promote_session_scope("workdir")
+            self.invalidate_session_cache(reset=True)
         elif section == "sessions":
             sessions = self.session_rows()
             self.session_index = max(0, min(item_idx, len(sessions) - 1))
@@ -2231,10 +2348,7 @@ class App:
             else:
                 if self.active_section() == "workdir":
                     self.commit_focused_workdir()
-                if self.current_session_choice() == "new":
-                    self.execute_new_session()
-                else:
-                    self.enter_sessions()
+                self.enter_sessions()
         return None
 
     def run(self) -> int:
