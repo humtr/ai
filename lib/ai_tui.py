@@ -399,16 +399,7 @@ class App:
         self.session_extra_fields.add(field)
 
     def session_list_title(self) -> str:
-        scope = self.current_session_scope()
-        parts = [f"Scope: {scope.title()}"]
-        fields = self.current_session_filter_fields()
-        if "workdir" in fields:
-            parts.append(f"Workdir: {short(self.effective_workdir_path())}")
-        if "provider" in fields:
-            parts.append(f"Provider: {self.current_provider()}")
-        if "profile" in fields:
-            parts.append(f"Profile: {self.current_profile_label()}")
-        return "Session list  " + "  ".join(parts)
+        return "Session list"
 
     def session_scope_key(self, scope: str | None = None) -> str:
         scope = scope or self.current_session_scope()
@@ -427,8 +418,6 @@ class App:
             parts.append(provider)
         if "profile" in fields:
             parts.append(profile)
-        if scope == "none":
-            return "none"
         return ":".join(parts)
 
     def session_policy_field_keys(self, policy: str | None = None) -> list[str]:
@@ -459,7 +448,7 @@ class App:
     def session_field_value(self, item: dict[str, Any], key: str, scope: str | None = None) -> str:
         if key == "time":
             if item.get("_kind") == "new":
-                return ""
+                return "New session"
             return short_time(str(item.get("updated") or ""))
         if key == "provider":
             return str(item.get("provider") or self.current_provider())
@@ -469,7 +458,7 @@ class App:
             return short(str(item.get("workdir") or ""))
         if key == "title":
             if item.get("_kind") == "new":
-                return "New session"
+                return "Start with current command settings"
             value = str(item.get("title") or "")
             return value or str(item.get("session_id") or "")
         return ""
@@ -1429,7 +1418,7 @@ class App:
             "session_id": "",
             "native_session_ref": "",
             "updated": "",
-            "title": "New session",
+            "title": "Start with current command settings",
             "last_prompt_summary": self.command_line(),
             "last_response_summary": "",
         }
@@ -1941,8 +1930,7 @@ class App:
             child_rows = max(0, available_after_builder - 8)
         self.add_line(2, 0, "", w - 1)
         sessions_y = self.draw_controls(4, w, child_rows) + 1
-        if self.current_session_scope() != "none":
-            self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
+        self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
         self.add_line(h - 3, 0, "Tab cycles builder | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
         self.add_line(h - 2, 0, "Workdir: Down opens sibling list; Left/Right moves directory levels; leaf Right keeps the list open.", w - 1, curses.A_DIM)
         self.add_line(h - 1, 0, self.message, w - 1)
@@ -2025,7 +2013,7 @@ class App:
             return
         if self.active_section() == "workdir":
             self.commit_focused_workdir()
-            self.section = SECTIONS.index("provider")
+            self.section = SECTIONS.index("session")
             self.last_builder_section = self.section
             return
         current = min(self.section, len(BUILDER_SECTIONS) - 1)
@@ -2035,7 +2023,7 @@ class App:
             self.focus_workdir_path()
 
     def previous_section(self) -> None:
-        if self.active_section() == "provider":
+        if self.active_section() == "session":
             return
         if self.active_section() == "sessions":
             return

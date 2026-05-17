@@ -94,5 +94,8 @@ def main(argv:list[str]|None=None) -> int:
 
 def tui_cmd(argv:list[str]) -> int:
     lib=Path(__file__).resolve().parent; tui=lib/"ai_tui.py"
-    return subprocess.call([sys.executable, str(tui), *argv])
+    try:
+        return subprocess.call([sys.executable, str(tui), *argv])
+    except KeyboardInterrupt:
+        return 130
 if __name__ == "__main__": raise SystemExit(main())
