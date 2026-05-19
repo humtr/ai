@@ -7,8 +7,14 @@ import ai_spec, ai_plan, ai_resource
 def usage() -> None:
     print("""ai = config-driven AI launcher
 
+Common command model:
+  ai run <provider> --cwd DIR -- native args
+  --cwd DIR, --cd DIR, -C DIR set the working directory.
+  No --profile uses the provider's official default home.
+  Profile names "default" and "native" are reserved and rejected.
+
 Core:
-  ai run <provider> [-p PROFILE] [-d DIRECTORY] [-s SESSION]
+  ai run <provider> [-p PROFILE] [--cwd DIRECTORY] [-s SESSION]
   ai ask <provider> [-p PROFILE] -- "prompt"
   ai chat <provider> [-p PROFILE] -- "prompt"
   ai raw <provider> [-p PROFILE] -- <native args>
@@ -18,7 +24,9 @@ Resources:
   ai profile list|show
   ai session refresh|list|show|resolve
   ai workdir list|add|archive
-  ai gateway list|show|status
+  ai bridge start|stop|restart|status|logs|test|config|set ...
+  ai gateway list|show|status|start|stop|restart|logs|view
+  ai gw
   ai tui
 
 Removed:
@@ -31,9 +39,14 @@ def parse_common(args:list[str]):
     profile="default"; directory=None; session=None; here=False; all_sessions=False; out=[]; i=0
     while i < len(args):
         a=args[i]
-        if a in {"-p","--profile"}: profile=args[i+1]; i+=2
+        if a in {"-p","--profile"}:
+            if args[i+1] in {"default", "native"}:
+                raise SystemExit(f"invalid or reserved profile name: {args[i+1]}")
+            profile=args[i+1]; i+=2
         elif a in {"-s","--session"}: session=args[i+1]; i+=2
-        elif a in {"-d","--directory"}: directory=args[i+1]; i+=2
+        elif a in {"-d","--directory","--cwd","--cd","-C"}: directory=args[i+1]; i+=2
+        elif a=="--account": raise SystemExit("--account was removed; use --profile NAME")
+        elif a=="--home": raise SystemExit("--home was removed; use --profile NAME")
         elif a=="--here": here=True; i+=1
         elif a=="--all": all_sessions=True; i+=1
         elif a=="--": out.extend(args[i+1:]); break
@@ -86,7 +99,9 @@ def main(argv:list[str]|None=None) -> int:
     if cmd=="profile": return ai_resource.profile_cmd(argv)
     if cmd=="session": return ai_resource.session_cmd(argv)
     if cmd=="workdir": return ai_resource.workdir_cmd(argv)
+    if cmd=="bridge": return ai_resource.bridge_cmd(argv)
     if cmd=="gateway": return ai_resource.gateway_cmd(argv)
+    if cmd=="gw": return gw_cmd(argv)
     if cmd=="tui": return tui_cmd(argv)
     if cmd=="status":
         ai_resource.provider_cmd(["list"]); return 0
@@ -94,6 +109,13 @@ def main(argv:list[str]|None=None) -> int:
 
 def tui_cmd(argv:list[str]) -> int:
     lib=Path(__file__).resolve().parent; tui=lib/"ai_tui.py"
+    try:
+        return subprocess.call([sys.executable, str(tui), *argv])
+    except KeyboardInterrupt:
+        return 130
+
+def gw_cmd(argv:list[str]) -> int:
+    lib=Path(__file__).resolve().parent; tui=lib/"ai_gw_tui.py"
     try:
         return subprocess.call([sys.executable, str(tui), *argv])
     except KeyboardInterrupt:

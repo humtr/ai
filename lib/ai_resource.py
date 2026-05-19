@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import json, shutil, sys
+import json, os, shutil, subprocess, sys
 from pathlib import Path
 import ai_spec, ai_provider, ai_session, ai_store
 
@@ -69,6 +69,27 @@ def workdir_cmd(argv:list[str]) -> int:
         print(f"ERROR: workdir not found: {argv[1]}", file=sys.stderr); return 1
     print("Usage: ai workdir list|add NAME PATH|archive NAME", file=sys.stderr); return 2
 
+def _hgm_cmd(args:list[str]) -> int:
+    cmd=["hgm", *args]
+    if os.environ.get("AI_DRY_RUN"):
+        print(" ".join(cmd))
+        return 0
+    return subprocess.call(cmd)
+
+def bridge_cmd(argv:list[str]) -> int:
+    sub=argv[0] if argv else "status"
+    allowed={"start","stop","restart","status","logs","log","test","config","set"}
+    if sub not in allowed:
+        print("Usage: ai bridge start|stop|restart|status|logs|test|config|set ...", file=sys.stderr)
+        return 2
+    return _hgm_cmd(["bridge", *argv])
+
+def _gateway_profile(gateway_id:str) -> str | None:
+    for g in ai_store.load_gateways().get("gateways", []):
+        if g.get("id") == gateway_id and g.get("kind") == "telegram-gateway":
+            return str(g.get("hermes_profile") or gateway_id)
+    return None
+
 def gateway_cmd(argv:list[str]) -> int:
     sub=argv[0] if argv else "list"; data=ai_store.load_gateways()
     if sub=="list":
@@ -79,5 +100,18 @@ def gateway_cmd(argv:list[str]) -> int:
             if g.get("id")==argv[1]: print(json.dumps(g, ensure_ascii=False, indent=2)); return 0
         print(f"ERROR: gateway not found: {argv[1]}", file=sys.stderr); return 1
     if sub=="status":
-        print("manager\thgm"); print("bridge\thgb"); return 0
-    print("Usage: ai gateway list|show ID|status", file=sys.stderr); return 2
+        return _hgm_cmd(["status"])
+    if sub in {"start","stop","restart"} and len(argv)>=2:
+        target=argv[1]
+        profile=target if target=="all" else _gateway_profile(target)
+        if not profile:
+            print(f"ERROR: gateway not found: {target}", file=sys.stderr); return 1
+        action="run" if sub=="start" else sub
+        return _hgm_cmd([action, profile])
+    if sub in {"logs","view"} and len(argv)>=2:
+        target=argv[1]
+        profile=_gateway_profile(target)
+        if not profile:
+            print(f"ERROR: gateway not found: {target}", file=sys.stderr); return 1
+        return _hgm_cmd([sub, profile, *argv[2:]])
+    print("Usage: ai gateway list|show ID|status|start|stop|restart TARGET|logs TARGET|view TARGET", file=sys.stderr); return 2

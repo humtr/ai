@@ -41,14 +41,14 @@ Usage:
   hgm bridge set profile|model|port|host|public-model|session|profiles VALUE
 
 Examples:
-  hgm bind tg tg
-  hgm bind tg2 tg2
+  hgm bind codex-tg htg
+  hgm bind gemini-tg htg2
 
-  hgm run tg
-  hgm run tg2
+  hgm run htg
+  hgm run htg2
   hgm run all
-  hgm logs tg
-  hgm view tg2
+  hgm logs htg
+  hgm view htg2
   hgm stop all
 
   hgm bridge start
@@ -191,11 +191,11 @@ load_bridge_env() {
 
   HGB_HOST="${HGB_HOST:-127.0.0.1}"
   HGB_PORT="${HGB_PORT:-8787}"
-  HGB_PROFILE="${HGB_PROFILE:-tg}"
+  HGB_PROFILE="${HGB_PROFILE:-gemini}"
   HGB_MODEL="${HGB_MODEL:-gemini-2.5-flash-lite}"
   HGB_PUBLIC_MODEL="${HGB_PUBLIC_MODEL:-hgb-gemini}"
   HGB_SESSION="${HGB_SESSION:-hgb}"
-  HGB_PROFILES="${HGB_PROFILES:-tg2}"
+  HGB_PROFILES="${HGB_PROFILES:-gemini-tg}"
 }
 
 bridge_url() {

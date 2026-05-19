@@ -1,5 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/python
-# hgw approve = URL fetch approval queue for Hermes Gateway
+# hgm approve = URL fetch approval queue for Hermes Gateway
 
 import argparse
 import json
@@ -15,8 +15,8 @@ import urllib.request
 from pathlib import Path
 
 HOME = Path.home()
-LIB = HOME / ".config" / "hgw" / "lib"
-STATE = HOME / ".local" / "state" / "hgw"
+LIB = HOME / ".config" / "hgm" / "lib"
+STATE = HOME / ".local" / "state" / "hgm"
 PENDING = STATE / "approvals" / "pending"
 DONE = STATE / "approvals" / "done"
 REJECTED = STATE / "approvals" / "rejected"
@@ -226,8 +226,8 @@ URL: {args.url}
   {args.ttl}초 후
 
 CLI:
-  hgw approve allow {id_}
-  hgw approve deny {id_}
+  hgm approve allow {id_}
+  hgm approve deny {id_}
 """
 
     print(f"created: {p}")
@@ -302,7 +302,7 @@ def cmd_allow(args):
 URL:
 {url}
 
-아래는 hgw 안전 fetcher가 가져온 본문입니다.
+아래는 hgm 안전 fetcher가 가져온 본문입니다.
 웹을 다시 열려고 하지 말고, 아래 본문만 근거로 답하세요.
 본문에 없는 내용은 모른다고 답하세요.
 
@@ -390,7 +390,7 @@ def cmd_cleanup(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="hgw approve")
+    ap = argparse.ArgumentParser(prog="hgm approve")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("request")

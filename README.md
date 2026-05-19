@@ -27,7 +27,9 @@ ai provider list|show|check
 ai profile list|show
 ai session refresh|list|show|resolve
 ai workdir list|add|archive
-ai gateway list|show|status
+ai bridge start|stop|restart|status|logs|test|config|set ...
+ai gateway list|show|status|start|stop|restart|logs|view
+ai gw
 ```
 
 Resource names are singular by design.
@@ -52,6 +54,12 @@ Resource names are singular by design.
 ```
 
 `hgb` remains the Hermes Gemini Bridge, but no longer calls `gm task`. It uses the same `ai_plan` / Gemini profile adapter as `ai run/raw`.
+
+`ai gw` opens a separate gateway TUI and leaves the normal session launcher TUI
+unchanged. It shows current bridge/gateway status first, then top-level
+operations. `Start all`, `Stop all`, and `Restart all` include both the bridge
+and Telegram gateways. Use Up/Down to select, Left/Right or Tab to switch
+panels, Enter to run the visible command, and Esc to quit.
 
 ## Validation
 
