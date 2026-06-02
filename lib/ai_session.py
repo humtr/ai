@@ -75,6 +75,21 @@ def discover_session_files(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
     gemini_profiles=HOME/".gemini-profiles"
     if gemini_profiles.is_dir():
         for ph in sorted(x for x in gemini_profiles.iterdir() if x.is_dir()): scan_gemini(ph, ph.name)
+
+    def scan_agy(root: Path, profile: str):
+        gemini_dir = root / ".gemini"
+        tmp = gemini_dir / "tmp"
+        if not tmp.is_dir(): return
+        for project_dir in sorted(x for x in tmp.iterdir() if x.is_dir()):
+            chats = project_dir / "chats"
+            if not chats.is_dir(): continue
+            workdir = read_project_root(project_dir / ".project_root")
+            for p in chats.rglob("*.jsonl"): add_session_record(records, "agy", profile, p, workdir)
+    scan_agy(HOME, "default")
+    agy_profiles = HOME / ".agy-profiles"
+    if agy_profiles.is_dir():
+        for ph in sorted(x for x in agy_profiles.iterdir() if x.is_dir()): scan_agy(ph, ph.name)
+
     hs=HOME/".hermes"/"sessions"
     if hs.is_dir():
         for p in hs.iterdir():
@@ -168,7 +183,7 @@ def parse_hermes_session(record:dict[str,Any]) -> dict[str,Any]:
 
 def parse_session_record(record:dict[str,Any]) -> dict[str,Any]:
     if record.get("provider")=="codex": return parse_codex_session(record)
-    if record.get("provider")=="gemini": return parse_gemini_session(record)
+    if record.get("provider") in {"gemini", "agy"}: return parse_gemini_session(record)
     if record.get("provider")=="hermes": return parse_hermes_session(record)
     return entry_from_messages(record,{"session_id":Path(record["path"]).stem},[])
 
@@ -178,9 +193,11 @@ def load_session_index() -> dict[str,Any]:
 def save_session_index(data:dict[str,Any]) -> None: ai_store.write_json(ai_store.SESSION_INDEX_FILE,data)
 
 def refresh_session_index(limit:int=SESSION_SCAN_LIMIT) -> dict[str,Any]:
-    old=load_session_index(); reusable=old.get("version")==ai_store.SESSION_INDEX_VERSION; old_by_path={str(x.get("path") or x.get("source_path")):x for x in old.get("sessions",[])}; entries=[]
+    old=load_session_index(); reusable=old.get("version")==ai_store.SESSION_INDEX_VERSION
+    old_by_key={f"{x.get('provider')}:{x.get('path') or x.get('source_path')}":x for x in old.get("sessions",[])}
+    entries=[]
     for rec in discover_session_files(limit):
-        key=str(rec["path"]); prev=old_by_path.get(key)
+        key=f"{rec['provider']}:{rec['path']}"; prev=old_by_key.get(key)
         if reusable and prev and prev.get("mtime")==rec.get("mtime") and prev.get("size")==rec.get("size"): entries.append(finalize(dict(prev)))
         else: entries.append(parse_session_record(rec))
     entries.sort(key=lambda x: float(x.get("mtime") or 0), reverse=True)

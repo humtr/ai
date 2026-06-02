@@ -15,7 +15,7 @@ from pathlib import Path
 DEFAULTS: dict[str, str] = {
     "AI_DEFAULT_PROVIDER": "hermes",
     "AI_FALLBACK_ENABLED": "false",
-    "AI_FALLBACK_PROVIDERS": "hermes gemini codex",
+    "AI_FALLBACK_PROVIDERS": "hermes gemini codex agy",
     "AI_EXPLICIT_FALLBACK": "false",
     "AI_ASK_TIMEOUT": "180",
     "AI_AUTO_START_BRIDGE": "false",
@@ -30,7 +30,7 @@ ALIASES: dict[str, str] = {
     "auto-start-bridge": "AI_AUTO_START_BRIDGE",
 }
 
-PROVIDERS = {"codex", "gemini", "hermes"}
+PROVIDERS = {"codex", "gemini", "hermes", "agy"}
 BOOLS = {"true", "false"}
 
 

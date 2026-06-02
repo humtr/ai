@@ -278,7 +278,7 @@ class App:
         return self.path_inside_home(path)
 
     def clamp_indices(self) -> None:
-        providers = getattr(self, "providers", []) or ["codex", "gemini", "hermes"]
+        providers = getattr(self, "providers", []) or ["codex", "gemini", "hermes", "agy"]
         self.indices["provider"] = max(0, min(self.indices["provider"], len(providers) - 1))
         self.indices["profile"] = max(0, min(self.indices["profile"], len(self.profiles) - 1))
         self.indices["session"] = max(0, min(self.indices["session"], len(SESSION_SCOPES) - 1))
@@ -287,7 +287,7 @@ class App:
             self.scroll_offsets[section] = max(0, self.scroll_offsets.get(section, 0))
 
     def current_provider(self) -> str:
-        providers = getattr(self, "providers", []) or ["codex", "gemini", "hermes"]
+        providers = getattr(self, "providers", []) or ["codex", "gemini", "hermes", "agy"]
         idx = max(0, min(getattr(self, "indices", {}).get("provider", 0), len(providers) - 1))
         return providers[idx]
 
@@ -296,7 +296,7 @@ class App:
             providers = ai_spec.provider_names()
         except Exception:
             providers = []
-        return providers or ["codex", "gemini", "hermes"]
+        return providers or ["codex", "gemini", "hermes", "agy"]
 
     def discover_profiles(self, provider: str) -> list[str]:
         names: list[str] = []
@@ -389,7 +389,10 @@ class App:
         return SESSION_SCOPES[idx]
 
     def current_session_filter_fields(self) -> set[str]:
-        fields = set(SESSION_SCOPE_FIELDS.get(self.current_session_scope(), set()))
+        scope = self.current_session_scope()
+        if scope in {"workdir", "all"}:
+            return set(SESSION_SCOPE_FIELDS.get(scope, set()))
+        fields = set(SESSION_SCOPE_FIELDS.get(scope, set()))
         fields.update(getattr(self, "session_extra_fields", set()))
         return fields
 
@@ -406,7 +409,7 @@ class App:
         indices = getattr(self, "indices", {})
         provider_index = indices.get("provider", 0)
         profile_index = indices.get("profile", 0)
-        providers = getattr(self, "providers", []) or ["codex", "gemini", "hermes"]
+        providers = getattr(self, "providers", []) or ["codex", "gemini", "hermes", "agy"]
         provider = providers[provider_index] if 0 <= provider_index < len(providers) else providers[0]
         profiles = getattr(self, "profiles", ["default"]) or ["default"]
         profile = profiles[profile_index] if 0 <= profile_index < len(profiles) else profiles[0]
@@ -622,7 +625,7 @@ class App:
 
     def session_args(self, item: dict[str, Any], display: bool = False) -> list[str]:
         provider = str(item.get("provider") or self.current_provider())
-        profile = str(item.get("profile") or "default")
+        profile = self.current_profile_label()
         workdir = str(item.get("workdir") or "")
         ref = str(item.get("native_session_ref") or item.get("session_id") or "")
         args = [provider]
@@ -2135,6 +2138,7 @@ class App:
         elif section == "session":
             self.remember_session_selection()
             self.indices["session"] = (self.indices["session"] + direction) % len(SESSION_SCOPES)
+            getattr(self, "session_extra_fields", set()).clear()
             self.invalidate_session_cache(reset=True)
 
     def horizontal_action(self, direction: int) -> None:

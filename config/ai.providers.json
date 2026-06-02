@@ -57,6 +57,25 @@
         "supports_picker": true,
         "supports_last": true
       }
+    },
+    "agy": {
+      "label": "Agy",
+      "binary": "agy",
+      "profile": {
+        "supported": true,
+        "base_dir": "~/.agy-profiles",
+        "strategy": "env_home",
+        "env_var": "AGY_PROFILE_HOME",
+        "default_uses_native_home": true
+      },
+      "session": {
+        "supported": true,
+        "strategy": "gemini_resume",
+        "supports_all": false,
+        "supports_specific_ref": true,
+        "supports_picker": true,
+        "supports_last": true
+      }
     }
   }
 }

@@ -60,7 +60,9 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
     directory=spec.directory
     warnings=[]
     if typ == "launch" and session_ref:
-        found=ai_session.resolve_session(session_ref, provider=provider, profile=None if profile=="default" else profile)
+        found=ai_session.resolve_session(session_ref, provider=provider, profile=profile)
+        if not found:
+            found=ai_session.resolve_session(session_ref, provider=provider, profile=None)
         if found and found.get("ambiguous"):
             ids="\n".join(f"  {m.get('provider')}/{m.get('profile')} {m.get('workdir')} {m.get('native_session_ref')} {m.get('title')}" for m in found.get("matches",[])[:8])
             raise SystemExit(f"ERROR: ambiguous session ref: {session_ref}\n{ids}")
@@ -68,6 +70,44 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
             session_row=found
             session_ref=str(found.get("native_session_ref") or found.get("session_id") or session_ref)
             if not directory and found.get("workdir"): directory=str(found.get("workdir"))
+            
+            # Cross-profile session auto-sharing/symlinking
+            session_profile = found.get("profile") or "default"
+            if session_profile != profile:
+                try:
+                    src_path = Path(found["path"])
+                    if provider == "codex":
+                        base_A = Path("~/.codex/sessions").expanduser() if session_profile == "default" else Path(f"~/.codex-profiles/{session_profile}/sessions").expanduser()
+                        base_B = Path("~/.codex/sessions").expanduser() if profile == "default" else Path(f"~/.codex-profiles/{profile}/sessions").expanduser()
+                    elif provider == "hermes":
+                        base_A = Path("~/.hermes/sessions").expanduser() if session_profile == "default" else Path(f"~/.hermes/profiles/{session_profile}/sessions").expanduser()
+                        base_B = Path("~/.hermes/sessions").expanduser() if profile == "default" else Path(f"~/.hermes/profiles/{profile}/sessions").expanduser()
+                    elif provider == "gemini":
+                        base_A = Path("~/.gemini").expanduser() if session_profile == "default" else Path(f"~/.gemini-profiles/{session_profile}").expanduser()
+                        base_B = Path("~/.gemini").expanduser() if profile == "default" else Path(f"~/.gemini-profiles/{profile}").expanduser()
+                    elif provider == "agy":
+                        base_A = Path("~/.gemini").expanduser() if session_profile == "default" else Path(f"~/.agy-profiles/{session_profile}/.gemini").expanduser()
+                        base_B = Path("~/.gemini").expanduser() if profile == "default" else Path(f"~/.agy-profiles/{profile}/.gemini").expanduser()
+                    else:
+                        base_A = None
+                        base_B = None
+
+                    if base_A and base_B:
+                        try:
+                            rel_path = src_path.relative_to(base_A)
+                        except ValueError:
+                            rel_path = Path(src_path.name)
+                        dst_path = base_B / rel_path
+                        if not dst_path.exists():
+                            dst_path.parent.mkdir(parents=True, exist_ok=True)
+                            try:
+                                dst_path.symlink_to(src_path)
+                            except Exception:
+                                import shutil
+                                shutil.copy2(src_path, dst_path)
+                except Exception as e:
+                    warnings.append(f"failed to share session between profiles: {e}")
+
             if profile == "default" and found.get("profile") and found.get("profile") != "default":
                 # Keep explicit CLI provider/profile predictable; warn rather than silently switch.
                 warnings.append(f"session belongs to profile {found.get('profile')}; pass -p {found.get('profile')} to use that profile")
@@ -86,7 +126,7 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
     elif typ == "inline_prompt":
         prompt=_guard(spec.command, spec.prompt or "")
         if provider == "codex": argv=[binary,*profile_args,"exec","--skip-git-repo-check",prompt]
-        elif provider == "gemini": argv=[binary,*profile_args,"--skip-trust","-p",prompt]
+        elif provider in {"gemini", "agy"}: argv=[binary,*profile_args,"--skip-trust","-p",prompt]
         elif provider == "hermes": argv=[binary,*profile_args,"-z",prompt]
         else: argv=[binary,*profile_args,prompt]
     else:

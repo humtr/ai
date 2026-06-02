@@ -6,6 +6,7 @@ DEST_BIN="${AI_BIN_DEST:-$HOME/bin/ai}"
 DEST_LIB="${AI_LIB_DEST:-$HOME/.config/ai/lib}"
 DEST_HGM="${AI_HGM_DEST:-$HOME/bin/hgm}"
 DEST_HGB="${AI_HGB_DEST:-$HOME/bin/hgb}"
+DEST_AGY="${AI_AGY_DEST:-$HOME/bin/agy}"
 DEST_HGM_LIB="${AI_HGM_LIB_DEST:-$HOME/.config/hgm/lib}"
 BACKUP_ROOT="${AI_BACKUP_ROOT:-$HOME/.config/ai/backups}"
 TS="$(date +%Y%m%d-%H%M%S)"
@@ -26,6 +27,7 @@ say "backup: $BACKUP_DIR"
 [ -f "$ROOT/bin/ai" ] || fail "missing $ROOT/bin/ai"
 [ -f "$ROOT/bin/hgm" ] || fail "missing $ROOT/bin/hgm"
 [ -f "$ROOT/bin/hgb" ] || fail "missing $ROOT/bin/hgb"
+[ -f "$ROOT/bin/agy" ] || fail "missing $ROOT/bin/agy"
 [ -f "$ROOT/lib/ai_cli.py" ] || fail "missing $ROOT/lib/ai_cli.py"
 [ -f "$ROOT/code/hgw-lib/approve.py" ] || fail "missing $ROOT/code/hgw-lib/approve.py"
 [ -f "$ROOT/code/hgw-lib/web_fetch.py" ] || fail "missing $ROOT/code/hgw-lib/web_fetch.py"
@@ -35,6 +37,7 @@ python -m py_compile "$ROOT"/lib/*.py
 python -m py_compile "$ROOT/bin/hgb" "$ROOT"/code/hgw-lib/*.py
 bash -n "$ROOT/bin/ai"
 bash -n "$ROOT/bin/hgm"
+bash -n "$ROOT/bin/agy"
 
 mkdir -p "$BACKUP_DIR"
 
@@ -60,6 +63,10 @@ if [ -e "$DEST_HGB" ]; then
   cp -a "$DEST_HGB" "$BACKUP_DIR/hgb.bak"
   say "backed up $DEST_HGB -> $BACKUP_DIR/hgb.bak"
 fi
+if [ -e "$DEST_AGY" ]; then
+  cp -a "$DEST_AGY" "$BACKUP_DIR/agy.bak"
+  say "backed up $DEST_AGY -> $BACKUP_DIR/agy.bak"
+fi
 if [ -e "$DEST_HGM_LIB" ]; then
   cp -a "$DEST_HGM_LIB" "$BACKUP_DIR/hgm-lib.bak"
   say "backed up $DEST_HGM_LIB -> $BACKUP_DIR/hgm-lib.bak"
@@ -74,6 +81,8 @@ say "-- installing command --"
 mkdir -p "$(dirname "$DEST_BIN")"
 cp -f "$ROOT/bin/ai" "$DEST_BIN"
 chmod +x "$DEST_BIN"
+cp -f "$ROOT/bin/agy" "$DEST_AGY"
+chmod +x "$DEST_AGY"
 
 say "-- installing gateway commands --"
 mkdir -p "$(dirname "$DEST_HGM")" "$(dirname "$DEST_HGB")"
@@ -103,6 +112,7 @@ python -m py_compile "$DEST_LIB"/*.py
 python -m py_compile "$DEST_HGB" "$DEST_HGM_LIB"/*.py
 bash -n "$DEST_BIN"
 bash -n "$DEST_HGM"
+bash -n "$DEST_AGY"
 
 say "-- resolution --"
 RESOLVED="$(command -v ai || true)"
