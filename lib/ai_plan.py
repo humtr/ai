@@ -69,10 +69,18 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
         if found:
             session_row=found
             session_ref=str(found.get("native_session_ref") or found.get("session_id") or session_ref)
-            if not directory and found.get("workdir"): directory=str(found.get("workdir"))
+            session_profile = found.get("profile") or "default"
+            if profile == "default" and session_profile != "default":
+                profile = str(session_profile)
+                profile_args, env = ai_provider.apply_profile(provider, profile)
+            if not directory and found.get("workdir"):
+                found_workdir=str(found.get("workdir"))
+                if Path(found_workdir).expanduser().is_dir():
+                    directory=found_workdir
+                else:
+                    warnings.append(f"session workdir is missing; using current directory: {found_workdir}")
             
             # Cross-profile session auto-sharing/symlinking
-            session_profile = found.get("profile") or "default"
             if session_profile != profile:
                 try:
                     src_path = Path(found["path"])

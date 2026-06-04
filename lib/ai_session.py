@@ -6,6 +6,7 @@ from typing import Any
 import ai_store, ai_spec
 HOME=ai_store.HOME
 SESSION_SCAN_LIMIT=int(os.environ.get("AI_SESSION_SCAN_LIMIT","500"))
+SESSION_RESOLVE_SCAN_LIMIT=int(os.environ.get("AI_SESSION_RESOLVE_SCAN_LIMIT","5000"))
 
 def compact_text(value: Any) -> str:
     if value is None: return ""
@@ -203,16 +204,50 @@ def refresh_session_index(limit:int=SESSION_SCAN_LIMIT) -> dict[str,Any]:
     entries.sort(key=lambda x: float(x.get("mtime") or 0), reverse=True)
     data={"version":ai_store.SESSION_INDEX_VERSION,"generated_at":ai_store.now_iso(),"sessions":entries}; save_session_index(data); return data
 
+def fresh_session_index() -> dict[str,Any]:
+    try:
+        return refresh_session_index()
+    except Exception:
+        return load_session_index()
+
 def _matches(item:dict[str,Any], provider:str|None=None, profile:str|None=None, workdir:str|None=None) -> bool:
     if provider and item.get("provider") != provider: return False
     if profile and item.get("profile") != profile: return False
     if workdir and ai_store.normalize_path(str(item.get("workdir") or "")) != ai_store.normalize_path(workdir): return False
     return True
 
+def source_identity(row:dict[str,Any]) -> str:
+    source=str(row.get("source_path") or row.get("path") or "")
+    if not source:
+        return str(row.get("stable_session_key") or row.get("stable_key") or "")
+    try:
+        return str(Path(source).expanduser().resolve())
+    except OSError:
+        return source
+
+def source_is_symlink(row:dict[str,Any]) -> bool:
+    source=str(row.get("source_path") or row.get("path") or "")
+    try:
+        return bool(source and Path(source).expanduser().is_symlink())
+    except OSError:
+        return False
+
+def dedupe_session_rows(rows:list[dict[str,Any]]) -> list[dict[str,Any]]:
+    by_source:dict[str,dict[str,Any]]={}
+    for row in rows:
+        key=source_identity(row)
+        if not key:
+            key=str(row.get("stable_session_key") or row.get("stable_key") or id(row))
+        previous=by_source.get(key)
+        if previous is None or (source_is_symlink(previous) and not source_is_symlink(row)):
+            by_source[key]=row
+    return list(by_source.values())
+
 def recent_sessions(provider:str|None=None, profile:str|None=None, workdir:str|None=None, limit:int=20, ranking:str="strict") -> list[dict[str,Any]]:
-    data=load_session_index(); rows=[finalize(dict(x)) for x in data.get("sessions",[]) if x.get("last_prompt_summary") or x.get("last_response_summary") or x.get("title")]
+    data=fresh_session_index(); rows=[finalize(dict(x)) for x in data.get("sessions",[]) if x.get("last_prompt_summary") or x.get("last_response_summary") or x.get("title")]
     if ranking=="strict":
         rows=[r for r in rows if _matches(r, provider, profile, workdir)]
+        rows=dedupe_session_rows(rows)
         rows.sort(key=lambda r: float(r.get("mtime") or 0), reverse=True)
     else:
         target=ai_store.normalize_path(workdir); ranked=[]
@@ -226,18 +261,27 @@ def recent_sessions(provider:str|None=None, profile:str|None=None, workdir:str|N
     return rows[:limit]
 
 def resolve_session(session_ref:str, provider:str|None=None, profile:str|None=None, workdir:str|None=None) -> dict[str,Any]|None:
-    rows=[finalize(dict(x)) for x in load_session_index().get("sessions",[])]
-    if not rows:
-        try: rows=[finalize(dict(x)) for x in refresh_session_index().get("sessions",[])]
-        except Exception: rows=[]
-    matches=[]
-    for r in rows:
-        if provider and r.get("provider") != provider: continue
-        if profile and r.get("profile") != profile: continue
-        if workdir and ai_store.normalize_path(str(r.get("workdir") or "")) != ai_store.normalize_path(workdir): continue
-        candidates={str(r.get("session_id") or ""), str(r.get("native_session_ref") or ""), str(r.get("stable_session_key") or ""), str(r.get("stable_key") or "")}
-        if session_ref in candidates: matches.append(r)
+    rows=[finalize(dict(x)) for x in fresh_session_index().get("sessions",[])]
+
+    def collect(source_rows:list[dict[str,Any]]) -> list[dict[str,Any]]:
+        found=[]
+        for r in source_rows:
+            if provider and r.get("provider") != provider: continue
+            if profile and r.get("profile") != profile: continue
+            if workdir and ai_store.normalize_path(str(r.get("workdir") or "")) != ai_store.normalize_path(workdir): continue
+            candidates={str(r.get("session_id") or ""), str(r.get("native_session_ref") or ""), str(r.get("stable_session_key") or ""), str(r.get("stable_key") or "")}
+            if session_ref in candidates: found.append(r)
+        return found
+
+    matches=collect(rows)
+    if not matches:
+        try:
+            rows=[finalize(dict(x)) for x in refresh_session_index(SESSION_RESOLVE_SCAN_LIMIT).get("sessions",[])]
+            matches=collect(rows)
+        except Exception:
+            matches=[]
     if not matches: return None
+    matches=dedupe_session_rows(matches)
     # Prefer exact provider/profile/workdir narrowing and latest mtime.
     matches.sort(key=lambda r: float(r.get("mtime") or 0), reverse=True)
     if len(matches)>1:

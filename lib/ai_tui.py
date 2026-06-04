@@ -176,7 +176,7 @@ class App:
         self.stdscr = stdscr
         self.view = "main"
         self.section = 0
-        self.indices = {"workdir": 0, "provider": 0, "profile": 0, "session": 0}
+        self.indices = {"workdir": 0, "provider": 0, "profile": 0, "session": 1}
         self.scroll_offsets = {section: 0 for section in SECTIONS}
         self.list_meta: dict[str, dict[str, int]] = {}
         self.custom_workdir: str | None = None
@@ -325,7 +325,13 @@ class App:
         profile = self.current_profile_label()
         if profile == "default":
             return True
-        return profile in self.provider_profiles(self.current_provider())
+        provider = self.current_provider()
+        try:
+            spec = ai_spec.provider_spec(provider)
+            supported = bool((spec.get("profile") or {}).get("supported", False))
+        except Exception:
+            supported = False
+        return supported
 
     def validate_builder_profile(self) -> bool:
         if self.current_profile_valid_for_provider():
@@ -625,12 +631,14 @@ class App:
 
     def session_args(self, item: dict[str, Any], display: bool = False) -> list[str]:
         provider = str(item.get("provider") or self.current_provider())
-        profile = self.current_profile_label()
+        profile = str(item.get("profile") or self.current_profile_label() or "default")
         workdir = str(item.get("workdir") or "")
         ref = str(item.get("native_session_ref") or item.get("session_id") or "")
         args = [provider]
         if profile and profile != "default":
             args.extend(["-p", profile])
+        if workdir and not Path(workdir).expanduser().is_dir():
+            workdir = self.effective_workdir_path()
         if workdir:
             args.extend(self.directory_args(workdir, display))
         if ref:
@@ -1307,6 +1315,74 @@ class App:
         self.open_workdir_dropdown(parent.parent, parent, restore=False)
         self.workdir_modified = True
 
+    def add_profile(self) -> None:
+        provider = self.current_provider()
+        try:
+            spec = ai_spec.provider_spec(provider)
+            supported = bool((spec.get("profile") or {}).get("supported", False))
+        except Exception:
+            supported = False
+
+        if not supported:
+            self.message = f"provider {provider} does not support profiles"
+            return
+
+        name = self.prompt("Add profile name")
+        if not name:
+            self.message = "add profile cancelled"
+            return
+
+        try:
+            ai_provider.validate_profile_name(name)
+        except ValueError as e:
+            self.message = str(e)
+            return
+
+        base = ai_provider.profile_base_dir(provider)
+        if not base:
+            self.message = f"provider {provider} has no profile base directory"
+            return
+
+        path = base / name
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            self.message = f"profile created: {provider}/{name}"
+            self.reload()
+            if name in self.profiles:
+                self.indices["profile"] = self.profiles.index(name)
+        except Exception as e:
+            self.message = f"failed to create profile: {e}"
+
+    def delete_profile(self) -> None:
+        profile = self.current_profile_label()
+        if profile == "default":
+            self.message = "cannot delete default profile"
+            return
+
+        provider = self.current_provider()
+        confirm = self.prompt(f"Type 'yes' to delete profile '{profile}'")
+        if confirm != "yes":
+            self.message = "delete profile cancelled"
+            return
+
+        base = ai_provider.profile_base_dir(provider)
+        if not base:
+            self.message = f"provider {provider} has no profile base directory"
+            return
+
+        path = base / profile
+        try:
+            if path.is_dir():
+                import shutil
+                shutil.rmtree(path)
+                self.message = f"deleted profile: {provider}/{profile}"
+            else:
+                self.message = f"profile not found on disk: {provider}/{profile}"
+            self.reload()
+            self.indices["profile"] = 0
+        except Exception as e:
+            self.message = f"failed to delete profile: {e}"
+
     def edit_workdir(self) -> None:
         current = self.current_workdir_path()
         text = ""
@@ -1955,7 +2031,10 @@ class App:
         self.add_line(2, 0, "", w - 1)
         sessions_y = self.draw_controls(4, w, child_rows) + 1
         self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
-        self.add_line(h - 3, 0, "Tab cycles builder | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
+        if self.active_section() == "profile":
+            self.add_line(h - 3, 0, "Tab cycles builder | a or / adds profile | d or x deletes profile | Esc back/confirm quit", w - 1, curses.A_DIM)
+        else:
+            self.add_line(h - 3, 0, "Tab cycles builder | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
         self.add_line(h - 2, 0, "Workdir: Down opens sibling list; Left/Right moves directory levels; leaf Right keeps the list open.", w - 1, curses.A_DIM)
         self.add_line(h - 1, 0, self.message, w - 1)
         self.update_cursor()
@@ -2343,6 +2422,19 @@ class App:
                 self.pending_cmd = None
                 self.message = "Press Esc again to quit"
             return None
+        if self.active_section() == "profile":
+            if ch in (ord("a"), ord("/")):
+                if hasattr(self, "stdscr"):
+                    self.add_profile()
+                else:
+                    self.message = "add profile not supported here"
+                return None
+            if ch in (ord("d"), ord("x")):
+                if hasattr(self, "stdscr"):
+                    self.delete_profile()
+                else:
+                    self.message = "delete profile not supported here"
+                return None
         if self.active_section() == "workdir" and self.handle_workdir_text_key(ch):
             return None
         if self.active_section() == "workdir" and ch == ord("/"):

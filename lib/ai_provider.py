@@ -30,7 +30,10 @@ def apply_profile(provider: str, profile: str | None) -> tuple[list[str], dict[s
     spec=ai_spec.provider_spec(provider); prof=spec.get("profile") or {}; strat=prof.get("strategy","none")
     base=Path(str(prof.get("base_dir") or "")).expanduser(); profile_dir=base/profile
     if prof.get("supported") and base and not profile_dir.is_dir():
-        raise SystemExit(f"ERROR: profile not found: {provider}/{profile} ({profile_dir})")
+        try:
+            profile_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise SystemExit(f"ERROR: failed to create profile directory: {provider}/{profile} ({profile_dir}): {e}")
     if strat == "env_home":
         return [], {str(prof.get("env_var") or "AI_PROVIDER_HOME"): str(profile_dir)}
     if strat == "temp_home_symlink":

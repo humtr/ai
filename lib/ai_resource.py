@@ -28,7 +28,42 @@ def profile_cmd(argv:list[str]) -> int:
     if sub=="show" and len(argv)>=3:
         p, prof=argv[1], argv[2]; base=ai_provider.profile_base_dir(p); path=(base/prof) if base and prof!="default" else None
         print(json.dumps({"provider":p,"profile":prof,"path":str(path or ""),"exists":bool(path and path.exists())}, ensure_ascii=False, indent=2)); return 0
-    print("Usage: ai profile list [PROVIDER] | show PROVIDER PROFILE", file=sys.stderr); return 2
+    if sub=="add" and len(argv)>=3:
+        p, prof=argv[1], argv[2]
+        try:
+            ai_provider.validate_profile_name(prof)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr); return 1
+        if not ai_spec.provider_spec(p).get("profile", {}).get("supported", False):
+            print(f"ERROR: provider {p} does not support profiles", file=sys.stderr); return 1
+        base=ai_provider.profile_base_dir(p)
+        if not base:
+            print(f"ERROR: provider {p} has no profile base directory configured", file=sys.stderr); return 1
+        path=base/prof
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            print(f"added profile: {p}/{prof} -> {path}")
+        except Exception as e:
+            print(f"ERROR: failed to create profile directory: {e}", file=sys.stderr); return 1
+        return 0
+    if sub in {"delete", "remove"} and len(argv)>=3:
+        p, prof=argv[1], argv[2]
+        if prof == "default":
+            print("ERROR: cannot delete 'default' profile", file=sys.stderr); return 1
+        base=ai_provider.profile_base_dir(p)
+        if not base:
+            print(f"ERROR: provider {p} has no profile base directory configured", file=sys.stderr); return 1
+        path=base/prof
+        if path.is_dir():
+            try:
+                shutil.rmtree(path)
+                print(f"deleted profile: {p}/{prof}")
+            except Exception as e:
+                print(f"ERROR: failed to delete profile directory: {e}", file=sys.stderr); return 1
+        else:
+            print(f"ERROR: profile not found: {p}/{prof}", file=sys.stderr); return 1
+        return 0
+    print("Usage: ai profile list [PROVIDER] | show PROVIDER PROFILE | add PROVIDER PROFILE | delete PROVIDER PROFILE", file=sys.stderr); return 2
 
 def session_cmd(argv:list[str]) -> int:
     sub=argv[0] if argv else "list"; rest=argv[1:]

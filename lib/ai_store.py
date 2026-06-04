@@ -10,7 +10,7 @@ WORKDIRS_FILE = AI_HOME / "workdirs.json"
 GATEWAYS_FILE = AI_HOME / "gateways.json"
 SESSION_INDEX_DIR = AI_HOME / "session-index"
 SESSION_INDEX_FILE = SESSION_INDEX_DIR / "sessions.json"
-SESSION_INDEX_VERSION = 7
+SESSION_INDEX_VERSION = 8
 
 def read_json(path: Path, default: Any) -> Any:
     if not path.exists(): return default
