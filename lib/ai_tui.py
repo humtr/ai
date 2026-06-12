@@ -299,20 +299,18 @@ class App:
         return providers or ["codex", "gemini", "hermes", "agy"]
 
     def discover_profiles(self, provider: str) -> list[str]:
-        names: list[str] = []
-        seen: set[str] = set()
-        for candidate in self.discover_providers():
-            try:
-                profiles = ai_provider.list_profiles(candidate)
-            except Exception:
-                profiles = ["default"]
-            for profile in profiles or ["default"]:
-                if profile not in seen:
-                    seen.add(profile)
-                    names.append(profile)
+        try:
+            profiles = ai_provider.list_profiles(provider)
+        except Exception:
+            profiles = ["default"]
+        names = list(profiles or ["default"])
         if "default" in names:
-            names.remove("default")
-        return ["default", *sorted(names, key=str.lower)]
+            names = ["default", *[name for name in names if name != "default"]]
+        elif names:
+            names.insert(0, "default")
+        else:
+            names = ["default"]
+        return names
 
     def provider_profiles(self, provider: str) -> list[str]:
         try:
@@ -320,6 +318,17 @@ class App:
         except Exception:
             profiles = ["default"]
         return profiles or ["default"]
+
+    def sync_profiles_for_current_provider(self, preferred: str | None = None) -> None:
+        self.profiles = self.discover_profiles(self.current_provider())
+        memory = getattr(self, "profile_memory", {})
+        target = preferred if preferred in self.profiles else memory.get(self.current_provider(), "default")
+        if not hasattr(self, "indices"):
+            self.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+        if target in self.profiles:
+            self.indices["profile"] = self.profiles.index(target)
+        else:
+            self.indices["profile"] = 0
 
     def current_profile_valid_for_provider(self) -> bool:
         profile = self.current_profile_label()
@@ -402,6 +411,12 @@ class App:
         fields.update(getattr(self, "session_extra_fields", set()))
         return fields
 
+    def session_context_fields(self, scope: str | None = None) -> set[str]:
+        scope = scope or self.current_session_scope()
+        fields = set(SESSION_SCOPE_FIELDS.get(scope, set()))
+        fields.update(getattr(self, "session_extra_fields", set()))
+        return fields
+
     def promote_session_scope(self, field: str) -> None:
         if not hasattr(self, "session_extra_fields"):
             self.session_extra_fields = set()
@@ -419,7 +434,7 @@ class App:
         provider = providers[provider_index] if 0 <= provider_index < len(providers) else providers[0]
         profiles = getattr(self, "profiles", ["default"]) or ["default"]
         profile = profiles[profile_index] if 0 <= profile_index < len(profiles) else profiles[0]
-        fields = self.current_session_filter_fields()
+        fields = self.session_context_fields(scope)
         parts = [scope]
         if "workdir" in fields:
             parts.append(ai_store.normalize_path(self.effective_workdir_path()))
@@ -631,7 +646,7 @@ class App:
 
     def session_args(self, item: dict[str, Any], display: bool = False) -> list[str]:
         provider = str(item.get("provider") or self.current_provider())
-        profile = str(item.get("profile") or self.current_profile_label() or "default")
+        profile = self.session_launch_profile(item)
         workdir = str(item.get("workdir") or "")
         ref = str(item.get("native_session_ref") or item.get("session_id") or "")
         args = [provider]
@@ -650,6 +665,18 @@ class App:
 
     def session_command(self, item: dict[str, Any]) -> list[str]:
         return [AI_BIN, "run", *self.session_args(item, display=False)]
+
+    def session_launch_profile(self, item: dict[str, Any]) -> str:
+        selected = self.current_profile_label() or "default"
+        provider = str(item.get("provider") or self.current_provider())
+        if provider == self.current_provider() or selected == "default":
+            return selected
+        try:
+            if selected in self.provider_profiles(provider):
+                return selected
+        except Exception:
+            pass
+        return str(item.get("profile") or "default")
 
     def selected_session_command_line(self) -> str:
         selected = self.selected_session()
@@ -671,7 +698,7 @@ class App:
         if not selected or not str(selected.get("native_session_ref") or selected.get("session_id") or ""):
             return f"Provider {self.current_provider().title()} | Profile {self.current_profile()} | Cwd {short(self.effective_workdir_path())}"
         provider = str(selected.get("provider") or self.current_provider())
-        profile = str(selected.get("profile") or "default")
+        profile = self.session_launch_profile(selected)
         workdir = str(selected.get("workdir") or self.effective_workdir_path())
         return f"Provider {provider.title()} | Profile {profile} | Cwd {short(workdir)}"
 
@@ -1360,6 +1387,10 @@ class App:
             return
 
         provider = self.current_provider()
+        self.sync_profiles_for_current_provider(profile)
+        if profile not in self.profiles:
+            self.message = f"profile not found for provider: {provider}/{profile}"
+            return
         confirm = self.prompt(f"Type 'yes' to delete profile '{profile}'")
         if confirm != "yes":
             self.message = "delete profile cancelled"
@@ -1468,10 +1499,14 @@ class App:
     def current_sessions(self) -> list[dict[str, Any]]:
         scope = self.current_session_scope()
         fields = self.current_session_filter_fields()
+        context_fields = self.session_context_fields(scope)
         provider = self.current_provider() if "provider" in fields else None
         profile = self.current_profile_label() if "profile" in fields else None
         workdir = self.effective_workdir_path() if "workdir" in fields else None
-        key = (scope, provider or "", profile or "", ai_store.normalize_path(workdir))
+        cache_provider = self.current_provider() if "provider" in context_fields else ""
+        cache_profile = self.current_profile_label() if "profile" in context_fields else ""
+        cache_workdir = self.effective_workdir_path() if "workdir" in context_fields else ""
+        key = (scope, cache_provider, cache_profile, ai_store.normalize_path(cache_workdir))
         if not hasattr(self, "_session_cache_key"):
             self._session_cache_key = None
         if not hasattr(self, "_session_cache_rows"):
@@ -1899,6 +1934,7 @@ class App:
         }
 
     def draw_controls(self, y: int, width: int, rows: int) -> int:
+        self.sync_profiles_for_current_provider(self.current_profile_label())
         child_rows = max(0, rows)
         command_active = self.active_section() != "sessions"
         self.add_line(y, 0, self.panel_title("Command", command_active), width - 1, self.section_label_attr(command_active))
@@ -2198,14 +2234,10 @@ class App:
     def change_option(self, section: str, direction: int) -> None:
         if section == "provider":
             self.remember_session_selection()
-            current_profile = self.current_profile_label()
+            self.remember_current_profile()
             providers = getattr(self, "providers", []) or [self.current_provider()]
             self.indices["provider"] = (self.indices["provider"] + direction) % len(providers)
-            self.profiles = self.discover_profiles(self.current_provider())
-            if current_profile in self.profiles:
-                self.indices["profile"] = self.profiles.index(current_profile)
-            else:
-                self.indices["profile"] = 0
+            self.sync_profiles_for_current_provider()
             self.promote_session_scope("provider")
             self.invalidate_session_cache(reset=True)
         elif section == "profile":
@@ -2267,13 +2299,9 @@ class App:
         section = self.active_section()
         if section == "provider":
             self.remember_session_selection()
-            current_profile = self.current_profile_label()
+            self.remember_current_profile()
             self.indices["provider"] = len(self.providers) - 1 if end else 0
-            self.profiles = self.discover_profiles(self.current_provider())
-            if current_profile in self.profiles:
-                self.indices["profile"] = self.profiles.index(current_profile)
-            else:
-                self.indices["profile"] = 0
+            self.sync_profiles_for_current_provider()
             self.promote_session_scope("provider")
             self.reset_sessions()
         elif section == "profile":
@@ -2328,13 +2356,9 @@ class App:
             return
         if section == "provider":
             self.remember_session_selection()
-            current_profile = self.current_profile_label()
+            self.remember_current_profile()
             self.indices["provider"] = item_idx
-            self.profiles = self.discover_profiles(self.current_provider())
-            if current_profile in self.profiles:
-                self.indices["profile"] = self.profiles.index(current_profile)
-            else:
-                self.indices["profile"] = 0
+            self.sync_profiles_for_current_provider()
             self.promote_session_scope("provider")
             self.invalidate_session_cache(reset=True)
         elif section == "profile":

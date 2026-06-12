@@ -76,6 +76,7 @@ mkdir -p \
   "$HOME_FIXTURE/.codex/sessions/2026/05/05" \
   "$HOME_FIXTURE/.codex-profiles/team-alpha" \
   "$HOME_FIXTURE/.codex-profiles/very-long-profile-name-for-horizontal-viewport" \
+  "$HOME_FIXTURE/.gemini-profiles/gem-only" \
   "$HOME_FIXTURE/.gemini-profiles/team-alpha" \
   "$HOME_FIXTURE/aaa" \
   "$HOME_FIXTURE/work/a" \
@@ -217,6 +218,46 @@ else
   fail "tui python syntax"
 fi
 
+PLAN_DEFAULT_PROFILE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 - <<'PY'
+import os
+from pathlib import Path
+import ai_plan
+import ai_session
+
+home = os.environ["HOME"]
+workdir = home + "/work/main"
+session_path = Path(home) / ".codex-profiles/team-alpha/sessions/fixture.jsonl"
+session_path.parent.mkdir(parents=True, exist_ok=True)
+session_path.write_text("{}\n", encoding="utf-8")
+
+def fake_resolve(session_ref, provider=None, profile=None, workdir=None):
+    if profile is not None:
+        return None
+    return {
+        "provider": "codex",
+        "profile": "team-alpha",
+        "workdir": workdir,
+        "session_id": "s-team-alpha",
+        "native_session_ref": "s-team-alpha",
+        "path": str(session_path),
+    }
+
+ai_session.resolve_session = fake_resolve
+plan = ai_plan.build_execution_plan(
+    ai_plan.LaunchSpec(
+        command="run",
+        provider="codex",
+        profile="default",
+        directory=workdir,
+        session_ref="s-team-alpha",
+    )
+)
+print("{}|{}".format(" ".join(plan.argv), plan.env.get("CODEX_HOME", "")))
+PY
+)"
+[ "$PLAN_DEFAULT_PROFILE_OUT" = "codex resume s-team-alpha|" ] && ok "plan keeps requested default profile when resolving non-default session" || { fail "plan keeps requested default profile when resolving non-default session"; printf 'actual: %s\n' "$PLAN_DEFAULT_PROFILE_OUT" >&2; }
+
 INTENT_JSON="$TMP_BASE/wkd-intent.json"
 if HOME="$HOME_FIXTURE" AI_HOME="$HOME_FIXTURE/.ai" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 "$WKD_INTENT" --self-test "$INTENT_JSON"; then
   assert_contains "wkd intent self-test writes recorder payload" '"app": "ai wkd-intent"' "$INTENT_JSON"
@@ -312,6 +353,75 @@ ENTER_SCOPE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.last_builder_section=0; app.indices={"mode":0,"provider":0,"profile":0,"session":2,"workdir":0}; app.profiles=["default"]; app.session_index=-1; app.session_scroll=0; app.current_sessions=lambda:[{"session_id":"s"}]; app.handle_main_key(10); print("{} {}".format(app.section, app.session_index))'
 )"
 [ "$ENTER_SCOPE_OUT" = "4 0" ] && ok "enter with session scope opens sessions panel" || { fail "enter with session scope opens sessions panel"; printf 'actual: %s\n' "$ENTER_SCOPE_OUT" >&2; }
+
+WORKDIR_PROFILE_MEMORY_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 - <<'PY'
+import os
+import ai_tui
+
+home = os.environ["HOME"]
+workdir = home + "/work/main"
+
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex"]
+app.profiles = ["default", "main"]
+app.session_extra_fields = {"profile"}
+app.custom_workdir = workdir
+
+default_session = {
+    "_kind": "session",
+    "provider": "codex",
+    "profile": "default",
+    "workdir": workdir,
+    "session_id": "s-default",
+    "native_session_ref": "s-default",
+}
+main_session = {
+    "_kind": "session",
+    "provider": "codex",
+    "profile": "main",
+    "workdir": workdir,
+    "session_id": "s-main",
+    "native_session_ref": "s-main",
+}
+sessions = [{"_kind": "new"}, default_session, main_session]
+
+app.session_memory = {app.session_scope_key("workdir"): app.stable_session_key(default_session)}
+app.indices["profile"] = 1
+app.restore_session_selection(sessions, "workdir")
+print(app.session_index)
+PY
+)"
+[ "$WORKDIR_PROFILE_MEMORY_OUT" = "0" ] && ok "workdir scope keeps profile-specific session memory" || { fail "workdir scope keeps profile-specific session memory"; printf 'actual: %s\n' "$WORKDIR_PROFILE_MEMORY_OUT" >&2; }
+
+WORKDIR_SESSION_PROFILE_ARG_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 - <<'PY'
+import os
+import ai_tui
+
+home = os.environ["HOME"]
+workdir = home + "/work/main"
+
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 1, "session": 0, "workdir": 0}
+app.providers = ["codex"]
+app.profiles = ["default", "main"]
+app.custom_workdir = workdir
+
+item = {
+    "_kind": "session",
+    "provider": "codex",
+    "profile": "default",
+    "workdir": workdir,
+    "session_id": "s-default",
+    "native_session_ref": "s-default",
+}
+
+print(" ".join(app.session_args(item, display=True)))
+PY
+)"
+[ "$WORKDIR_SESSION_PROFILE_ARG_OUT" = "codex -p main -d ~/work/main -s s-default" ] && ok "workdir scope resumes selected session with selected profile" || { fail "workdir scope resumes selected session with selected profile"; printf 'actual: %s\n' "$WORKDIR_SESSION_PROFILE_ARG_OUT" >&2; }
 
 SESSION_REENTER_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.last_builder_section=0; app.indices={"mode":0,"provider":0,"profile":0,"session":0,"workdir":0}; app.profiles=["default"]; app.session_index=1; app.session_scroll=0; app.current_sessions=lambda:[{"session_id":"a"},{"session_id":"b"}]; app.enter_sessions(); app.return_to_builder(); app.enter_sessions(); print("{} {}".format(app.section, app.session_index))'
@@ -787,6 +897,16 @@ app.draw_workdir_row(0,100)
 print(any("/" in text and text[0].isdigit() for text in calls))'
 )"
 [ "$WORKDIR_NO_COUNT_OUT" = "False" ] && ok "workdir row omits selected count indicator" || { fail "workdir row omits selected count indicator"; printf 'actual: %s\n' "$WORKDIR_NO_COUNT_OUT" >&2; }
+
+PROVIDER_PROFILE_LIST_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); print(",".join(app.discover_profiles("codex")))'
+)"
+[ "$PROVIDER_PROFILE_LIST_OUT" = "default,team-alpha,very-long-profile-name-for-horizontal-viewport" ] && ok "provider profile list excludes other provider profiles" || { fail "provider profile list excludes other provider profiles"; printf 'actual: %s\n' "$PROVIDER_PROFILE_LIST_OUT" >&2; }
+
+STALE_PROFILE_SYNC_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.indices={"provider":0,"profile":1,"session":0,"workdir":0}; app.providers=["codex","hermes"]; app.profiles=["default","codex"]; app.profile_memory={}; app.sync_profiles_for_current_provider("codex"); print(",".join(app.profiles), app.current_profile_label())'
+)"
+[ "$STALE_PROFILE_SYNC_OUT" = "default,team-alpha,very-long-profile-name-for-horizontal-viewport default" ] && ok "stale profile selection resets to provider profile list" || { fail "stale profile selection resets to provider profile list"; printf 'actual: %s\n' "$STALE_PROFILE_SYNC_OUT" >&2; }
 
 PROFILE_MEMORY_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.indices={"mode":0,"provider":0,"profile":1,"workdir":0}; app.profiles=["default","team-alpha"]; app.profile_memory={}; app.reset_sessions=lambda: None; app.change_option("provider",1); app.profiles=["default","team-alpha"]; app.indices["profile"]=1; app.change_option("provider",-1); print(app.current_provider(), app.current_profile())'
