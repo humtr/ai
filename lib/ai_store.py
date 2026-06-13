@@ -11,6 +11,7 @@ GATEWAYS_FILE = AI_HOME / "gateways.json"
 SESSION_INDEX_DIR = AI_HOME / "session-index"
 SESSION_INDEX_FILE = SESSION_INDEX_DIR / "sessions.json"
 SESSION_INDEX_VERSION = 8
+TUI_STATE_FILE = AI_HOME / "tui-state.json"
 
 def read_json(path: Path, default: Any) -> Any:
     if not path.exists(): return default
@@ -61,5 +62,8 @@ def load_workdirs() -> dict[str, Any]:
     ensure_store(); data=read_json(WORKDIRS_FILE, default_workdirs()); data.setdefault("workdirs", []); return data
 
 def save_workdirs(data: dict[str, Any]) -> None: write_json(WORKDIRS_FILE, data)
+def load_tui_state() -> dict[str, Any]:
+    data=read_json(TUI_STATE_FILE, {"version":1}); data.setdefault("version", 1); return data
+def save_tui_state(data: dict[str, Any]) -> None: write_json(TUI_STATE_FILE, data)
 def load_gateways() -> dict[str, Any]:
     ensure_store(); data=read_json(GATEWAYS_FILE, default_gateways()); data.setdefault("gateways", []); return data

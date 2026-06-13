@@ -33,6 +33,7 @@ SESSION_SCOPE_FIELDS = {
     "profile": {"profile"},
     "all": set(),
 }
+COMMAND_SECTIONS = ["session", "provider", "profile"]
 BUILDER_SECTIONS = ["session", "provider", "profile", "workdir"]
 SECTIONS = BUILDER_SECTIONS + ["sessions"]
 
@@ -175,8 +176,8 @@ class App:
     def __init__(self, stdscr: "curses._CursesWindow") -> None:
         self.stdscr = stdscr
         self.view = "main"
-        self.section = 0
-        self.indices = {"workdir": 0, "provider": 0, "profile": 0, "session": 1}
+        self.section = SECTIONS.index("workdir")
+        self.indices = {"workdir": 0, "provider": 0, "profile": 0, "session": 0}
         self.scroll_offsets = {section: 0 for section in SECTIONS}
         self.list_meta: dict[str, dict[str, int]] = {}
         self.custom_workdir: str | None = None
@@ -186,7 +187,8 @@ class App:
         self.workdir_dropdown_base: str | None = None
         self.workdir_cursor: tuple[int, int] | None = None
         self.workdir_child_memory: dict[str, str] = {}
-        self.last_builder_section = 0
+        self.last_builder_section = BUILDER_SECTIONS.index("workdir")
+        self.last_command_section = "session"
         self.session_index = -1
         self.session_scroll = 0
         self.session_memory: dict[str, str] = {}
@@ -218,8 +220,18 @@ class App:
 
     def reload(self) -> None:
         ai_store.ensure_store()
+        self.launch_state = ai_store.load_tui_state()
         self.providers = self.discover_providers()
+        preferred_provider = str(self.launch_state.get("last_provider") or "")
+        if preferred_provider in self.providers:
+            self.indices["provider"] = self.providers.index(preferred_provider)
         self.profiles = self.discover_profiles(self.current_provider())
+        preferred_profile = str(self.launch_state.get("last_profile") or "default")
+        if preferred_profile in self.profiles:
+            self.indices["profile"] = self.profiles.index(preferred_profile)
+        else:
+            self.indices["profile"] = 0
+        self.profile_memory[self.current_provider()] = self.current_profile_label()
         self.workdirs = [
             w
             for w in ai_store.load_workdirs().get("workdirs", [])
@@ -571,6 +583,9 @@ class App:
         self.session_scroll = 0
 
     def first_selectable_session_index(self, sessions: list[dict[str, Any]]) -> int:
+        for idx, item in enumerate(sessions):
+            if item.get("_kind") != "new":
+                return idx
         return 0 if sessions else -1
 
     def session_header_segments(self, scope: str, sessions: list[dict[str, Any]], width: int) -> list[tuple[str, int]]:
@@ -751,9 +766,38 @@ class App:
         if os.environ.get("AI_TUI_DRY_RUN"):
             self.message = "dry-run: " + " ".join(shlex.quote(part) for part in cmd)
             return
+        self.remember_executed_selection(cmd)
         curses.def_prog_mode()
         curses.endwin()
         os.execvp(cmd[0], cmd)
+
+    def remember_executed_selection(self, cmd: list[str]) -> None:
+        provider = self.current_provider()
+        profile = self.current_profile_label()
+        try:
+            run_index = cmd.index("run")
+            if run_index + 1 < len(cmd):
+                provider = cmd[run_index + 1]
+            if "-p" in cmd:
+                profile_index = cmd.index("-p")
+                if profile_index + 1 < len(cmd):
+                    profile = cmd[profile_index + 1]
+                else:
+                    profile = "default"
+            else:
+                profile = "default"
+        except (ValueError, IndexError):
+            pass
+        state = {
+            "version": 1,
+            "last_provider": provider,
+            "last_profile": profile,
+        }
+        ai_store.save_tui_state(state)
+        self.launch_state = state
+        if not hasattr(self, "profile_memory"):
+            self.profile_memory = {}
+        self.profile_memory[provider] = profile
 
 
     # Stage 6.4 TUI structural helpers
@@ -775,6 +819,14 @@ class App:
         self.section = sections.index(name)
         if name in BUILDER_SECTIONS:
             self.last_builder_section = BUILDER_SECTIONS.index(name)
+        if name in COMMAND_SECTIONS:
+            self.last_command_section = name
+
+    def command_focus_section(self) -> str:
+        section = getattr(self, "last_command_section", "session")
+        if section in COMMAND_SECTIONS:
+            return section
+        return "session"
 
     def can_focus_sessions(self) -> bool:
         try:
@@ -783,7 +835,7 @@ class App:
             return False
 
     def tab_sections(self) -> list[str]:
-        sections = list(BUILDER_SECTIONS)
+        sections = ["workdir", self.command_focus_section()]
         if self.can_focus_sessions():
             sections.append("sessions")
         return sections
@@ -819,7 +871,7 @@ class App:
             self.set_section(target)
 
     def in_run_confirm(self) -> bool:
-        return self.pending_action == "exec" and bool(self.pending_cmd)
+        return getattr(self, "pending_action", None) == "exec" and bool(getattr(self, "pending_cmd", None))
 
     def enter_run_confirm(self, cmd: list[str] | None) -> None:
         if not cmd:
@@ -897,12 +949,19 @@ class App:
     def handle_tab(self) -> bool:
         if self.in_run_confirm():
             self.leave_run_confirm("run cancelled")
-            self.move_focus_next()
-            return True
         if self.workdir_dropdown_open():
             self.commit_workdir_dropdown()
             return True
-        self.move_focus_next()
+        section = self.section_name()
+        if section == "workdir":
+            self.set_section(self.command_focus_section())
+        elif section in COMMAND_SECTIONS:
+            self.last_command_section = section
+            self.enter_sessions()
+        elif section == "sessions":
+            self.set_section("workdir")
+        else:
+            self.set_section("workdir")
         return True
 
     def handle_enter(self) -> bool:
@@ -1936,22 +1995,28 @@ class App:
     def draw_controls(self, y: int, width: int, rows: int) -> int:
         self.sync_profiles_for_current_provider(self.current_profile_label())
         child_rows = max(0, rows)
-        command_active = self.active_section() != "sessions"
-        self.add_line(y, 0, self.panel_title("Command", command_active), width - 1, self.section_label_attr(command_active))
-        session_idx = getattr(self, "indices", {}).get("session", 0)
-        self.draw_choice_row(y + 1, width, "session", "Scope", SESSION_SCOPE_LABELS, session_idx)
-        providers = getattr(self, "providers", []) or [self.current_provider()]
-        self.draw_choice_row(y + 2, width, "provider", "Provider", [p.title() for p in providers], self.indices["provider"])
-        profiles = getattr(self, "profiles", ["default"])
-        self.draw_choice_row(y + 3, width, "profile", "Profile", profiles, self.indices["profile"])
-        self.draw_workdir_row(y + 4, width)
-        next_y = y + 5
-        show_dropdown = self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "children"
+        active = self.active_section()
+        workdir_active = active == "workdir"
+        self.add_line(y, 0, self.panel_title("Workdir", workdir_active), width - 1, self.section_label_attr(workdir_active))
+        self.draw_workdir_row(y + 1, width)
+        next_y = y + 2
+        show_dropdown = active == "workdir" and getattr(self, "workdir_layer", "path") == "children"
         if show_dropdown:
-            return self.draw_workdir_children(next_y, width, child_rows)
-        for n in range(child_rows):
-            self.add_line(next_y + n, 2, "", width - 3)
-        return next_y + child_rows
+            next_y = self.draw_workdir_children(next_y, width, child_rows)
+        else:
+            for n in range(child_rows):
+                self.add_line(next_y + n, 2, "", width - 3)
+            next_y += child_rows
+
+        command_active = active in COMMAND_SECTIONS
+        self.add_line(next_y, 0, self.panel_title("Command", command_active), width - 1, self.section_label_attr(command_active))
+        session_idx = getattr(self, "indices", {}).get("session", 0)
+        self.draw_choice_row(next_y + 1, width, "session", "Scope", SESSION_SCOPE_LABELS, session_idx)
+        providers = getattr(self, "providers", []) or [self.current_provider()]
+        self.draw_choice_row(next_y + 2, width, "provider", "Provider", [p.title() for p in providers], self.indices["provider"])
+        profiles = getattr(self, "profiles", ["default"])
+        self.draw_choice_row(next_y + 3, width, "profile", "Profile", profiles, self.indices["profile"])
+        return next_y + 4
 
     def draw_sessions(self, y: int, width: int, rows: int) -> None:
         if rows <= 2:
@@ -2068,9 +2133,9 @@ class App:
         sessions_y = self.draw_controls(4, w, child_rows) + 1
         self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
         if self.active_section() == "profile":
-            self.add_line(h - 3, 0, "Tab cycles builder | a or / adds profile | d or x deletes profile | Esc back/confirm quit", w - 1, curses.A_DIM)
+            self.add_line(h - 3, 0, "Tab cycles Workdir/Command/Sessions | a or / adds profile | d or x deletes profile | Esc back/confirm quit", w - 1, curses.A_DIM)
         else:
-            self.add_line(h - 3, 0, "Tab cycles builder | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
+            self.add_line(h - 3, 0, "Tab cycles Workdir/Command/Sessions | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
         self.add_line(h - 2, 0, "Workdir: Down opens sibling list; Left/Right moves directory levels; leaf Right keeps the list open.", w - 1, curses.A_DIM)
         self.add_line(h - 1, 0, self.message, w - 1)
         self.update_cursor()
@@ -2119,6 +2184,9 @@ class App:
         return SECTIONS[self.section]
 
     def enter_sessions(self) -> None:
+        section = self.section_name()
+        if section in COMMAND_SECTIONS:
+            self.last_command_section = section
         self.last_builder_section = min(self.section, len(BUILDER_SECTIONS) - 1)
         self.section = SECTIONS.index("sessions")
         sessions = self.session_rows()
@@ -2131,14 +2199,18 @@ class App:
         self.section = max(0, min(self.last_builder_section, len(BUILDER_SECTIONS) - 1))
 
     def move_section(self, direction: int) -> None:
-        if self.active_section() == "sessions":
+        section = self.active_section()
+        if section == "sessions":
             self.return_to_builder()
             return
-        current = min(self.section, len(BUILDER_SECTIONS) - 1)
-        self.section = max(0, min(current + direction, len(BUILDER_SECTIONS) - 1))
-        self.last_builder_section = self.section
-        if self.active_section() == "workdir":
-            self.focus_workdir_path()
+        if section == "workdir":
+            if direction > 0:
+                self.set_section(self.command_focus_section())
+            return
+        if section in COMMAND_SECTIONS:
+            current = COMMAND_SECTIONS.index(section)
+            target = max(0, min(current + direction, len(COMMAND_SECTIONS) - 1))
+            self.set_section(COMMAND_SECTIONS[target])
 
     def toggle_panel(self) -> None:
         if self.active_section() == "sessions":
@@ -2148,29 +2220,29 @@ class App:
             self.enter_sessions()
 
     def next_section(self) -> None:
-        if self.active_section() == "sessions":
+        section = self.active_section()
+        if section == "sessions":
             return
-        if self.active_section() == "workdir":
+        if section == "workdir":
             self.commit_focused_workdir()
-            self.section = SECTIONS.index("session")
-            self.last_builder_section = self.section
+            self.set_section(self.command_focus_section())
             return
-        current = min(self.section, len(BUILDER_SECTIONS) - 1)
-        self.section = (current + 1) % len(BUILDER_SECTIONS)
-        self.last_builder_section = self.section
-        if self.active_section() == "workdir":
-            self.focus_workdir_path()
+        if section in COMMAND_SECTIONS:
+            current = COMMAND_SECTIONS.index(section)
+            self.set_section(COMMAND_SECTIONS[min(current + 1, len(COMMAND_SECTIONS) - 1)])
 
     def previous_section(self) -> None:
-        if self.active_section() == "session":
+        section = self.active_section()
+        if section == "workdir":
             return
-        if self.active_section() == "sessions":
+        if section == "sessions":
             return
-        current = min(self.section, len(BUILDER_SECTIONS) - 1)
-        self.section = (current - 1) % len(BUILDER_SECTIONS)
-        self.last_builder_section = self.section
-        if self.active_section() == "workdir":
-            self.focus_workdir_path()
+        if section in COMMAND_SECTIONS:
+            current = COMMAND_SECTIONS.index(section)
+            if current == 0:
+                self.set_section("workdir")
+            else:
+                self.set_section(COMMAND_SECTIONS[current - 1])
 
     def vertical_action(self, direction: int) -> None:
         section = self.active_section()
@@ -2335,7 +2407,7 @@ class App:
             right = left + meta.get("w", 0)
             if top <= y <= bottom and left <= x < right:
                 if section in SECTIONS:
-                    self.section = SECTIONS.index(section)
+                    self.set_section(section)
                     if section == "workdir":
                         self.workdir_layer = "inline"
                 return section
@@ -2472,10 +2544,7 @@ class App:
         elif ch == curses.KEY_LEFT:
             self.horizontal_action(-1)
         elif ch == 9:
-            if self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") == "children":
-                self.commit_focused_workdir()
-            else:
-                self.next_section()
+            self.handle_tab()
         elif ch == curses.KEY_BTAB:
             self.message = "use Tab to move focus"
         elif ch == curses.KEY_DOWN:
