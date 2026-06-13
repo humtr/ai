@@ -385,10 +385,15 @@ SESSION_UP_OUT="$(
 )"
 [ "$SESSION_UP_OUT" = "4 0" ] && ok "up arrow stays inside sessions panel" || { fail "up arrow stays inside sessions panel"; printf 'actual: %s\n' "$SESSION_UP_OUT" >&2; }
 
+ENTER_WORKDIR_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.last_builder_section=app.section; app.last_command_section="session"; app.workdir_layer="path"; app.handle_main_key(10); print(app.section)'
+)"
+[ "$ENTER_WORKDIR_OUT" = "0" ] && ok "enter moves from workdir tier to command tier" || { fail "enter moves from workdir tier to command tier"; printf 'actual: %s\n' "$ENTER_WORKDIR_OUT" >&2; }
+
 ENTER_SESSIONS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.last_builder_section=0; app.session_index=-1; app.session_scroll=0; app.current_sessions=lambda:[{"session_id":"s"}]; app.handle_main_key(10); print("{} {}".format(app.section, app.session_index))'
 )"
-[ "$ENTER_SESSIONS_OUT" = "4 0" ] && ok "enter from builder opens sessions with last selected" || { fail "enter from builder opens sessions with last selected"; printf 'actual: %s\n' "$ENTER_SESSIONS_OUT" >&2; }
+[ "$ENTER_SESSIONS_OUT" = "4 0" ] && ok "enter moves from command tier to sessions with last selected" || { fail "enter moves from command tier to sessions with last selected"; printf 'actual: %s\n' "$ENTER_SESSIONS_OUT" >&2; }
 
 ENTER_NEW_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.last_builder_section=0; app.indices={"provider":0,"profile":0,"session":3,"workdir":0}; app.profiles=["default"]; app.session_index=-1; app.session_scroll=0; app.pending_action=None; app.pending_cmd=None; app.current_sessions=lambda:[{"session_id":"s"}]; app.handle_main_key(10); print("{} {}".format(app.section, app.session_index))'

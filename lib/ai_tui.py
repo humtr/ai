@@ -970,21 +970,26 @@ class App:
             return True
         if self.workdir_dropdown_open():
             if self.commit_workdir_dropdown():
-                cmd = self.command_for_current_focus()
-                if cmd is not None:
-                    self.enter_run_confirm(cmd)
+                self.set_section(self.command_focus_section())
             return True
-        if self.section_name() == "sessions":
+        section = self.section_name()
+        if section == "sessions":
             cmd = self.command_for_current_focus()
             if cmd is not None:
                 self.enter_run_confirm(cmd)
             return True
-        if self.section_name() == "workdir" and not self.commit_workdir_text_if_present():
+        if section == "workdir":
+            if not self.commit_workdir_text_if_present():
+                return True
+            self.set_section(self.command_focus_section())
             return True
-        if self.can_focus_sessions():
-            self.enter_sessions()
-        else:
-            self.message = "no sessions"
+        if section in COMMAND_SECTIONS:
+            if self.can_focus_sessions():
+                self.enter_sessions()
+            else:
+                self.message = "no sessions"
+            return True
+        self.set_section("workdir")
         return True
 
     def handle_escape(self) -> bool:
@@ -2562,12 +2567,7 @@ class App:
         elif ch == curses.KEY_MOUSE:
             self.handle_mouse()
         elif ch in (10, 13):
-            if self.active_section() == "sessions":
-                self.run_selected_session()
-            else:
-                if self.active_section() == "workdir":
-                    self.commit_focused_workdir()
-                self.enter_sessions()
+            self.handle_enter()
         return None
 
     def run(self) -> int:
