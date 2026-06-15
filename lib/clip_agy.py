@@ -1,9 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/python
-# hgb = Hermes Gemini Bridge
+# clip_agy = Command Line Interface Proxy - Antigravity
 import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 import uuid
@@ -13,37 +14,27 @@ from typing import Any, Dict, List, Tuple
 
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8787
-DEFAULT_PROFILE = os.environ.get("HGB_PROFILE", "tg")
-DEFAULT_MODEL = os.environ.get("HGB_MODEL", "gemini-2.5-flash-lite")
-DEFAULT_PUBLIC_MODEL = os.environ.get("HGB_PUBLIC_MODEL", "hgb-tg")
-DEFAULT_TIMEOUT = int(os.environ.get("HGB_TIMEOUT", "120"))
+DEFAULT_PORT = 8788
+DEFAULT_PROFILE = os.environ.get("CLIP_AGY_PROFILE", "default")
+DEFAULT_MODEL = os.environ.get("CLIP_AGY_MODEL", "agy")
+DEFAULT_PUBLIC_MODEL = os.environ.get("CLIP_AGY_PUBLIC_MODEL", "clip-agy")
+DEFAULT_TIMEOUT = int(os.environ.get("CLIP_AGY_TIMEOUT", "180"))
 DEFAULT_ROUTES_FILE = os.environ.get(
-    "HGB_ROUTES_FILE",
-    str(Path.home() / ".config/hgm/bridge.routes.json"),
+    "CLIP_AGY_ROUTES_FILE",
+    str(Path.home() / ".config/clip/clip_agy.routes.json"),
 )
+
+DEFAULT_EXEC_TEMPLATE = "agy --dangerously-skip-permissions -p {prompt}"
 
 
 def get_tmp_dir() -> Path:
     base = os.environ.get("TMPDIR") or str(Path.home() / "tmp")
-    p = Path(base)
+    p = Path(base) / "clip"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
-LOG_FILE = get_tmp_dir() / "hgb.log"
-
-
-def _add_ai_lib_path() -> None:
-    candidates = []
-    if os.environ.get("AI_LIB_DIR"):
-        candidates.append(Path(os.environ["AI_LIB_DIR"]))
-    candidates.extend([Path(__file__).resolve().parent / "../lib", Path.home() / ".config/ai/lib"])
-    for candidate in candidates:
-        if (candidate / "ai_plan.py").exists():
-            import sys
-            sys.path.insert(0, str(candidate.resolve()))
-            return
+LOG_FILE = get_tmp_dir() / "clip_agy.log"
 
 
 def log(msg: str) -> None:
@@ -77,50 +68,36 @@ def extract_text_content(content: Any) -> str:
     return str(content)
 
 
-# >>> hgb gemini prompt guard v3 >>>
-_HGB_AT_PATH_RE = re.compile(
+_CLIP_AT_PATH_RE = re.compile(
     r'(?<![\\w.+-])@(?=(?:[./~]|[A-Za-z0-9_.-]+/))'
 )
 
-_HGB_HERMES_SKILLS_RE = re.compile(
+_CLIP_HERMES_SKILLS_RE = re.compile(
     r'<available_skills>.*?</available_skills>',
     re.S,
 )
 
-_HGB_REFERENCED_FILES_RE = re.compile(
+_CLIP_REFERENCED_FILES_RE = re.compile(
     r'\\n--- Content from referenced files ---.*?\\n--- End of content ---',
     re.S,
 )
 
-def guard_gemini_prompt_text(text: str) -> str:
-    """Sanitize Hermes/Gateway text before handing it to Gemini CLI.
-
-    B안:
-      Gemini CLI treats @path-like text as a file reference. Break only
-      file-ish @ references such as @tests/foo.py, @./x, @../x, @/x, @~/x.
-
-    C안:
-      Hermes skill catalog / referenced-file blocks are useful for Hermes
-      itself, but they pollute Gemini CLI prompts and can trigger @file import.
-    """
+def guard_agy_prompt_text(text: str) -> str:
     if not isinstance(text, str) or not text:
         return text
 
-    text = _HGB_HERMES_SKILLS_RE.sub(
-        '<available_skills omitted by hgb gemini prompt guard>',
+    text = _CLIP_HERMES_SKILLS_RE.sub(
+        '<available_skills omitted by clip_agy prompt guard>',
         text,
     )
 
-    text = _HGB_REFERENCED_FILES_RE.sub(
-        '\\n[referenced file contents omitted by hgb gemini prompt guard]\\n',
+    text = _CLIP_REFERENCED_FILES_RE.sub(
+        '\\n[referenced file contents omitted by clip_agy prompt guard]\\n',
         text,
     )
 
-    # Insert zero-width space after @ only for file/path-looking references.
-    text = _HGB_AT_PATH_RE.sub('@\u200b', text)
+    text = _CLIP_AT_PATH_RE.sub('@\u200b', text)
     return text
-
-# <<< hgb gemini prompt guard v3 <<<
 
 
 def messages_to_prompt(messages: List[Dict[str, Any]]) -> str:
@@ -129,7 +106,7 @@ def messages_to_prompt(messages: List[Dict[str, Any]]) -> str:
     for msg in messages:
         role = msg.get("role", "user")
         content = extract_text_content(msg.get("content", ""))
-        content = guard_gemini_prompt_text(content)
+        content = guard_agy_prompt_text(content)
 
         if not content:
             continue
@@ -144,21 +121,7 @@ def messages_to_prompt(messages: List[Dict[str, Any]]) -> str:
         else:
             blocks.append(f"[user]\\n{content}")
 
-    return guard_gemini_prompt_text("\\n\\n".join(blocks).strip())
-
-
-def parse_gemini_json(stdout: str) -> Dict[str, Any]:
-    text = stdout.strip()
-    if not text:
-        raise ValueError("empty stdout from gemini")
-
-    start = text.find("{")
-    end = text.rfind("}")
-
-    if start < 0 or end < start:
-        raise ValueError(f"no JSON object found in gemini stdout: {text[:500]}")
-
-    return json.loads(text[start:end + 1])
+    return guard_agy_prompt_text("\\n\\n".join(blocks).strip())
 
 
 def load_routes(routes_file: str, fallback_public: str, fallback_profile: str, fallback_model: str) -> Dict[str, Dict[str, Any]]:
@@ -194,47 +157,39 @@ def normalize_route(route: Dict[str, Any], fallback_profile: str, fallback_model
     }
 
 
-
-def call_gemini(prompt: str, route_name: str, route: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    prompt = guard_gemini_prompt_text(prompt)
+def call_agy_decoupled(prompt: str, route_name: str, route: Dict[str, Any], default_template: str) -> Tuple[str, Dict[str, Any]]:
+    prompt = guard_agy_prompt_text(prompt)
     profile = route["profile"]
     model = route["model"]
     timeout = route["timeout"]
-    skip_trust = route["skip_trust"]
 
-    _add_ai_lib_path()
-    from ai_plan import LaunchSpec, build_execution_plan
+    exec_template = route.get("exec_template") or os.environ.get("CLIP_AGY_TEMPLATE") or default_template
 
-    native_args: List[str] = []
-    if skip_trust:
-        native_args.append("--skip-trust")
-    if model:
-        native_args.extend(["--model", model])
-    native_args.extend(["-p", prompt, "--output-format", "json"])
+    cmd_str = exec_template
+    if "{profile}" in cmd_str:
+        cmd_str = cmd_str.replace("{profile}", profile)
+    if "{model}" in cmd_str:
+        cmd_str = cmd_str.replace("{model}", model or "")
 
-    plan = build_execution_plan(
-        LaunchSpec(
-            command="raw",
-            provider="gemini",
-            profile=profile,
-            directory=os.getcwd(),
-            native_args=native_args,
-        )
-    )
-
-    started = time.time()
-    log(f"CALL route={route_name} profile={profile} model={model} chars={len(prompt)}")
+    argv = shlex.split(cmd_str)
+    argv = [arg.replace("{prompt}", prompt) if "{prompt}" in arg else arg for arg in argv]
 
     env = os.environ.copy()
-    env.update(plan.env)
+    if profile and profile != "default":
+        profile_dir = Path("~/.agy-profiles").expanduser() / profile
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        env["AGY_PROFILE_HOME"] = str(profile_dir)
+
+    log(f"CALL route={route_name} profile={profile} model={model} chars={len(prompt)}")
+    started = time.time()
+
     proc = subprocess.run(
-        plan.argv,
+        argv,
         text=True,
         capture_output=True,
         timeout=timeout,
         input="",
         env=env,
-        cwd=plan.cwd,
     )
 
     elapsed = time.time() - started
@@ -244,39 +199,15 @@ def call_gemini(prompt: str, route_name: str, route: Dict[str, Any]) -> Tuple[st
     )
 
     if proc.returncode != 0:
-        err = proc.stderr.strip() or proc.stdout.strip() or f"gemini exited with code {proc.returncode}"
+        err = proc.stderr.strip() or proc.stdout.strip() or f"agy exited with code {proc.returncode}"
         raise RuntimeError(err[:4000])
 
-    data = parse_gemini_json(proc.stdout)
-    response = data.get("response", "")
-    if response is None:
-        response = ""
-    return str(response), data
+    content = proc.stdout.strip()
+    return content, {}
 
 
-def usage_from_stats(data: Dict[str, Any]) -> Dict[str, int]:
-    stats = data.get("stats", {})
-    models = stats.get("models", {})
-
-    if isinstance(models, dict) and models:
-        first = next(iter(models.values()))
-        tokens = first.get("tokens", {}) if isinstance(first, dict) else {}
-    else:
-        tokens = {}
-
-    prompt_tokens = int(tokens.get("prompt") or tokens.get("input") or 0)
-    completion_tokens = int(tokens.get("candidates") or 0)
-    total_tokens = int(tokens.get("total") or prompt_tokens + completion_tokens)
-
-    return {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
-    }
-
-
-class HGBHandler(BaseHTTPRequestHandler):
-    server_version = "hermes-gemini-bridge/0.2"
+class CLIPARequestHandler(BaseHTTPRequestHandler):
+    server_version = "clip-agy/0.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         log(f"{self.address_string()} {fmt % args}")
@@ -309,8 +240,8 @@ class HGBHandler(BaseHTTPRequestHandler):
             routes = self.routes()
             self.send_json(200, {
                 "ok": True,
-                "service": "hermes-gemini-bridge",
-                "version": "0.2",
+                "service": "clip-agy",
+                "version": "0.1",
                 "profile": self.server.profile,
                 "model": self.server.model,
                 "public_model": self.server.public_model,
@@ -329,7 +260,7 @@ class HGBHandler(BaseHTTPRequestHandler):
                         "id": name,
                         "object": "model",
                         "created": now,
-                        "owned_by": "hermes-gemini-bridge",
+                        "owned_by": "clip-agy",
                     }
                     for name in sorted(routes.keys())
                 ],
@@ -391,17 +322,22 @@ class HGBHandler(BaseHTTPRequestHandler):
                 fallback_timeout=self.server.timeout,
             )
 
-            content, gm_data = call_gemini(prompt, route_name=route_name, route=route)
+            content, _ = call_agy_decoupled(
+                prompt,
+                route_name=route_name,
+                route=route,
+                default_template=self.server.exec_template,
+            )
 
             if stream:
                 self.send_stream_response(requested_model, content)
             else:
-                self.send_completion_response(requested_model, content, gm_data)
+                self.send_completion_response(requested_model, content)
 
         except subprocess.TimeoutExpired:
             self.send_json(504, {
                 "error": {
-                    "message": f"gemini timed out after {self.server.timeout}s",
+                    "message": f"agy timed out after {self.server.timeout}s",
                     "type": "timeout",
                 }
             })
@@ -410,13 +346,13 @@ class HGBHandler(BaseHTTPRequestHandler):
             self.send_json(502, {
                 "error": {
                     "message": str(e),
-                    "type": "hgb_error",
+                    "type": "clip_agy_error",
                 }
             })
 
-    def send_completion_response(self, model: str, content: str, gm_data: Dict[str, Any]) -> None:
+    def send_completion_response(self, model: str, content: str) -> None:
         now = int(time.time())
-        cid = f"chatcmpl-hgb-{uuid.uuid4().hex[:16]}"
+        cid = f"chatcmpl-clip-agy-{uuid.uuid4().hex[:16]}"
 
         self.send_json(200, {
             "id": cid,
@@ -433,12 +369,16 @@ class HGBHandler(BaseHTTPRequestHandler):
                     "finish_reason": "stop",
                 }
             ],
-            "usage": usage_from_stats(gm_data),
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
         })
 
     def send_stream_response(self, model: str, content: str) -> None:
         now = int(time.time())
-        cid = f"chatcmpl-hgb-{uuid.uuid4().hex[:16]}"
+        cid = f"chatcmpl-clip-agy-{uuid.uuid4().hex[:16]}"
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -485,7 +425,7 @@ class HGBHandler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-class HGBServer(ThreadingHTTPServer):
+class CLIPAServer(ThreadingHTTPServer):
     def __init__(
         self,
         addr: Tuple[str, int],
@@ -494,57 +434,63 @@ class HGBServer(ThreadingHTTPServer):
         public_model: str,
         timeout: int,
         routes_file: str,
+        exec_template: str,
     ):
-        super().__init__(addr, HGBHandler)
+        super().__init__(addr, CLIPARequestHandler)
         self.profile = profile
         self.model = model
         self.public_model = public_model
         self.timeout = timeout
         self.routes_file = routes_file
+        self.exec_template = exec_template
 
 
 def serve(args: argparse.Namespace) -> None:
-    server = HGBServer(
+    server = CLIPAServer(
         (args.host, args.port),
         profile=args.profile,
         model=args.model,
         public_model=args.public_model,
         timeout=args.timeout,
         routes_file=args.routes_file,
+        exec_template=args.exec_template,
     )
 
     log(
         f"START host={args.host} port={args.port} "
         f"profile={args.profile} model={args.model} "
-        f"public_model={args.public_model} routes_file={args.routes_file}"
+        f"public_model={args.public_model} routes_file={args.routes_file} "
+        f"exec_template={args.exec_template}"
     )
 
-    print(f"hermes-gemini-bridge listening on http://{args.host}:{args.port}/v1")
+    print(f"clip-agy listening on http://{args.host}:{args.port}/v1")
     print(f"profile={args.profile}")
     print(f"model={args.model}")
     print(f"public_model={args.public_model}")
     print(f"routes_file={args.routes_file}")
+    print(f"exec_template={args.exec_template}")
     print(f"log={LOG_FILE}")
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print()
-        print("hermes-gemini-bridge stopped")
+        print("clip-agy stopped")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="hermes-gemini-bridge")
+    parser = argparse.ArgumentParser(prog="clip-agy")
     sub = parser.add_subparsers(dest="cmd")
 
     p = sub.add_parser("serve")
-    p.add_argument("--host", default=os.environ.get("HGB_HOST", DEFAULT_HOST))
-    p.add_argument("--port", type=int, default=int(os.environ.get("HGB_PORT", DEFAULT_PORT)))
+    p.add_argument("--host", default=os.environ.get("CLIP_AGY_HOST", DEFAULT_HOST))
+    p.add_argument("--port", type=int, default=int(os.environ.get("CLIP_AGY_PORT", DEFAULT_PORT)))
     p.add_argument("--profile", default=DEFAULT_PROFILE)
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--public-model", default=DEFAULT_PUBLIC_MODEL)
     p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
-    p.add_argument("--routes-file", default=os.environ.get("HGB_ROUTES_FILE", DEFAULT_ROUTES_FILE))
+    p.add_argument("--routes-file", default=os.environ.get("CLIP_AGY_ROUTES_FILE", DEFAULT_ROUTES_FILE))
+    p.add_argument("--exec-template", default=os.environ.get("CLIP_AGY_TEMPLATE", DEFAULT_EXEC_TEMPLATE))
 
     args = parser.parse_args()
 

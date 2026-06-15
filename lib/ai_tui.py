@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import curses
+import datetime
 import os
 import shlex
 import subprocess
@@ -38,6 +39,10 @@ BUILDER_SECTIONS = ["session", "provider", "profile", "workdir"]
 SECTIONS = BUILDER_SECTIONS + ["sessions"]
 
 
+TZ_UTC9 = datetime.timezone(datetime.timedelta(hours=9))
+_SHORT_TIME_CACHE: dict[str, str] = {}
+
+
 def env_truthy(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).lower() in {"1", "true", "yes", "on"}
 
@@ -54,7 +59,21 @@ def short(path: str) -> str:
 def short_time(value: str) -> str:
     if not value:
         return ""
-    return value.replace("T", " ")[:16]
+    if value in _SHORT_TIME_CACHE:
+        return _SHORT_TIME_CACHE[value]
+    try:
+        val = value.replace("Z", "+00:00")
+        dt = datetime.datetime.fromisoformat(val)
+        dt_utc9 = dt.astimezone(TZ_UTC9)
+        res = dt_utc9.strftime("%y/%m/%d %H:%M")
+    except Exception:
+        cleaned = value.replace("T", " ").replace("Z", "")
+        if len(cleaned) >= 16:
+            res = cleaned[2:4] + "/" + cleaned[5:7] + "/" + cleaned[8:10] + " " + cleaned[11:16]
+        else:
+            res = cleaned[:16]
+    _SHORT_TIME_CACHE[value] = res
+    return res
 
 
 def set_terminal_title(title: str) -> None:
@@ -184,6 +203,7 @@ class App:
         self.workdir_child_index = -1
         self.workdir_text: str | None = None
         self.workdir_layer = "inline"
+        self.workdir_editing = False
         self.workdir_dropdown_base: str | None = None
         self.workdir_cursor: tuple[int, int] | None = None
         self.workdir_child_memory: dict[str, str] = {}
@@ -207,6 +227,10 @@ class App:
         self.providers: list[str] = []
         self.profiles: list[str] = []
         self.profile_memory: dict[str, str] = {}
+        self.hide_empty_sessions = True
+        self.add_profile_active = False
+        self.help_popup_active = False
+        self.run_confirm_active = False
         self._session_cache_key: tuple[str, ...] | None = None
         self._session_cache_rows: list[dict[str, Any]] = []
         self.workdirs: list[dict[str, Any]] = []
@@ -215,18 +239,70 @@ class App:
         self.reload()
         self.refresh_sessions(silent=True)
 
+    def is_dry_run(self) -> bool:
+        if os.environ.get("AI_TUI_DRY_RUN") == "1":
+            return True
+        if not sys.stdout.isatty() or not sys.stdin.isatty():
+            return True
+        stdscr = getattr(self, "stdscr", None)
+        if stdscr is not None and stdscr.__class__.__name__ == "FakeStdout":
+            return True
+        return False
+
     def init_colors(self) -> None:
-        return
+        try:
+            curses.start_color()
+            curses.use_default_colors()
+            num_colors = getattr(curses, "COLORS", 8)
+            
+            # 1: Red background for delete mode
+            curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_RED)
+            
+            # 2: Deeper green background for add profile mode
+            dark_green = 22 if num_colors >= 256 else curses.COLOR_GREEN
+            curses.init_pair(2, curses.COLOR_WHITE, dark_green)
+            
+            # 3: Dark gray background for help mode
+            dark_gray = 235 if num_colors >= 256 else curses.COLOR_BLACK
+            curses.init_pair(3, curses.COLOR_WHITE, dark_gray)
+            
+            # 4: Neutral Black background for popup windows themselves
+            curses.init_pair(4, curses.COLOR_WHITE, curses.COLOR_BLACK)
+            
+            # 5: Green on Black for Add popup accent
+            green_accent = curses.COLOR_GREEN if num_colors < 256 else 40
+            curses.init_pair(5, green_accent, curses.COLOR_BLACK)
+            
+            # 6: Red on Black for Delete popup accent
+            red_accent = curses.COLOR_RED if num_colors < 256 else 196
+            curses.init_pair(6, red_accent, curses.COLOR_BLACK)
+            
+            # 7: Cyan on Black for Help popup accent
+            cyan_accent = curses.COLOR_CYAN if num_colors < 256 else 45
+            curses.init_pair(7, cyan_accent, curses.COLOR_BLACK)
+            
+            # 8: Dark blue background for run confirm mode
+            dark_blue = 18 if num_colors >= 256 else curses.COLOR_BLUE
+            curses.init_pair(8, curses.COLOR_WHITE, dark_blue)
+            
+            # 9: Blue on Black for Run confirm popup accent
+            blue_accent = curses.COLOR_BLUE if num_colors < 256 else 33
+            curses.init_pair(9, blue_accent, curses.COLOR_BLACK)
+        except Exception:
+            pass
 
     def reload(self) -> None:
         ai_store.ensure_store()
+        cur_provider = self.current_provider() if getattr(self, "providers", None) else None
+        cur_profile = self.current_profile_label() if getattr(self, "profiles", None) else None
+
         self.launch_state = ai_store.load_tui_state()
         self.providers = self.discover_providers()
-        preferred_provider = str(self.launch_state.get("last_provider") or "")
+        preferred_provider = cur_provider or str(self.launch_state.get("last_provider") or "")
         if preferred_provider in self.providers:
             self.indices["provider"] = self.providers.index(preferred_provider)
         self.profiles = self.discover_profiles(self.current_provider())
-        preferred_profile = str(self.launch_state.get("last_profile") or "default")
+        preferred_profile = cur_profile or str(self.launch_state.get("last_profile") or "default")
         if preferred_profile in self.profiles:
             self.indices["profile"] = self.profiles.index(preferred_profile)
         else:
@@ -435,7 +511,7 @@ class App:
         self.session_extra_fields.add(field)
 
     def session_list_title(self) -> str:
-        return "Session list"
+        return "SESSION LIST"
 
     def session_scope_key(self, scope: str | None = None) -> str:
         scope = scope or self.current_session_scope()
@@ -457,7 +533,7 @@ class App:
         return ":".join(parts)
 
     def session_policy_field_keys(self, policy: str | None = None) -> list[str]:
-        keys = ["time", "provider", "profile", "workdir", "title"]
+        keys = ["time", "turns", "provider", "profile", "workdir", "title"]
         fields = self.current_session_filter_fields()
         for field in fields:
             if field in keys:
@@ -474,10 +550,11 @@ class App:
     def session_field_labels(self, scope: str | None = None) -> list[str]:
         labels = {
             "time": "Time",
+            "turns": "Turns",
             "provider": "Provider",
             "profile": "Profile",
             "workdir": "Workdir",
-            "title": "Title",
+            "title": "Latest Prompt",
         }
         return [labels[key] for key in self.session_policy_field_keys()]
 
@@ -486,6 +563,13 @@ class App:
             if item.get("_kind") == "new":
                 return "New session"
             return short_time(str(item.get("updated") or ""))
+        if key == "turns":
+            if item.get("_kind") == "new":
+                return "-"
+            turns = item.get("turns")
+            if turns is None:
+                return "-"
+            return f"{turns}"
         if key == "provider":
             return str(item.get("provider") or self.current_provider())
         if key == "profile":
@@ -495,7 +579,7 @@ class App:
         if key == "title":
             if item.get("_kind") == "new":
                 return "Start with current command settings"
-            value = str(item.get("title") or "")
+            value = str(item.get("last_prompt_summary") or item.get("title") or "")
             return value or str(item.get("session_id") or "")
         return ""
 
@@ -503,30 +587,51 @@ class App:
         sessions = sessions or []
         field_specs = {
             "time": ("Time", 16),
+            "turns": ("Turns", 6),
             "provider": ("Provider", 10),
-            "profile": ("Profile", 14),
+            "profile": ("Profile", 80),
             "workdir": ("Workdir", 18),
-            "title": ("Title", 32),
+            "title": ("Latest Prompt", 32),
         }
         keys = self.session_policy_field_keys()
+        selected_id = None
+        if hasattr(self, "session_index") and self.session_index >= 0:
+            cache_rows = getattr(self, "_session_cache_rows", [])
+            if cache_rows and self.session_index < len(cache_rows):
+                selected_id = cache_rows[self.session_index].get("session_id")
         specs: list[tuple[str, str, int]] = []
         for key in keys:
             label, cap = field_specs[key]
-            content_width = max(
-                [cell_width(self.session_field_value(item, key, scope)) for item in sessions] or [0]
-            )
+            widths = []
+            for item in sessions:
+                val = self.session_field_value(item, key, scope)
+                is_selected = selected_id is not None and item.get("session_id") == selected_id
+                if key == "profile":
+                    h_limit = cell_width(label)
+                    if not is_selected:
+                        widths.append(min(h_limit, cell_width(val)))
+                    else:
+                        widths.append(cell_width(val))
+                else:
+                    widths.append(cell_width(val))
+            content_width = max(widths or [0])
             column_width = min(max(cell_width(label), content_width), cap)
             specs.append((key, label, column_width))
         if width is not None and specs:
             available = max(0, width - 2 - 2 * max(0, len(specs) - 1))
             min_widths = [cell_width(label) for _, label, _ in specs]
             current = [col_width for _, _, col_width in specs]
-            while sum(current) > available:
-                shrinkable = [i for i in range(len(current) - 1, -1, -1) if current[i] > min_widths[i]]
-                if not shrinkable:
-                    break
-                idx = shrinkable[0]
-                current[idx] -= 1
+            if sum(current) > available:
+                while sum(current) > available:
+                    shrinkable = [i for i in range(len(current) - 1, -1, -1) if current[i] > min_widths[i]]
+                    if not shrinkable:
+                        break
+                    idx = shrinkable[0]
+                    current[idx] -= 1
+            elif sum(current) < available:
+                title_idx = next((i for i, (k, _, _) in enumerate(specs) if k == "title"), None)
+                if title_idx is not None:
+                    current[title_idx] += (available - sum(current))
             specs = [(key, label, current[i]) for i, (key, label, _) in enumerate(specs)]
         return specs
 
@@ -628,6 +733,14 @@ class App:
         return self.directory_is_cwd(self.effective_workdir_path())
 
     def commit_workdir_text_if_present(self) -> bool:
+        if getattr(self, "workdir_layer", "inline") == "inline" and getattr(self, "workdir_child_index", -1) >= 0:
+            children = self.filtered_workdir_children()
+            if 0 <= self.workdir_child_index < len(children):
+                child = children[self.workdir_child_index]
+                self.set_custom_workdir(child, "set", text=self.workdir_text_for_child(child), layer="path")
+                self.workdir_modified = False
+                self.workdir_editing = False
+                return True
         text = getattr(self, "workdir_text", None)
         if text is None:
             return True
@@ -642,7 +755,9 @@ class App:
         if not path.is_dir():
             self.message = "workdir is not a directory"
             return False
-        self.set_custom_workdir(path, "set")
+        self.set_custom_workdir(path, "set", text=short(str(path)), layer="path")
+        self.workdir_modified = False
+        self.workdir_editing = False
         return True
 
     def common_args(self, display: bool = False) -> list[str]:
@@ -737,19 +852,233 @@ class App:
         if not silent:
             self.message = f"session summaries indexed: {len(data.get('sessions', []))}"
 
-    def prompt(self, label: str, default: str = "") -> str | None:
-        curses.echo()
-        h, _ = self.stdscr.getmaxyx()
-        self.stdscr.move(h - 2, 0)
-        self.stdscr.clrtoeol()
-        prompt = f"{label} [{default}]: "
-        self.stdscr.addstr(h - 2, 0, prompt)
-        value = self.stdscr.getstr(h - 2, len(prompt)).decode(errors="replace")
+    def set_status_message(self, en_msg: str, ko_msg: str) -> None:
+        # Revert status messages to English for consistency with the TUI locale.
+        self.message = en_msg
+
+    def draw_popup_window(self, title: str, lines: list[Any], accent_color_pair: int = 4, align_right: bool = False, has_input: bool = False, input_prompt: str = "", input_text: str = "") -> None:
+        self.draw_main_background()
+        h, w = self.stdscr.getmaxyx()
+        
+        max_line_w = 0
+        for line in lines:
+            if isinstance(line, tuple):
+                max_line_w = max(max_line_w, cell_width(line[0]) + cell_width(line[1]) + 5)
+            else:
+                max_line_w = max(max_line_w, cell_width(line))
+        if has_input:
+            max_line_w = max(max_line_w, cell_width(input_prompt) + cell_width(input_text) + 10)
+            
+        width = min(w - 4, max(48, max_line_w + 8))
+        height = len(lines) + 4
+        if has_input:
+            height += 2
+            
+        top = (h - height) // 2
+        left = (w - width) // 2
+        
+        # Base neutral colors (Pair 4)
+        popup_attr = curses.color_pair(4)
+        # Accent colors (Pair 5=Green, Pair 6=Red, Pair 7=Cyan, Pair 4=White)
+        accent_attr = curses.color_pair(accent_color_pair) | curses.A_BOLD
+        
+        for dy in range(height):
+            y = top + dy
+            if dy == 0:
+                self.add_line(y, left, "┌" + "─" * (width - 2) + "┐", width, accent_attr)
+            elif dy == height - 1:
+                self.add_line(y, left, "└" + "─" * (width - 2) + "┘", width, accent_attr)
+            else:
+                self.add_text(y, left, "│", 1, accent_attr)
+                self.add_text(y, left + 1, " " * (width - 2), width - 2, popup_attr)
+                self.add_text(y, left + width - 1, "│", 1, accent_attr)
+                
+        title_str = f" {title} "
+        title_x = left + (width - cell_width(title_str)) // 2
+        self.add_text(top, title_x, title_str, width - 4, curses.color_pair(accent_color_pair) | curses.A_REVERSE | curses.A_BOLD)
+        
+        content_w = width - 6
+        for i, line in enumerate(lines):
+            y = top + 2 + i
+            if isinstance(line, tuple):
+                shortcut, description = line
+                sh_str = f"{shortcut:<13}"
+                # Shortcut in Bold
+                self.add_text(y, left + 3, sh_str, 13, popup_attr | curses.A_BOLD)
+                # Description not bold
+                self.add_text(y, left + 3 + 13, description, content_w - 13, popup_attr)
+            else:
+                if align_right:
+                    aligned_line = line.rjust(content_w)
+                else:
+                    aligned_line = line
+                line_attr = popup_attr
+                if line.startswith("───"):
+                    line_attr |= curses.A_DIM
+                elif "Shortcuts" in line:
+                    line_attr |= curses.A_BOLD
+                self.add_text(y, left + 3, aligned_line, content_w, line_attr)
+                
+        if has_input:
+            sep_y = top + height - 3
+            self.add_line(sep_y, left, "├" + "─" * (width - 2) + "┤", width, accent_attr)
+            input_prompt_full = f" {input_prompt}{input_text}"
+            self.add_text(top + height - 2, left + 3, input_prompt_full, content_w, popup_attr | curses.A_BOLD)
+            
+        self.stdscr.refresh()
+
+    def show_help_popup(self) -> None:
+        self.help_popup_active = True
+        lines = [
+            "Keyboard Shortcuts",
+            "──────────────────",
+            ("Tab", "Cycle panels (Workdir -> Command -> Sessions)"),
+            ("Shift-Tab", "Cycle panels backwards"),
+            ("Enter", "Open sessions / Confirm action"),
+            ("Esc", "Back / Exit launcher"),
+            ("Ctrl-E or /", "Edit Cwd in Workdir panel"),
+            ("Ctrl-A", "Add profile (in Profile panel)"),
+            ("Ctrl-D", "Delete profile / session"),
+            ("Ctrl-T", "Toggle automated/empty sessions"),
+            ("Arrow Keys", "Navigate choices / items"),
+            "",
+            "Press any key to close..."
+        ]
+        try:
+            self.draw_popup_window(
+                title="HELP GUIDE",
+                lines=lines,
+                accent_color_pair=7,
+                align_right=False,
+                has_input=False
+            )
+            self.stdscr.getch()
+        finally:
+            self.help_popup_active = False
+            self.draw()
+
+    def prompt(self, label: str, default: str = "", bg_color_pair: int = 0) -> str | None:
         curses.noecho()
-        value = value.strip()
-        if not value:
-            value = default
-        return value or None
+        curses.curs_set(1)
+        h, w = self.stdscr.getmaxyx()
+        input_text = ""
+        
+        if bg_color_pair == 1:
+            self.delete_confirm_active = True
+        elif bg_color_pair == 2:
+            self.add_profile_active = True
+        self.draw()
+        
+        try:
+            while True:
+                if bg_color_pair == 2:
+                    lines = ["Enter a name for the new profile."]
+                    input_prompt = "Profile name: "
+                    self.draw_popup_window(
+                        title=label.upper(),
+                        lines=lines,
+                        accent_color_pair=5,
+                        align_right=False,
+                        has_input=True,
+                        input_prompt=input_prompt,
+                        input_text=input_text
+                      )
+                    max_line_w = max(cell_width(label), cell_width(input_prompt) + cell_width(input_text) + 10)
+                    pw = min(w - 4, max(48, max_line_w + 8))
+                    p_height = len(lines) + 6
+                    p_top = (h - p_height) // 2
+                    p_left = (w - pw) // 2
+                    cursor_y = p_top + p_height - 2
+                    cursor_x = p_left + 3 + cell_width(f" {input_prompt}") + cell_width(input_text)
+                else:
+                    self.stdscr.move(h - 2, 0)
+                    self.stdscr.clrtoeol()
+                    prompt_str = f"{label} [{default}]: {input_text}"
+                    attr = curses.A_BOLD
+                    if bg_color_pair > 0:
+                        attr |= curses.color_pair(bg_color_pair)
+                    self.add_line(h - 2, 0, prompt_str, w - 1, attr)
+                    cursor_y = h - 2
+                    cursor_x = cell_width(prompt_str)
+                    
+                self.stdscr.move(cursor_y, min(w - 2, cursor_x))
+                self.stdscr.refresh()
+                
+                ch = self.stdscr.getch()
+                if ch == 27:
+                    return None
+                elif ch in (10, 13):
+                    res = input_text.strip() or default
+                    return res if res else None
+                elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                    input_text = input_text[:-1]
+                elif 32 <= ch <= 126:
+                    input_text += chr(ch)
+        finally:
+            curses.curs_set(0)
+            self.delete_confirm_active = False
+            self.add_profile_active = False
+            self.draw()
+
+    def confirm_delete(self, label: str) -> bool:
+        curses.noecho()
+        curses.curs_set(1)
+        h, w = self.stdscr.getmaxyx()
+        
+        self.delete_confirm_active = True
+        input_text = ""
+        
+        try:
+            while True:
+                lines = [label]
+                input_prompt = "Type 'yes' to delete: "
+                self.draw_popup_window(
+                    title="DELETE CONFIRMATION",
+                    lines=lines,
+                    accent_color_pair=6,
+                    align_right=True,
+                    has_input=True,
+                    input_prompt=input_prompt,
+                    input_text=input_text
+                )
+                
+                max_line_w = max(cell_width(label), cell_width(input_prompt) + cell_width(input_text) + 10)
+                pw = min(w - 4, max(48, max_line_w + 8))
+                p_height = len(lines) + 6
+                p_top = (h - p_height) // 2
+                p_left = (w - pw) // 2
+                cursor_y = p_top + p_height - 2
+                cursor_x = p_left + 3 + cell_width(f" {input_prompt}") + cell_width(input_text)
+                
+                try:
+                    self.stdscr.move(cursor_y, min(w - 2, cursor_x))
+                except curses.error:
+                    pass
+                
+                ch = self.stdscr.getch()
+                
+                if ch == 27:
+                    return False
+                    
+                if ch in (10, 13):
+                    if input_text == "yes":
+                        return True
+                    else:
+                        return False
+                        
+                elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                    input_text = input_text[:-1]
+                    
+                elif 32 <= ch <= 126:
+                    new_char = chr(ch)
+                    candidate = input_text + new_char
+                    if not "yes".startswith(candidate):
+                        return False
+                    input_text = candidate
+        finally:
+            curses.curs_set(0)
+            self.delete_confirm_active = False
+            self.draw()
 
     def shell(self, args: list[str]) -> None:
         curses.def_prog_mode()
@@ -821,6 +1150,7 @@ class App:
             self.last_builder_section = BUILDER_SECTIONS.index(name)
         if name in COMMAND_SECTIONS:
             self.last_command_section = name
+        self.workdir_editing = False
 
     def command_focus_section(self) -> str:
         section = getattr(self, "last_command_section", "session")
@@ -877,9 +1207,52 @@ class App:
         if not cmd:
             self.message = "nothing to run"
             return
+            
+        if self.is_dry_run():
+            self.pending_action = "exec"
+            self.pending_cmd = list(cmd)
+            self.message = "RUN ready: Enter to run | Esc cancel | Tab cancel + next"
+            return
+
         self.pending_action = "exec"
         self.pending_cmd = list(cmd)
-        self.message = "RUN ready: Enter to run | Esc cancel | Tab cancel + next"
+        self.run_confirm_active = True
+        
+        cmd_str = " ".join(cmd)
+        h, w = self.stdscr.getmaxyx()
+        max_width = w - 12
+        if len(cmd_str) > max_width:
+            cmd_str = cmd_str[:max_width - 3] + "..."
+            
+        lines = [
+            "Are you sure you want to run the following command?",
+            "",
+            f"  {cmd_str}",
+            "",
+            "Press Enter to confirm and run.",
+            "Press Esc to cancel."
+        ]
+        
+        try:
+            while True:
+                self.draw_popup_window(
+                    title="RUN CONFIRMATION",
+                    lines=lines,
+                    accent_color_pair=9,
+                    align_right=False,
+                    has_input=False
+                )
+                
+                ch = self.stdscr.getch()
+                if ch in (10, 13):
+                    self.execute_run_confirm()
+                    return
+                elif ch == 27:
+                    self.leave_run_confirm("run cancelled")
+                    return
+        finally:
+            self.run_confirm_active = False
+            self.draw()
 
     def leave_run_confirm(self, message: str = "run cancelled") -> None:
         self.pending_action = None
@@ -906,6 +1279,7 @@ class App:
         return True
 
     def cancel_workdir_dropdown(self) -> bool:
+        self.workdir_editing = False
         if not self.workdir_dropdown_open():
             return False
         self.focus_workdir_path()
@@ -931,6 +1305,9 @@ class App:
     def key_is_tab(self, key: object) -> bool:
         return key in (9, "\t")
 
+    def key_is_shift_tab(self, key: object) -> bool:
+        return key == getattr(curses, "KEY_BTAB", 353) or key in (353, "\x1b[Z")
+
     def key_is_enter(self, key: object) -> bool:
         return key in (10, 13, "\n", "\r", getattr(curses, "KEY_ENTER", 343))
 
@@ -940,6 +1317,8 @@ class App:
     def handle_navigation_key(self, key: object) -> bool:
         if self.key_is_tab(key):
             return self.handle_tab()
+        if self.key_is_shift_tab(key):
+            return self.handle_shift_tab()
         if self.key_is_enter(key):
             return self.handle_enter()
         if self.key_is_escape(key):
@@ -951,7 +1330,8 @@ class App:
             self.leave_run_confirm("run cancelled")
         if self.workdir_dropdown_open():
             self.commit_workdir_dropdown()
-            return True
+            if self.is_dry_run():
+                return True
         section = self.section_name()
         if section == "workdir":
             self.set_section(self.command_focus_section())
@@ -960,6 +1340,25 @@ class App:
             self.enter_sessions()
         elif section == "sessions":
             self.set_section("workdir")
+        else:
+            self.set_section("workdir")
+        return True
+
+    def handle_shift_tab(self) -> bool:
+        if self.in_run_confirm():
+            self.leave_run_confirm("run cancelled")
+        if self.workdir_dropdown_open():
+            self.commit_workdir_dropdown()
+            if self.is_dry_run():
+                return True
+        section = self.section_name()
+        if section == "workdir":
+            self.enter_sessions()
+        elif section in COMMAND_SECTIONS:
+            self.set_section("workdir")
+        elif section == "sessions":
+            target = getattr(self, "last_command_section", "profile") or "profile"
+            self.set_section(target)
         else:
             self.set_section("workdir")
         return True
@@ -993,6 +1392,7 @@ class App:
         return True
 
     def handle_escape(self) -> bool:
+        self.workdir_editing = False
         if self.in_run_confirm():
             self.leave_run_confirm("run cancelled")
             return True
@@ -1415,54 +1815,55 @@ class App:
             supported = False
 
         if not supported:
-            self.message = f"provider {provider} does not support profiles"
+            self.set_status_message(f"provider {provider} does not support profiles", f"프로바이더 {provider}는 프로필을 지원하지 않는다.")
             return
 
-        name = self.prompt("Add profile name")
+        name = self.prompt("Add profile name", bg_color_pair=2)
         if not name:
-            self.message = "add profile cancelled"
+            self.set_status_message("add profile cancelled", "프로필 생성을 취소했다.")
             return
 
         try:
             ai_provider.validate_profile_name(name)
         except ValueError as e:
-            self.message = str(e)
+            self.set_status_message(str(e), f"오류: {e}")
             return
 
         base = ai_provider.profile_base_dir(provider)
         if not base:
-            self.message = f"provider {provider} has no profile base directory"
+            self.set_status_message(f"provider {provider} has no profile base directory", "프로필 디렉터리가 없다.")
             return
 
         path = base / name
         try:
             path.mkdir(parents=True, exist_ok=True)
-            self.message = f"profile created: {provider}/{name}"
+            self.set_status_message(f"profile created: {provider}/{name}", "프로필을 만들었다.")
             self.reload()
             if name in self.profiles:
                 self.indices["profile"] = self.profiles.index(name)
         except Exception as e:
-            self.message = f"failed to create profile: {e}"
+            self.set_status_message(f"failed to create profile: {e}", f"프로필 생성 실패: {e}")
 
     def delete_profile(self) -> None:
         profile = self.current_profile_label()
         if profile == "default":
-            self.message = "cannot delete default profile"
+            self.set_status_message("cannot delete default profile", "기본 프로필은 삭제할 수 없다.")
             return
 
         provider = self.current_provider()
         self.sync_profiles_for_current_provider(profile)
         if profile not in self.profiles:
-            self.message = f"profile not found for provider: {provider}/{profile}"
+            self.set_status_message(f"profile not found for provider: {provider}/{profile}", f"프로필을 찾을 수 없다: {provider}/{profile}")
             return
-        confirm = self.prompt(f"Type 'yes' to delete profile '{profile}'")
-        if confirm != "yes":
-            self.message = "delete profile cancelled"
+
+        confirm = self.confirm_delete(f"Delete profile '{profile}'?")
+        if not confirm:
+            self.set_status_message("delete profile cancelled", "삭제를 취소했다.")
             return
 
         base = ai_provider.profile_base_dir(provider)
         if not base:
-            self.message = f"provider {provider} has no profile base directory"
+            self.set_status_message(f"provider {provider} has no profile base directory", "프로필 디렉터리가 없다.")
             return
 
         path = base / profile
@@ -1470,13 +1871,77 @@ class App:
             if path.is_dir():
                 import shutil
                 shutil.rmtree(path)
-                self.message = f"deleted profile: {provider}/{profile}"
+                self.set_status_message(f"deleted profile: {provider}/{profile}", "프로필을 삭제했다.")
             else:
-                self.message = f"profile not found on disk: {provider}/{profile}"
+                self.set_status_message(f"profile not found on disk: {provider}/{profile}", "프로필을 찾을 수 없다.")
             self.reload()
             self.indices["profile"] = 0
         except Exception as e:
-            self.message = f"failed to delete profile: {e}"
+            self.set_status_message(f"failed to delete profile: {e}", f"삭제 실패: {e}")
+
+    def delete_session(self) -> None:
+        item = self.selected_session()
+        if not item:
+            self.set_status_message("no session selected to delete", "삭제할 세션이 없다.")
+            return
+        if item.get("_kind") == "new":
+            self.set_status_message("cannot delete 'new session' template", "템플릿은 삭제할 수 없다.")
+            return
+        
+        session_id = item.get("session_id") or ""
+        path_str = item.get("path") or item.get("source_path") or ""
+        if not path_str:
+            self.set_status_message("selected session has no file path", "파일 경로가 없다.")
+            return
+        
+        confirm = self.confirm_delete(f"Delete session '{session_id[:8]}'")
+        if not confirm:
+            self.set_status_message("delete session cancelled", "삭제를 취소했다.")
+            return
+        
+        try:
+            path = Path(path_str)
+            if path.is_file():
+                path.unlink()
+                self.set_status_message(f"deleted session: {session_id[:8]}", "세션을 삭제했다.")
+            else:
+                self.set_status_message(f"session file not found: {path_str}", "세션 파일을 찾을 수 없다.")
+            ai_session.refresh_session_index()
+            self.invalidate_session_cache(reset=True)
+            self.session_index = -1
+        except Exception as e:
+            self.set_status_message(f"failed to delete session: {e}", f"삭제 실패: {e}")
+
+    def toggle_empty_sessions(self) -> None:
+        old_sessions = self.session_rows()
+        old_idx = self.session_index
+        old_selected_id = None
+        if 0 <= old_idx < len(old_sessions):
+            old_selected_id = old_sessions[old_idx].get("session_id")
+
+        self.hide_empty_sessions = not getattr(self, "hide_empty_sessions", False)
+        self.invalidate_session_cache(reset=False)
+        
+        new_sessions = self.session_rows()
+        if not new_sessions:
+            self.session_index = -1
+        elif old_selected_id is not None:
+            found_idx = -1
+            for idx, s in enumerate(new_sessions):
+                if s.get("session_id") == old_selected_id:
+                    found_idx = idx
+                    break
+            if found_idx >= 0:
+                self.session_index = found_idx
+            else:
+                self.session_index = max(0, min(old_idx, len(new_sessions) - 1))
+        else:
+            self.session_index = -1
+
+        if self.hide_empty_sessions:
+            self.message = "automated/empty sessions hidden (turns = 0)"
+        else:
+            self.message = "all sessions shown"
 
     def edit_workdir(self) -> None:
         current = self.current_workdir_path()
@@ -1577,6 +2042,8 @@ class App:
             self._session_cache_rows = []
         if self._session_cache_key == key:
             return self._session_cache_rows
+        if self._session_cache_key is not None:
+            self.remember_session_selection(self._session_cache_key[0], self._session_cache_rows)
         if not hasattr(self, "session_index"):
             self.session_index = -1
         if not hasattr(self, "session_scroll"):
@@ -1586,13 +2053,12 @@ class App:
         except Exception as exc:  # pragma: no cover - defensive TUI boundary
             self.message = f"session list failed: {exc}"
             sessions = []
+        if getattr(self, "hide_empty_sessions", False):
+            sessions = [s for s in sessions if s.get("turns", 0) > 0]
         rows = [self.new_session_row(), *[dict(session, _kind="session") for session in sessions]]
         self._session_cache_key = key
         self._session_cache_rows = rows
-        if rows and self.session_index < 0:
-            self.restore_session_selection(rows, scope)
-        else:
-            self.session_index = max(-1, min(self.session_index, len(rows) - 1))
+        self.restore_session_selection(rows, scope)
         return rows
 
     def new_session_row(self) -> dict[str, Any]:
@@ -1619,12 +2085,17 @@ class App:
         specs: list[tuple[str, str, int]] | None = None,
     ) -> list[tuple[str, int]]:
         scope = scope or self.current_session_scope()
-        marker = ">" if selected else " "
+        marker = ">" if (selected and focused) else " "
+        marker_attr = curses.A_BOLD if (selected and focused) else 0
         attr = self.selection_attr(focused) if selected else self.subdued_attr(focused)
         specs = specs or self.session_column_specs(scope, [item], width)
-        segments: list[tuple[str, int]] = [(marker, attr), (" ", 0)]
+        segments: list[tuple[str, int]] = [(marker, marker_attr), (" ", 0)]
         for idx, (key, _label, col_width) in enumerate(specs):
             value = self.session_field_value(item, key, scope)
+            if key == "profile" and not selected:
+                h_limit = cell_width("Profile")
+                if cell_width(value) > h_limit:
+                    value = fit_cells(value, h_limit - 2) + ".."
             visible = fit_cells(value, col_width)
             segments.append((visible, attr))
             padding = col_width - cell_width(visible)
@@ -1703,8 +2174,8 @@ class App:
         return 0 if active else curses.A_DIM
 
     def panel_title(self, label: str, active: bool) -> str:
-        marker = "> " if active else "  "
-        return marker + label
+        del active  # unused
+        return "  " + label
 
     def workdir_child_focused(self) -> bool:
         return self.active_section() == "workdir" and getattr(self, "workdir_layer", "path") in {"path", "children"}
@@ -1762,13 +2233,12 @@ class App:
         command = self.command_line()
         if self.active_section() == "sessions":
             command = self.selected_session_command_line()
-        self.add_line(0, 0, " " + command, width - 1, curses.A_BOLD | curses.A_REVERSE)
-        self.add_line(
-            1,
-            0,
-            self.selected_session_summary() if self.active_section() == "sessions" else f"Provider {self.current_provider().title()} | Profile {self.current_profile()} | Cwd {short(self.effective_workdir_path())}",
-            width - 1,
-        )
+        self.add_line(1, 0, f" ⚡ COMMAND: {command}", width - 1, curses.A_BOLD | curses.A_REVERSE)
+        if self.active_section() == "sessions":
+            summary = self.selected_session_summary()
+        else:
+            summary = f" 📡 Provider: {self.current_provider().title()}   👤 Profile {self.current_profile()}: {self.current_profile()}   📁 Cwd: {short(self.effective_workdir_path())}"
+        self.add_line(2, 0, summary, width - 1, curses.A_BOLD)
 
     def draw_choice_row(self, y: int, width: int, section: str, label: str, items: list[str], idx: int) -> None:
         active = self.active_section() == section
@@ -1937,7 +2407,7 @@ class App:
 
         display_path, selected_segment, status = self.selected_workdir_path()
         right_hint = f" {status}"
-        if False and self.workdir_inline_focused() and getattr(self, "workdir_text", None) is not None:
+        if self.workdir_inline_focused() and getattr(self, "workdir_editing", False) and getattr(self, "workdir_text", None) is not None:
             text = self.workdir_text or ""
             _, typed = self.workdir_text_base_and_prefix()
             suffix = self.workdir_completion_suffix() if typed and self.workdir_inline_focused() else ""
@@ -2001,20 +2471,25 @@ class App:
         self.sync_profiles_for_current_provider(self.current_profile_label())
         child_rows = max(0, rows)
         active = self.active_section()
+        
+        # Add 1 line empty space and DIRECTORY panel title (ALL CAP)
+        self.add_line(y, 0, "", width - 1)
         workdir_active = active == "workdir"
-        self.add_line(y, 0, self.panel_title("Workdir", workdir_active), width - 1, self.section_label_attr(workdir_active))
-        self.draw_workdir_row(y + 1, width)
-        next_y = y + 2
-        show_dropdown = active == "workdir" and getattr(self, "workdir_layer", "path") == "children"
+        self.add_line(y + 1, 0, self.panel_title("DIRECTORY", workdir_active), width - 1, self.section_label_attr(workdir_active))
+        
+        self.draw_workdir_row(y + 2, width)
+        next_y = y + 3
+        show_dropdown = active == "workdir" and (
+            getattr(self, "workdir_layer", "path") == "children" or
+            (getattr(self, "workdir_layer", "path") == "inline" and getattr(self, "workdir_editing", False))
+        )
         if show_dropdown:
             next_y = self.draw_workdir_children(next_y, width, child_rows)
-        else:
-            for n in range(child_rows):
-                self.add_line(next_y + n, 2, "", width - 3)
-            next_y += child_rows
+        self.add_line(next_y, 0, "", width - 1)
+        next_y += 1
 
         command_active = active in COMMAND_SECTIONS
-        self.add_line(next_y, 0, self.panel_title("Command", command_active), width - 1, self.section_label_attr(command_active))
+        self.add_line(next_y, 0, self.panel_title("COMMAND", command_active), width - 1, self.section_label_attr(command_active))
         session_idx = getattr(self, "indices", {}).get("session", 0)
         self.draw_choice_row(next_y + 1, width, "session", "Scope", SESSION_SCOPE_LABELS, session_idx)
         providers = getattr(self, "providers", []) or [self.current_provider()]
@@ -2046,7 +2521,14 @@ class App:
             return
 
         list_y = y + 1
-        list_rows = 2 if rows <= 7 else max(3, min(10, rows - 9))
+        if self.is_dry_run():
+            list_rows = 2 if rows <= 7 else max(3, min(10, rows - 9))
+        else:
+            list_rows = 3
+            if rows <= 7:
+                list_rows = max(1, rows - 5)
+            elif rows > 12:
+                list_rows = max(3, min(6, rows // 3))
         scope = self.current_session_scope()
         self.list_meta["sessions"] = {
             "y": list_y,
@@ -2097,18 +2579,37 @@ class App:
             return
         selected = sessions[self.session_index]
         session_id = str(selected.get("session_id") or "")
+        provider = str(selected.get("provider") or "-")
+        profile = str(selected.get("profile") or "-")
+        turns = str(selected.get("turns") or "0")
+        updated_time = short_time(str(selected.get("updated") or ""))
+        workdir_path = short(str(selected.get("workdir") or ""))
+
         preview_attr = self.section_label_attr(active)
         preview_text_attr = self.subdued_attr(active)
-        self.add_line(preview_y, 0, self.panel_title("Selected session", active), width - 1, preview_attr)
-        self.add_line(preview_y + 1, 2, f"ID: {session_id or '-'}", width - 3, preview_text_attr)
-        row = preview_y + 2
-        preview_space = max(2, rows - list_rows - 4)
+        self.add_line(preview_y, 0, self.panel_title("SESSION DETAILS", active), width - 1, preview_attr)
+        
+        if self.is_dry_run():
+            self.add_line(preview_y + 1, 2, f"ID: {session_id or '-'}", width - 3, preview_text_attr)
+            row = preview_y + 2
+            preview_space = max(2, rows - list_rows - 4)
+        else:
+            meta_line1 = f"  Provider: {provider}  │  Profile: {profile}  │  Turns: {turns}  │  Updated: {updated_time}"
+            self.add_line(preview_y + 1, 0, meta_line1, width - 1, preview_text_attr)
+            meta_line2 = f"  Workdir: {workdir_path}  │  ID: {session_id}"
+            self.add_line(preview_y + 2, 0, meta_line2, width - 1, preview_text_attr)
+            self.add_line(preview_y + 3, 0, "", width - 1)
+            row = preview_y + 4
+            preview_space = max(2, rows - list_rows - 6)
         max_prompt = max(1, preview_space // 2)
         max_answer = max(1, preview_space - max_prompt)
         for line in self.wrap_lines("Prompt", str(selected.get("last_prompt_summary") or ""), width - 3, max_prompt):
             if row >= y + rows:
                 return
             self.add_line(row, 2, line, width - 3, preview_text_attr)
+            row += 1
+        if not self.is_dry_run() and row < y + rows:
+            self.add_line(row, 2, "", width - 3, preview_text_attr)
             row += 1
         for line in self.wrap_lines("Answer", str(selected.get("last_response_summary") or ""), width - 3, max_answer):
             if row >= y + rows:
@@ -2120,30 +2621,84 @@ class App:
         segments = self.session_row_segments(item, width, selected, False, scope)
         return "".join(text for text, _attr in segments)
 
-    def draw_main(self) -> None:
+    def draw_main_background(self) -> None:
         self.stdscr.erase()
+        if getattr(self, "delete_confirm_active", False):
+            try:
+                self.stdscr.bkgd(curses.color_pair(1))
+            except (curses.error, AttributeError):
+                pass
+        elif getattr(self, "add_profile_active", False):
+            try:
+                self.stdscr.bkgd(curses.color_pair(2))
+            except (curses.error, AttributeError):
+                pass
+        elif getattr(self, "help_popup_active", False):
+            try:
+                self.stdscr.bkgd(curses.color_pair(3))
+            except (curses.error, AttributeError):
+                pass
+        elif getattr(self, "run_confirm_active", False):
+            try:
+                self.stdscr.bkgd(curses.color_pair(8))
+            except (curses.error, AttributeError):
+                pass
+        else:
+            try:
+                self.stdscr.bkgd(curses.A_NORMAL)
+            except (curses.error, AttributeError):
+                pass
         self.list_meta = {}
         self.workdir_cursor = None
         h, w = self.stdscr.getmaxyx()
         if h < 14 or w < 52:
             self.add_line(0, 0, "ai tui: terminal is too small", max(1, w - 1), curses.A_BOLD)
-            self.stdscr.refresh()
             return
-        self.draw_header(w)
-        available_after_builder = max(0, h - 3 - 4 - 3)
-        child_rows = max(3, min(8, available_after_builder // 3))
-        if available_after_builder - child_rows < 8:
-            child_rows = max(0, available_after_builder - 8)
-        self.add_line(2, 0, "", w - 1)
-        sessions_y = self.draw_controls(4, w, child_rows) + 1
-        self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
-        if self.active_section() == "profile":
-            self.add_line(h - 3, 0, "Tab cycles Workdir/Command/Sessions | a or / adds profile | d or x deletes profile | Esc back/confirm quit", w - 1, curses.A_DIM)
+
+        if self.is_dry_run():
+            self.add_line(0, 0, "─" * (w - 1), w - 1, curses.A_DIM)
+            self.draw_header(w)
+            available_after_builder = max(0, h - 4 - 4 - 3)
+            child_rows = max(3, min(5, available_after_builder // 3))
+            if available_after_builder - child_rows < 8:
+                child_rows = max(0, available_after_builder - 8)
+            self.add_line(3, 0, "─" * (w - 1), w - 1, curses.A_DIM)
+            sessions_y = self.draw_controls(4, w, child_rows) + 1
+            self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
+            
+            active_sec = self.active_section()
+            self.add_line(h - 4, 0, "Navigation: Tab cycles Workdir/Command/Sessions", w - 1, curses.A_DIM)
+            if active_sec == "profile":
+                self.add_line(h - 3, 0, "Profile actions: Ctrl-A to add, Ctrl-D to delete", w - 1, curses.A_DIM)
+            elif active_sec == "sessions":
+                self.add_line(h - 3, 0, "Session actions: Enter to resume, Ctrl-T to toggle automated, Ctrl-D to delete", w - 1, curses.A_DIM)
+            elif active_sec == "workdir":
+                self.add_line(h - 3, 0, "Workdir actions: Ctrl-E or / edits cwd", w - 1, curses.A_DIM)
+            else:
+                self.add_line(h - 3, 0, "Actions: Enter to open sessions / confirm", w - 1, curses.A_DIM)
+                
+            self.add_line(h - 2, 0, "Controls: Esc back/confirm quit".rjust(w - 1), w - 1, curses.A_DIM)
+            self.add_line(h - 1, 0, self.message, w - 1)
         else:
-            self.add_line(h - 3, 0, "Tab cycles Workdir/Command/Sessions | Enter opens sessions/confirm | Esc back/confirm quit | / edits cwd", w - 1, curses.A_DIM)
-        self.add_line(h - 2, 0, "Workdir: Down opens sibling list; Left/Right moves directory levels; leaf Right keeps the list open.", w - 1, curses.A_DIM)
-        self.add_line(h - 1, 0, self.message, w - 1)
+            self.add_line(0, 0, "─" * (w - 1), w - 1, curses.A_DIM)
+            self.draw_header(w)
+            available_after_builder = max(0, h - 4 - 4 - 3)
+            child_rows = max(3, min(5, available_after_builder // 3))
+            if available_after_builder - child_rows < 8:
+                child_rows = max(0, available_after_builder - 8)
+            self.add_line(3, 0, "─" * (w - 1), w - 1, curses.A_DIM)
+            sessions_y = self.draw_controls(4, w, child_rows) + 1
+            self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 2))
+            
+            self.add_line(h - 2, 0, "", w - 1)
+            self.add_line(h - 1, 0, "", w - 1)
+            if self.message:
+                padding = max(0, (w - 1) - cell_width(self.message))
+                self.add_line(h - 2, 0, " " * padding + self.message, w - 1, curses.A_BOLD)
         self.update_cursor()
+
+    def draw_main(self) -> None:
+        self.draw_main_background()
         self.stdscr.refresh()
 
     def draw_manage(self) -> None:
@@ -2168,7 +2723,7 @@ class App:
             pass
 
     def update_cursor(self) -> None:
-        if self.workdir_inline_focused() and self.workdir_cursor:
+        if self.workdir_inline_focused() and getattr(self, "workdir_editing", False) and self.workdir_cursor:
             y, x = self.workdir_cursor
             try:
                 curses.curs_set(1)
@@ -2214,7 +2769,7 @@ class App:
             return
         if section in COMMAND_SECTIONS:
             current = COMMAND_SECTIONS.index(section)
-            target = max(0, min(current + direction, len(COMMAND_SECTIONS) - 1))
+            target = (current + direction) % len(COMMAND_SECTIONS)
             self.set_section(COMMAND_SECTIONS[target])
 
     def toggle_panel(self) -> None:
@@ -2254,7 +2809,7 @@ class App:
         if section == "sessions":
             self.move_selection(direction)
         elif section == "workdir":
-            if getattr(self, "workdir_layer", "path") == "children":
+            if getattr(self, "workdir_layer", "path") == "children" or (getattr(self, "workdir_layer", "path") == "inline" and getattr(self, "workdir_editing", False)):
                 self.cycle_workdir_child(direction)
             elif direction > 0:
                 current = self.normalize_workdir_path(Path(self.current_workdir_path()))
@@ -2354,9 +2909,32 @@ class App:
         is_text_key = 32 <= ch <= 126
         if not is_edit_key and not is_text_key:
             return False
-        if is_text_key and ch == ord("/"):
+        if is_text_key and ch == 5:
             return False
-        self.message = "press / to edit workdir"
+        self.ensure_workdir_text()
+        self.workdir_layer = "inline"
+        self.workdir_editing = True
+        if is_edit_key:
+            if ch in (curses.KEY_BACKSPACE, 127, 8):
+                if self.workdir_text:
+                    self.workdir_text = self.workdir_text[:-1]
+            elif ch == 21:
+                self.workdir_text = ""
+        else:
+            self.workdir_text += chr(ch)
+        self.workdir_modified = True
+        base, prefix = self.workdir_text_base_and_prefix()
+        try:
+            if base.is_dir():
+                self.workdir_dropdown_base = str(base)
+                children = self.filtered_workdir_children()
+                if children:
+                    self.workdir_child_index = 0
+                else:
+                    self.workdir_child_index = -1
+        except Exception:
+            pass
+        self.message = ""
         return True
 
     def move_selection(self, direction: int) -> None:
@@ -2497,6 +3075,10 @@ class App:
     def handle_main_key(self, ch: int) -> int | None:
         if ch == 3:
             return 130
+        if ch == ord('?'):
+            if hasattr(self, "stdscr"):
+                self.show_help_popup()
+            return None
         if getattr(self, "pending_action", None):
             action = self.pending_action
             cmd = getattr(self, "pending_cmd", None)
@@ -2523,26 +3105,32 @@ class App:
                 self.pending_cmd = None
                 self.message = "Press Esc again to quit"
             return None
-        if self.active_section() == "profile":
-            if ch in (ord("a"), ord("/")):
-                if hasattr(self, "stdscr"):
-                    self.add_profile()
-                else:
-                    self.message = "add profile not supported here"
-                return None
-            if ch in (ord("d"), ord("x")):
+        if ch == 1 and self.active_section() == "profile":
+            if hasattr(self, "stdscr"):
+                self.add_profile()
+            else:
+                self.message = "add profile not supported here"
+            return None
+        if ch == 4:
+            if self.active_section() == "profile":
                 if hasattr(self, "stdscr"):
                     self.delete_profile()
                 else:
                     self.message = "delete profile not supported here"
                 return None
+            elif self.active_section() == "sessions":
+                self.delete_session()
+                return None
+        if ch == 20:
+            self.toggle_empty_sessions()
+            return None
         if self.active_section() == "workdir" and self.handle_workdir_text_key(ch):
             return None
-        if self.active_section() == "workdir" and ch == ord("/"):
+        if ch == 5 and self.active_section() == "workdir":
             if hasattr(self, "stdscr"):
                 self.edit_workdir()
             else:
-                self.message = "press / to edit workdir"
+                self.message = "press Ctrl-E to edit workdir"
             return None
         if ch == curses.KEY_RIGHT:
             self.horizontal_action(1)
@@ -2550,8 +3138,8 @@ class App:
             self.horizontal_action(-1)
         elif ch == 9:
             self.handle_tab()
-        elif ch == curses.KEY_BTAB:
-            self.message = "use Tab to move focus"
+        elif ch in (curses.KEY_BTAB, 353):
+            self.handle_shift_tab()
         elif ch == curses.KEY_DOWN:
             self.vertical_action(1)
         elif ch == curses.KEY_UP:

@@ -131,7 +131,8 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
     elif typ == "inline_prompt":
         prompt=_guard(spec.command, spec.prompt or "")
         if provider == "codex": argv=[binary,*profile_args,"exec","--skip-git-repo-check",prompt]
-        elif provider in {"gemini", "agy"}: argv=[binary,*profile_args,"--skip-trust","-p",prompt]
+        elif provider == "gemini": argv=[binary,*profile_args,"--skip-trust","-p",prompt]
+        elif provider == "agy": argv=[binary,*profile_args,"--dangerously-skip-permissions","-p",prompt]
         elif provider == "hermes": argv=[binary,*profile_args,"-z",prompt]
         else: argv=[binary,*profile_args,prompt]
     else:

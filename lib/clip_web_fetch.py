@@ -1,6 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/python
-# hgw web_fetch = safe public URL fetcher
-
+# clip_web_fetch = safe public URL fetcher (Command Line Interface Proxy - Web Fetch)
 import argparse
 import html
 import ipaddress
@@ -70,7 +69,6 @@ def is_public_host(host):
         except Exception:
             return False
 
-        # Blocks localhost, private LAN, link-local, multicast, reserved, loopback, etc.
         if not addr.is_global:
             return False
         seen = True
@@ -95,7 +93,7 @@ def fetch_url(url, timeout, max_bytes):
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "hgw-web-fetch/1.0",
+            "User-Agent": "clip-web-fetch/1.0",
             "Accept": "text/html,text/plain,application/xhtml+xml,*/*;q=0.8",
         },
     )

@@ -91,6 +91,17 @@ def discover_session_files(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
     if agy_profiles.is_dir():
         for ph in sorted(x for x in agy_profiles.iterdir() if x.is_dir()): scan_agy(ph, ph.name)
 
+    # Scan Antigravity CLI transcript sessions and map them under gemini and agy
+    antigravity_dir = HOME / ".gemini" / "antigravity-cli"
+    if antigravity_dir.is_dir():
+        brain_dir = antigravity_dir / "brain"
+        if brain_dir.is_dir():
+            for conv_dir in sorted(x for x in brain_dir.iterdir() if x.is_dir()):
+                transcript_file = conv_dir / ".system_generated" / "logs" / "transcript.jsonl"
+                if transcript_file.is_file():
+                    add_session_record(records, "gemini", "default", transcript_file)
+                    add_session_record(records, "agy", "default", transcript_file)
+
     hs=HOME/".hermes"/"sessions"
     if hs.is_dir():
         for p in hs.iterdir():
@@ -129,7 +140,7 @@ def finalize(row: dict[str,Any]) -> dict[str,Any]:
 def entry_from_messages(record:dict[str,Any], meta:dict[str,Any], messages:list[dict[str,str]]) -> dict[str,Any]:
     path=Path(record["path"]); users=[m for m in messages if m.get("role")=="user"]; assistants=[m for m in messages if m.get("role")=="assistant"]; last=messages[-1] if messages else {}
     sid=str(meta.get("session_id") or path.stem); last_user=users[-1].get("text","") if users else ""; last_assistant=assistants[-1].get("text","") if assistants else ""; title=users[0].get("text","") if users else last_user or sid
-    return finalize({"provider":record["provider"],"profile":record["profile"],"session_id":sid,"native_session_ref":sid,"title":text_summary(title,120) or sid,"last_prompt_summary":text_summary(last_user,360),"last_response_summary":text_summary(last_assistant,360),"updated":str(meta.get("updated") or last.get("timestamp") or iso_from_mtime(path)),"workdir":str(meta.get("workdir") or record.get("workdir_hint") or ""),"source":"session-file","source_path":str(path),"path":str(path),"mtime":record["mtime"],"size":record["size"]})
+    return finalize({"provider":record["provider"],"profile":record["profile"],"session_id":sid,"native_session_ref":sid,"title":text_summary(title,120) or sid,"last_prompt_summary":text_summary(last_user,360),"last_response_summary":text_summary(last_assistant,360),"turns":len(users),"updated":str(meta.get("updated") or last.get("timestamp") or iso_from_mtime(path)),"workdir":str(meta.get("workdir") or record.get("workdir_hint") or ""),"source":"session-file","source_path":str(path),"path":str(path),"mtime":record["mtime"],"size":record["size"]})
 
 def parse_codex_session(record:dict[str,Any]) -> dict[str,Any]:
     path=Path(record["path"]); meta={"session_id":codex_session_id(path),"workdir":"","updated":""}; messages=[]; fallback=[]
@@ -182,7 +193,67 @@ def parse_hermes_session(record:dict[str,Any]) -> dict[str,Any]:
     except OSError: pass
     return entry_from_messages(record, meta, messages)
 
+def parse_antigravity_session(record: dict[str, Any]) -> dict[str, Any]:
+    path = Path(record["path"])
+    conversation_id = path.parents[2].name
+    meta = {
+        "session_id": conversation_id,
+        "workdir": "",
+        "updated": iso_from_mtime(path)
+    }
+    messages = []
+    
+    try:
+        if path.exists():
+            # Read first few lines to extract workdir hint if available from tool_calls args
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for line in lines:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                
+                # Check tool calls for directory paths
+                if "tool_calls" in item:
+                    for tc in item["tool_calls"] or []:
+                        args = tc.get("args") or {}
+                        # Look for common path arguments in tool_calls
+                        for path_arg in ("Cwd", "DirectoryPath", "SearchPath", "TargetFile"):
+                            if path_arg in args and isinstance(args[path_arg], str):
+                                val = args[path_arg].strip('"')
+                                if val:
+                                    # Normalize / extract directory path
+                                    try:
+                                        p = Path(val)
+                                        meta["workdir"] = str(p.parent if p.is_file() else p)
+                                        break
+                                    except Exception:
+                                        pass
+                        if meta["workdir"]:
+                            break
+                
+                k = item.get("type")
+                if k == "USER_INPUT":
+                    content = item.get("content") or ""
+                    # strip tags if needed, but summary is fine
+                    add_message(messages, "user", content)
+                elif k == "PLANNER_RESPONSE":
+                    content = item.get("content") or ""
+                    add_message(messages, "assistant", content)
+    except OSError:
+        pass
+        
+    entry = entry_from_messages(record, meta, messages)
+    entry["session_id"] = conversation_id
+    entry["native_session_ref"] = conversation_id
+    if not entry.get("title") or entry["title"] == conversation_id:
+        entry["title"] = f"Antigravity Chat ({conversation_id[:8]})"
+    return entry
+
 def parse_session_record(record:dict[str,Any]) -> dict[str,Any]:
+    path_str = str(record.get("path") or "")
+    if "antigravity-cli" in path_str:
+        return parse_antigravity_session(record)
     if record.get("provider")=="codex": return parse_codex_session(record)
     if record.get("provider") in {"gemini", "agy"}: return parse_gemini_session(record)
     if record.get("provider")=="hermes": return parse_hermes_session(record)
@@ -193,7 +264,10 @@ def load_session_index() -> dict[str,Any]:
 
 def save_session_index(data:dict[str,Any]) -> None: ai_store.write_json(ai_store.SESSION_INDEX_FILE,data)
 
+_SESSION_INDEX_CACHE: dict[str, Any] | None = None
+
 def refresh_session_index(limit:int=SESSION_SCAN_LIMIT) -> dict[str,Any]:
+    global _SESSION_INDEX_CACHE
     old=load_session_index(); reusable=old.get("version")==ai_store.SESSION_INDEX_VERSION
     old_by_key={f"{x.get('provider')}:{x.get('path') or x.get('source_path')}":x for x in old.get("sessions",[])}
     entries=[]
@@ -202,11 +276,21 @@ def refresh_session_index(limit:int=SESSION_SCAN_LIMIT) -> dict[str,Any]:
         if reusable and prev and prev.get("mtime")==rec.get("mtime") and prev.get("size")==rec.get("size"): entries.append(finalize(dict(prev)))
         else: entries.append(parse_session_record(rec))
     entries.sort(key=lambda x: float(x.get("mtime") or 0), reverse=True)
-    data={"version":ai_store.SESSION_INDEX_VERSION,"generated_at":ai_store.now_iso(),"sessions":entries}; save_session_index(data); return data
+    data={"version":ai_store.SESSION_INDEX_VERSION,"generated_at":ai_store.now_iso(),"sessions":entries}; save_session_index(data)
+    _SESSION_INDEX_CACHE = data
+    return data
 
 def fresh_session_index() -> dict[str,Any]:
+    global _SESSION_INDEX_CACHE
+    if _SESSION_INDEX_CACHE is not None:
+        return _SESSION_INDEX_CACHE
     try:
-        return refresh_session_index()
+        old = load_session_index()
+        if old.get("version") == ai_store.SESSION_INDEX_VERSION and old.get("sessions"):
+            _SESSION_INDEX_CACHE = old
+            return old
+        _SESSION_INDEX_CACHE = refresh_session_index()
+        return _SESSION_INDEX_CACHE
     except Exception:
         return load_session_index()
 
