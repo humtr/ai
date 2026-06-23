@@ -35,16 +35,24 @@ Removed:
   ai cm / ai gm / ai hm
 """)
 
+def _require_value(args:list[str], i:int, option:str) -> str:
+    if i + 1 >= len(args) or args[i + 1] == "--":
+        raise SystemExit(f"{option} requires a value")
+    return args[i + 1]
+
 def parse_common(args:list[str]):
     profile="default"; directory=None; session=None; here=False; all_sessions=False; out=[]; i=0
     while i < len(args):
         a=args[i]
         if a in {"-p","--profile"}:
-            if args[i+1] in {"default", "native"}:
-                raise SystemExit(f"invalid or reserved profile name: {args[i+1]}")
-            profile=args[i+1]; i+=2
-        elif a in {"-s","--session"}: session=args[i+1]; i+=2
-        elif a in {"-d","--directory","--cwd","--cd","-C"}: directory=args[i+1]; i+=2
+            value=_require_value(args, i, a)
+            if value in {"default", "native"}:
+                raise SystemExit(f"invalid or reserved profile name: {value}")
+            profile=value; i+=2
+        elif a in {"-s","--session"}:
+            session=_require_value(args, i, a); i+=2
+        elif a in {"-d","--directory","--cwd","--cd","-C"}:
+            directory=_require_value(args, i, a); i+=2
         elif a=="--account": raise SystemExit("--account was removed; use --profile NAME")
         elif a=="--home": raise SystemExit("--home was removed; use --profile NAME")
         elif a=="--here": here=True; i+=1
@@ -57,7 +65,12 @@ def run_command(command:str, argv:list[str]) -> int:
     if not argv: print(f"Usage: ai {command} <provider> ...", file=sys.stderr); return 2
     provider=argv[0]
     if not ai_spec.is_provider(provider): print(f"ERROR: unknown provider: {provider}", file=sys.stderr); return 2
-    profile,directory,session,here,all_sessions,rest=parse_common(argv[1:])
+    try:
+        profile,directory,session,here,all_sessions,rest=parse_common(argv[1:])
+    except SystemExit as e:
+        msg=str(e)
+        if msg and msg != "0": print(msg, file=sys.stderr)
+        return int(e.code) if isinstance(e.code,int) else 2
     prompt=None; native_args=[]
     typ=ai_spec.command_spec(command).get("type")
     if typ=="inline_prompt": prompt=" ".join(rest).strip();
