@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 COMMAND_TYPES={"launch","inline_prompt","native_passthrough"}
 PROFILE_STRATEGIES={"none","env_home","temp_home_symlink","native_arg","profile_use"}
-SESSION_STRATEGIES={"none","codex_resume","gemini_resume","hermes_resume"}
+SESSION_STRATEGIES={"none","codex_resume","gemini_resume","hermes_resume","agy_resume"}
 
 def lib_dir() -> Path: return Path(__file__).resolve().parent
 def repo_config_dir() -> Path: return lib_dir().parent / "config"
@@ -28,7 +28,7 @@ def _load_first(env: str, names: list[str], default: dict[str, Any]) -> dict[str
         if data is not None: return data
     return default
 DEFAULT_COMMANDS={"commands":{"run":{"type":"launch","tui_visible":True},"ask":{"type":"inline_prompt","tui_visible":False},"chat":{"type":"inline_prompt","tui_visible":False},"raw":{"type":"native_passthrough","tui_visible":False}}}
-DEFAULT_PROVIDERS={"providers":{"codex":{"label":"Codex","binary":"codex","profile":{"supported":True,"base_dir":"~/.codex-profiles","strategy":"env_home","env_var":"CODEX_HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"codex_resume","supports_all":True}},"gemini":{"label":"Gemini","binary":"gemini","profile":{"supported":True,"base_dir":"~/.gemini-profiles","strategy":"temp_home_symlink","symlink_name":".gemini","temp_home_base":"~/.cache/ai/gemini-home","default_uses_native_home":True},"session":{"supported":True,"strategy":"gemini_resume","supports_all":False}},"hermes":{"label":"Hermes","binary":"hermes","profile":{"supported":True,"base_dir":"~/.hermes/profiles","strategy":"native_arg","arg":"--profile"},"session":{"supported":True,"strategy":"hermes_resume","supports_all":False}},"agy":{"label":"Agy","binary":"agy","profile":{"supported":True,"base_dir":"~/.agy-profiles","strategy":"env_home","env_var":"AGY_PROFILE_HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"gemini_resume","supports_all":False}}}}
+DEFAULT_PROVIDERS={"providers":{"codex":{"label":"Codex","binary":"codex","profile":{"supported":True,"base_dir":"~/.codex-profiles","strategy":"env_home","env_var":"CODEX_HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"codex_resume","supports_all":True}},"gemini":{"label":"Gemini","binary":"gemini","profile":{"supported":True,"base_dir":"~/.gemini-profiles","strategy":"temp_home_symlink","symlink_name":".gemini","temp_home_base":"~/.cache/ai/gemini-home","default_uses_native_home":True},"session":{"supported":True,"strategy":"gemini_resume","supports_all":False}},"hermes":{"label":"Hermes","binary":"hermes","profile":{"supported":True,"base_dir":"~/.hermes/profiles","strategy":"native_arg","arg":"--profile"},"session":{"supported":True,"strategy":"hermes_resume","supports_all":False}},"agy":{"label":"Agy","binary":"agy","profile":{"supported":True,"base_dir":"~/.agy-profiles","strategy":"env_home","env_var":"AGY_PROFILE_HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"agy_resume","supports_all":False}}}}
 
 def load_command_specs() -> dict[str, Any]:
     data=_load_first("AI_COMMANDS_FILE", ["ai.commands.json"], DEFAULT_COMMANDS)

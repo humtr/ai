@@ -48,6 +48,8 @@ def _session_argv(provider:str, binary:str, profile_args:list[str], strategy:str
         return [binary, *profile_args, "--resume"] + ([ref] if ref else [])
     if strategy == "hermes_resume":
         return [binary, *profile_args, "--resume"] + ([ref] if ref else [])
+    if strategy == "agy_resume":
+        return [binary, *profile_args, "--conversation"] + ([ref] if ref else [])
     raise SystemExit(f"ERROR: provider {provider} does not support sessions")
 
 def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:

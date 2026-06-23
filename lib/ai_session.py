@@ -304,10 +304,11 @@ def source_identity(row:dict[str,Any]) -> str:
     source=str(row.get("source_path") or row.get("path") or "")
     if not source:
         return str(row.get("stable_session_key") or row.get("stable_key") or "")
+    provider=str(row.get("provider") or "")
     try:
-        return str(Path(source).expanduser().resolve())
+        return f"{provider}:{Path(source).expanduser().resolve()}"
     except OSError:
-        return source
+        return f"{provider}:{source}"
 
 def source_is_symlink(row:dict[str,Any]) -> bool:
     source=str(row.get("source_path") or row.get("path") or "")
