@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os, shlex, subprocess
+import os, shlex
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -145,4 +145,5 @@ def execute_plan(plan: ExecutionPlan) -> int:
     env=os.environ.copy(); env.update(plan.env)
     if os.environ.get("AI_DRY_RUN"):
         import json; print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2)); return 0
-    return subprocess.call(plan.argv, cwd=plan.cwd, env=env)
+    os.chdir(plan.cwd)
+    os.execvpe(plan.argv[0], plan.argv, env)

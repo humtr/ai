@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import json, os, sys, subprocess
+import json, os, sys
 from pathlib import Path
 import ai_spec, ai_plan, ai_resource
 
@@ -122,15 +122,9 @@ def main(argv:list[str]|None=None) -> int:
 
 def tui_cmd(argv:list[str]) -> int:
     lib=Path(__file__).resolve().parent; tui=lib/"ai_tui.py"
-    try:
-        return subprocess.call([sys.executable, str(tui), *argv])
-    except KeyboardInterrupt:
-        return 130
+    os.execv(sys.executable, [sys.executable, str(tui), *argv])
 
 def gw_cmd(argv:list[str]) -> int:
     lib=Path(__file__).resolve().parent; tui=lib/"ai_gw_tui.py"
-    try:
-        return subprocess.call([sys.executable, str(tui), *argv])
-    except KeyboardInterrupt:
-        return 130
+    os.execv(sys.executable, [sys.executable, str(tui), *argv])
 if __name__ == "__main__": raise SystemExit(main())
