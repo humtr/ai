@@ -2149,6 +2149,8 @@ class App:
         self.confirm_exec_or_preview(self.run_command())
 
     def add_line(self, y: int, x: int, text: str, width: int, attr: int = 0) -> None:
+        if not hasattr(self, "stdscr") or self.stdscr is None:
+            return
         h, _ = self.stdscr.getmaxyx()
         if y < 0 or y >= h or width <= 0:
             return
@@ -2158,6 +2160,8 @@ class App:
             pass
 
     def add_text(self, y: int, x: int, text: str, width: int, attr: int = 0) -> None:
+        if not hasattr(self, "stdscr") or self.stdscr is None:
+            return
         h, _ = self.stdscr.getmaxyx()
         if y < 0 or y >= h or width <= 0:
             return
@@ -2498,23 +2502,24 @@ class App:
 
         command_active = active in COMMAND_SECTIONS
         self.add_line(next_y, 0, self.panel_title("COMMAND", command_active), width - 1, self.section_label_attr(command_active))
-        session_idx = getattr(self, "indices", {}).get("session", 0)
-        self.draw_choice_row(next_y + 1, width, "session", "Scope", SESSION_SCOPE_LABELS, session_idx)
         providers = getattr(self, "providers", []) or [self.current_provider()]
-        self.draw_choice_row(next_y + 2, width, "provider", "Provider", [p.title() for p in providers], self.indices["provider"])
+        self.draw_choice_row(next_y + 1, width, "provider", "Provider", [p.title() for p in providers], self.indices["provider"])
         profiles = getattr(self, "profiles", ["default"])
-        self.draw_choice_row(next_y + 3, width, "profile", "Profile", profiles, self.indices["profile"])
-        return next_y + 4
+        self.draw_choice_row(next_y + 2, width, "profile", "Profile", profiles, self.indices["profile"])
+        return next_y + 3
 
     def draw_sessions(self, y: int, width: int, rows: int) -> None:
         if rows <= 2:
             return
         sessions = self.session_rows()
-        active = self.active_section() == "sessions"
+        active = self.active_section() in {"session", "sessions"}
         self.add_line(y, 0, self.panel_title(self.session_list_title(), active), width - 1, self.section_label_attr(active))
+        session_idx = getattr(self, "indices", {}).get("session", 0)
+        self.draw_choice_row(y + 1, width, "session", "Scope", SESSION_SCOPE_LABELS, session_idx)
+        list_y = y + 2
         if not sessions:
             self.list_meta["sessions"] = {
-                "y": y + 1,
+                "y": list_y,
                 "x": 0,
                 "w": width,
                 "rows": 0,
@@ -2523,16 +2528,15 @@ class App:
                 "top": y,
                 "height": 2,
             }
-            self.add_line(y + 1, 0, "No summaries yet.", width - 1)
-            for n in range(2, rows):
-                self.add_line(y + n, 0, "", width - 1)
+            self.add_line(list_y, 0, "No summaries yet.", width - 1)
+            for n in range(list_y + 1, y + rows):
+                self.add_line(n, 0, "", width - 1)
             return
 
-        list_y = y + 1
         if self.is_dry_run():
-            list_rows = 2 if rows <= 7 else max(3, min(10, rows - 9))
+            list_rows = 2 if rows <= 10 else max(3, min(10, rows - 9))
         else:
-            list_rows = 3
+            list_rows = 2 if rows <= 8 else 3
             if rows <= 7:
                 list_rows = max(1, rows - 5)
             elif rows > 12:
