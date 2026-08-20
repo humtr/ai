@@ -26,7 +26,7 @@
         "supported": true,
         "base_dir": "~/.agy-profiles",
         "strategy": "env_home",
-        "env_var": "AGY_PROFILE_HOME",
+        "env_var": "HOME",
         "default_uses_native_home": true
       },
       "session": {

@@ -221,6 +221,29 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
                         base_B = None
 
                     if base_A and base_B:
+                        if provider == "agy":
+                            conv_id = str(found.get("native_session_ref") or found.get("session_id") or "")
+                            agy_A = base_A / "antigravity-cli"
+                            agy_B = base_B / "antigravity-cli"
+                            if conv_id:
+                                db_A = agy_A / "conversations" / f"{conv_id}.db"
+                                db_B = agy_B / "conversations" / f"{conv_id}.db"
+                                if db_A.exists() and not db_B.exists():
+                                    db_B.parent.mkdir(parents=True, exist_ok=True)
+                                    try:
+                                        db_B.symlink_to(db_A)
+                                    except Exception:
+                                        import shutil
+                                        shutil.copy2(db_A, db_B)
+                                brain_A = agy_A / "brain" / conv_id
+                                brain_B = agy_B / "brain" / conv_id
+                                if brain_A.exists() and not brain_B.exists():
+                                    brain_B.parent.mkdir(parents=True, exist_ok=True)
+                                    try:
+                                        brain_B.symlink_to(brain_A)
+                                    except Exception:
+                                        import shutil
+                                        shutil.copytree(brain_A, brain_B)
                         try:
                             rel_path = src_path.relative_to(base_A)
                         except ValueError:

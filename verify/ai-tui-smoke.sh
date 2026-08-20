@@ -328,7 +328,7 @@ assert_contains "main shows profile row" "Profile" "$MAIN_OUT"
 assert_contains "main shows workdir row" "Workdir" "$MAIN_OUT"
 assert_contains "main shows profile split" "Profile default" "$MAIN_OUT"
 assert_not_contains "main has no account row" "Account" "$MAIN_OUT"
-assert_contains "main shows scope workdir choice" "Workdir" "$MAIN_OUT"
+assert_contains "main shows scope workdir choice" "Current Dir" "$MAIN_OUT"
 assert_contains "main shows scope all choice" "All" "$MAIN_OUT"
 assert_contains "main shows all provider choices without shifting window" "Agy   Hermes" "$MAIN_OUT"
 assert_contains "main shows sessions panel" "SESSION LIST" "$MAIN_OUT"
@@ -754,7 +754,7 @@ LAYOUT_OUT="$(
 SESSION_SCOPE_LABELS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.list_meta={}; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append(text); app.draw_choice_row(0,80,"session","Scope",ai_tui.SESSION_SCOPE_LABELS,0); print(" ".join([text for text in calls if text in set(ai_tui.SESSION_SCOPE_LABELS)]))'
 )"
-[ "$SESSION_SCOPE_LABELS_OUT" = "Workdir Provider Profile All" ] && ok "session choices list workdir provider profile all" || { fail "session choices list workdir provider profile all"; printf 'actual: %s\n' "$SESSION_SCOPE_LABELS_OUT" >&2; }
+[ "$SESSION_SCOPE_LABELS_OUT" = "Current Dir Provider Profile All" ] && ok "session choices list workdir provider profile all" || { fail "session choices list workdir provider profile all"; printf 'actual: %s\n' "$SESSION_SCOPE_LABELS_OUT" >&2; }
 
 SESSION_SCOPE_FILTERS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, ai_session; app=ai_tui.App.__new__(ai_tui.App); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.current_provider=lambda:"codex"; app.current_profile_label=lambda:"default"; app.effective_workdir_path=lambda:"/work"; out=[]; ai_session.recent_sessions=lambda provider=None, profile=None, workdir=None, limit=20, ranking="strict": out.append((provider, profile, workdir, limit)) or []; app.current_session_scope=lambda:"profile"; app.current_sessions(); app.invalidate_session_cache(); app.current_session_scope=lambda:"provider"; app.current_sessions(); app.invalidate_session_cache(); app.current_session_scope=lambda:"all"; app.current_sessions(); print(" | ".join("provider={};profile={};workdir={};limit={}".format(v[0] or "-", v[1] or "-", v[2] or "-", v[3]) for v in out))'
@@ -866,7 +866,7 @@ case "$SESSION_TITLE_HEURISTIC_OUT" in
 esac
 
 CHOICE_ATTR_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.list_meta={}; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append((text,attr)); app.draw_choice_row(0,80,"session","Scope",ai_tui.SESSION_SCOPE_LABELS,0); print(any(text == "Workdir" and attr for text, attr in calls), any(text.strip() == "" and attr for text, attr in calls))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.list_meta={}; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append((text,attr)); app.draw_choice_row(0,80,"session","Scope",ai_tui.SESSION_SCOPE_LABELS,0); print(any(text == ai_tui.SESSION_SCOPE_LABELS[0] and attr for text, attr in calls), any(text.strip() == "" and attr for text, attr in calls))'
 )"
 [ "$CHOICE_ATTR_OUT" = "True False" ] && ok "choice highlight covers text but not padding" || { fail "choice highlight covers text but not padding"; printf 'actual: %s\n' "$CHOICE_ATTR_OUT" >&2; }
 

@@ -27,7 +27,7 @@ os.environ.setdefault("ESCDELAY", "50")
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 AI_BIN = os.environ.get("AI_BIN", str(HOME / "bin" / "ai"))
 SESSION_SCOPES = ["workdir", "provider", "profile", "all"]
-SESSION_SCOPE_LABELS = ["Workdir", "Provider", "Profile", "All"]
+SESSION_SCOPE_LABELS = ["Current Dir", "Provider", "Profile", "All"]
 SESSION_SCOPE_FIELDS = {
     "workdir": {"workdir"},
     "provider": {"provider"},
@@ -64,8 +64,16 @@ def short_time(value: str) -> str:
     try:
         val = value.replace("Z", "+00:00")
         dt = datetime.datetime.fromisoformat(val)
-        dt_utc9 = dt.astimezone(TZ_UTC9)
-        res = dt_utc9.strftime("%y/%m/%d %H:%M")
+        dt_local = dt.astimezone(TZ_UTC9)
+        now_local = datetime.datetime.now(TZ_UTC9)
+        if dt_local.date() == now_local.date():
+            res = dt_local.strftime("%H:%M (Today)")
+        elif (now_local.date() - dt_local.date()).days == 1:
+            res = dt_local.strftime("%H:%M (Y-day)")
+        elif dt_local.year == now_local.year:
+            res = dt_local.strftime("%m/%d %H:%M")
+        else:
+            res = dt_local.strftime("%y/%m/%d %H:%M")
     except Exception:
         cleaned = value.replace("T", " ").replace("Z", "")
         if len(cleaned) >= 16:
@@ -586,7 +594,7 @@ class App:
     def session_column_specs(self, scope: str | None = None, sessions: list[dict[str, Any]] | None = None, width: int | None = None) -> list[tuple[str, str, int]]:
         sessions = sessions or []
         field_specs = {
-            "time": ("Time", 16),
+            "time": ("Time", 18),
             "turns": ("Turns", 6),
             "provider": ("Provider", 10),
             "profile": ("Profile", 80),

@@ -79,6 +79,37 @@ def gemini_project_root(path: Path) -> str:
             break
     return ""
 
+def agy_profile_for_session_path(path: Path) -> str:
+    try:
+        wanted = Path(path).expanduser().resolve(strict=False)
+    except OSError:
+        wanted = Path(path).expanduser()
+    roots = [("default", HOME / ".gemini")]
+    profiles = HOME / ".agy-profiles"
+    if profiles.is_dir():
+        roots.extend((ph.name, ph / ".gemini") for ph in sorted(x for x in profiles.iterdir() if x.is_dir()))
+    for profile, root in roots:
+        try:
+            root_resolved = root.expanduser().resolve(strict=False)
+            if os.path.commonpath([str(wanted), str(root_resolved)]) == str(root_resolved):
+                return profile
+        except ValueError:
+            continue
+    return ""
+
+def add_agy_session_record(records:list[dict[str,Any]], profile:str, path:Path, workdir_hint:str="") -> None:
+    source_profile = profile
+    source_path = path
+    if path.is_symlink():
+        try:
+            source_path = path.resolve(strict=True)
+        except OSError:
+            return
+        resolved_profile = agy_profile_for_session_path(source_path)
+        if resolved_profile:
+            source_profile = resolved_profile
+    add_session_record(records, "agy", source_profile, source_path, workdir_hint)
+
 def add_session_record(records:list[dict[str,Any]], provider:str, profile:str, path:Path, workdir_hint:str="") -> None:
     st=safe_stat(path)
     if st is None or not path.is_file(): return
@@ -105,7 +136,7 @@ def discover_session_files(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
             for conv_dir in sorted(x for x in brain_dir.iterdir() if x.is_dir()):
                 transcript_file = conv_dir / ".system_generated" / "logs" / "transcript.jsonl"
                 if transcript_file.is_file():
-                    add_session_record(records, "agy", profile, transcript_file)
+                    add_agy_session_record(records, profile, transcript_file)
         tmp = (root / ".gemini" / "tmp") if (root / ".gemini").is_dir() else (root / "tmp")
         if tmp.is_dir():
             for project_dir in sorted(x for x in tmp.iterdir() if x.is_dir()):
@@ -113,7 +144,7 @@ def discover_session_files(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
                 if not chats.is_dir(): continue
                 workdir = read_project_root(project_dir / ".project_root")
                 for p in chats.rglob("*.jsonl"):
-                    add_session_record(records, "agy", profile, p, workdir)
+                    add_agy_session_record(records, profile, p, workdir)
 
     scan_agy_tree(HOME, "default")
     agy_profiles = HOME / ".agy-profiles"

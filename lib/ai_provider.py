@@ -24,6 +24,18 @@ def list_profiles(provider: str) -> list[str]:
             if child.is_dir() and not child.name.startswith(".") and child.name not in {"default","native"}: names.append(child.name)
     return names
 
+def ensure_agy_profile_runtime(profile_dir: Path) -> None:
+    native_runtime = Path.home() / ".local" / "lib" / "agy"
+    if native_runtime.exists():
+        target_dir = profile_dir / ".local" / "lib"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        link_path = target_dir / "agy"
+        if not link_path.exists() and not link_path.is_symlink():
+            try:
+                link_path.symlink_to(native_runtime)
+            except OSError:
+                pass
+
 def apply_profile(provider: str, profile: str | None) -> tuple[list[str], dict[str,str]]:
     if not profile or profile == "default": return [], {}
     validate_profile_name(profile)
@@ -34,6 +46,8 @@ def apply_profile(provider: str, profile: str | None) -> tuple[list[str], dict[s
             profile_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             raise SystemExit(f"ERROR: failed to create profile directory: {provider}/{profile} ({profile_dir}): {e}")
+    if provider == "agy":
+        ensure_agy_profile_runtime(profile_dir)
     if strat == "env_home":
         return [], {str(prof.get("env_var") or "AI_PROVIDER_HOME"): str(profile_dir)}
     if strat == "temp_home_symlink":

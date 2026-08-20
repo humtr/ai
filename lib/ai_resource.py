@@ -42,6 +42,8 @@ def profile_cmd(argv:list[str]) -> int:
         path=base/prof
         try:
             path.mkdir(parents=True, exist_ok=True)
+            if p == "agy":
+                ai_provider.ensure_agy_profile_runtime(path)
             print(f"added profile: {p}/{prof} -> {path}")
         except Exception as e:
             print(f"ERROR: failed to create profile directory: {e}", file=sys.stderr); return 1
