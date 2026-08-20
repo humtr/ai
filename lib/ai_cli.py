@@ -21,18 +21,15 @@ Core:
 
 Resources:
   ai provider list|show|check
-  ai profile list|show
+  ai profile list|show|add|delete
   ai session refresh|list|show|resolve
   ai workdir list|add|archive
-  ai bridge start|stop|restart|status|logs|test|config|set ...
-  ai gateway list|show|status|start|stop|restart|logs|view
-  ai gw
   ai tui
 
 Removed:
   ai resume ...
-  ai codex / ai gemini / ai hermes
   ai cm / ai gm / ai hm
+  ai bridge / ai gateway / ai gw (managed via clip)
 """)
 
 def _require_value(args:list[str], i:int, option:str) -> str:
@@ -112,9 +109,8 @@ def main(argv:list[str]|None=None) -> int:
     if cmd=="profile": return ai_resource.profile_cmd(argv)
     if cmd=="session": return ai_resource.session_cmd(argv)
     if cmd=="workdir": return ai_resource.workdir_cmd(argv)
-    if cmd=="bridge": return ai_resource.bridge_cmd(argv)
-    if cmd=="gateway": return ai_resource.gateway_cmd(argv)
-    if cmd=="gw": return gw_cmd(argv)
+    if cmd in {"bridge", "gateway", "gw"}:
+        print(f"ERROR: ai {cmd} was moved to clip proxy suite. Use: clip ...", file=sys.stderr); return 2
     if cmd=="tui": return tui_cmd(argv)
     if cmd=="status":
         ai_resource.provider_cmd(["list"]); return 0
@@ -122,9 +118,5 @@ def main(argv:list[str]|None=None) -> int:
 
 def tui_cmd(argv:list[str]) -> int:
     lib=Path(__file__).resolve().parent; tui=lib/"ai_tui.py"
-    os.execv(sys.executable, [sys.executable, str(tui), *argv])
-
-def gw_cmd(argv:list[str]) -> int:
-    lib=Path(__file__).resolve().parent; tui=lib/"ai_gw_tui.py"
     os.execv(sys.executable, [sys.executable, str(tui), *argv])
 if __name__ == "__main__": raise SystemExit(main())

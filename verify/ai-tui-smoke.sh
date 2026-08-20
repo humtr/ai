@@ -76,8 +76,8 @@ mkdir -p \
   "$HOME_FIXTURE/.codex/sessions/2026/05/05" \
   "$HOME_FIXTURE/.codex-profiles/team-alpha" \
   "$HOME_FIXTURE/.codex-profiles/very-long-profile-name-for-horizontal-viewport" \
-  "$HOME_FIXTURE/.gemini-profiles/gem-only" \
-  "$HOME_FIXTURE/.gemini-profiles/team-alpha" \
+  "$HOME_FIXTURE/.agy-profiles/agy-only" \
+  "$HOME_FIXTURE/.agy-profiles/team-alpha" \
   "$HOME_FIXTURE/aaa" \
   "$HOME_FIXTURE/work/a" \
   "$HOME_FIXTURE/work/ai-stack" \
@@ -238,10 +238,10 @@ import ai_tui
 
 source = ai_tui.App.__new__(ai_tui.App)
 source.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
-source.providers = ["codex", "gemini"]
+source.providers = ["codex", "agy"]
 source.profiles = ["default"]
 source.profile_memory = {}
-source.remember_executed_selection(["ai", "run", "gemini", "-p", "gem-only"])
+source.remember_executed_selection(["ai", "run", "agy", "-p", "agy-only"])
 
 restored = ai_tui.App.__new__(ai_tui.App)
 restored.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
@@ -252,7 +252,7 @@ print(restored.current_provider(), restored.current_profile_label())
 ai_store.save_tui_state({"version": 1})
 PY
 )"
-[ "$LAST_LAUNCH_SELECTION_OUT" = "gemini gem-only" ] && ok "tui restores last executed provider and profile" || { fail "tui restores last executed provider and profile"; printf 'actual: %s\n' "$LAST_LAUNCH_SELECTION_OUT" >&2; }
+[ "$LAST_LAUNCH_SELECTION_OUT" = "agy agy-only" ] && ok "tui restores last executed provider and profile" || { fail "tui restores last executed provider and profile"; printf 'actual: %s\n' "$LAST_LAUNCH_SELECTION_OUT" >&2; }
 
 PLAN_DEFAULT_PROFILE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 - <<'PY'
@@ -330,7 +330,7 @@ assert_contains "main shows profile split" "Profile default" "$MAIN_OUT"
 assert_not_contains "main has no account row" "Account" "$MAIN_OUT"
 assert_contains "main shows scope workdir choice" "Workdir" "$MAIN_OUT"
 assert_contains "main shows scope all choice" "All" "$MAIN_OUT"
-assert_contains "main shows all provider choices without shifting window" "Gemini   Hermes" "$MAIN_OUT"
+assert_contains "main shows all provider choices without shifting window" "Agy   Hermes" "$MAIN_OUT"
 assert_contains "main shows sessions panel" "SESSION LIST" "$MAIN_OUT"
 assert_contains "main shows new session row" "New session" "$MAIN_OUT"
 assert_not_contains "main shows no latest session row" "Latest:" "$MAIN_OUT"
@@ -763,7 +763,7 @@ EXPECTED_SESSION_SCOPE_FILTERS_OUT="provider=-;profile=default;workdir=-;limit=6
 [ "$SESSION_SCOPE_FILTERS_OUT" = "$EXPECTED_SESSION_SCOPE_FILTERS_OUT" ] && ok "session scope filters match profile provider all" || { fail "session scope filters match profile provider all"; printf 'actual: %s\n' "$SESSION_SCOPE_FILTERS_OUT" >&2; printf 'expected: %s\n' "$EXPECTED_SESSION_SCOPE_FILTERS_OUT" >&2; }
 
 SESSION_SCOPE_CONTENT_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, ai_session; app=ai_tui.App.__new__(ai_tui.App); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.current_provider=lambda:"codex"; app.current_profile_label=lambda:"default"; app.effective_workdir_path=lambda:"/work"; data=[{"session_id":"a","provider":"codex","profile":"default"},{"session_id":"b","provider":"codex","profile":"team"},{"session_id":"c","provider":"gemini","profile":"default"}]; ai_session.recent_sessions=lambda provider=None, profile=None, workdir=None, limit=20, ranking="strict": [item for item in data if (provider is None or item["provider"] == provider) and (profile is None or item["profile"] == profile)]; app.current_session_scope=lambda:"profile"; p=[s["session_id"] for s in app.current_sessions()[1:]]; app.invalidate_session_cache(); app.current_session_scope=lambda:"provider"; r=[s["session_id"] for s in app.current_sessions()[1:]]; app.invalidate_session_cache(); app.current_session_scope=lambda:"all"; a=[s["session_id"] for s in app.current_sessions()[1:]]; print("{}|{}|{}".format(",".join(p), ",".join(r), ",".join(a)))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, ai_session; app=ai_tui.App.__new__(ai_tui.App); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.current_provider=lambda:"codex"; app.current_profile_label=lambda:"default"; app.effective_workdir_path=lambda:"/work"; data=[{"session_id":"a","provider":"codex","profile":"default"},{"session_id":"b","provider":"codex","profile":"team"},{"session_id":"c","provider":"hermes","profile":"default"}]; ai_session.recent_sessions=lambda provider=None, profile=None, workdir=None, limit=20, ranking="strict": [item for item in data if (provider is None or item["provider"] == provider) and (profile is None or item["profile"] == profile)]; app.current_session_scope=lambda:"profile"; p=[s["session_id"] for s in app.current_sessions()[1:]]; app.invalidate_session_cache(); app.current_session_scope=lambda:"provider"; r=[s["session_id"] for s in app.current_sessions()[1:]]; app.invalidate_session_cache(); app.current_session_scope=lambda:"all"; a=[s["session_id"] for s in app.current_sessions()[1:]]; print("{}|{}|{}".format(",".join(p), ",".join(r), ",".join(a)))'
 )"
 [ "$SESSION_SCOPE_CONTENT_OUT" = "a,c|a,b|a,b,c" ] && ok "session scope content matches profile provider all" || { fail "session scope content matches profile provider all"; printf 'actual: %s\n' "$SESSION_SCOPE_CONTENT_OUT" >&2; }
 

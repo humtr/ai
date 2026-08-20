@@ -69,7 +69,7 @@ def extract_text_content(content: Any) -> str:
 
 
 _CLIP_AT_PATH_RE = re.compile(
-    r'(?<![\\w.+-])@(?=(?:[./~]|[A-Za-z0-9_.-]+/))'
+    r'(?<![\w.+-])@(?=(?:[./~]|[A-Za-z0-9_.-]+/))'
 )
 
 _CLIP_HERMES_SKILLS_RE = re.compile(
@@ -78,7 +78,7 @@ _CLIP_HERMES_SKILLS_RE = re.compile(
 )
 
 _CLIP_REFERENCED_FILES_RE = re.compile(
-    r'\\n--- Content from referenced files ---.*?\\n--- End of content ---',
+    r'\n--- Content from referenced files ---.*?\n--- End of content ---',
     re.S,
 )
 
@@ -92,7 +92,7 @@ def guard_agy_prompt_text(text: str) -> str:
     )
 
     text = _CLIP_REFERENCED_FILES_RE.sub(
-        '\\n[referenced file contents omitted by clip_agy prompt guard]\\n',
+        '\n[referenced file contents omitted by clip_agy prompt guard]\n',
         text,
     )
 

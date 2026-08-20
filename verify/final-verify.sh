@@ -68,114 +68,90 @@ date
 
 section "1. Required files"
 
-exists_file "$HOME/bin/ai"
-exists_file "$HOME/bin/hgm"
-exists_file "$HOME/bin/hgb"
-exists_file "$HOME/.config/ai/lib/ai_cli.py"
-exists_file "$HOME/.config/ai/lib/ai_spec.py"
-exists_file "$HOME/.config/ai/lib/ai_plan.py"
-exists_file "$HOME/.config/ai/lib/ai_resource.py"
-exists_file "$HOME/.config/ai/lib/ai_tui.py"
-exists_file "$HOME/.config/hgm/lib/approve.py"
-exists_file "$HOME/.config/hgm/lib/web_fetch.py"
+exists_file "$ROOT/bin/ai"
+exists_file "$ROOT/bin/agy"
+exists_file "$ROOT/bin/clip"
+exists_file "$ROOT/lib/ai_cli.py"
+exists_file "$ROOT/lib/ai_spec.py"
+exists_file "$ROOT/lib/ai_plan.py"
+exists_file "$ROOT/lib/ai_resource.py"
+exists_file "$ROOT/lib/ai_tui.py"
+exists_file "$ROOT/lib/clip_gemini.py"
+exists_file "$ROOT/lib/clip_agy.py"
+exists_file "$ROOT/lib/clip_approve.py"
+exists_file "$ROOT/lib/clip_web_fetch.py"
 
 section "2. Syntax checks"
 
-for f in ai hgm; do
-  if bash -n "$HOME/bin/$f"; then
-    ok "bash -n $f"
+for f in ai agy clip; do
+  if bash -n "$ROOT/bin/$f"; then
+    ok "bash -n bin/$f"
   else
-    fail "bash -n $f"
+    fail "bash -n bin/$f"
   fi
 done
 
-if python -m py_compile "$HOME/bin/hgb"; then
-  ok "py_compile hgb"
+if python3 -m py_compile "$ROOT/lib"/*.py; then
+  ok "py_compile lib/*.py"
 else
-  fail "py_compile hgb"
+  fail "py_compile lib/*.py"
 fi
 
-if python -m py_compile "$HOME/.config/hgm/lib/approve.py" "$HOME/.config/hgm/lib/web_fetch.py"; then
-  ok "py_compile hgm helpers"
-else
-  fail "py_compile hgm helpers"
-fi
+section "3. ai structure and provider order checks"
 
-if python -m py_compile "$HOME/.config/ai/lib"/*.py; then
-  ok "py_compile ai lib"
-else
-  fail "py_compile ai lib"
-fi
-
-section "3. ai structure checks"
-
-AI="$HOME/bin/ai"
-REPO_AI="$HOME/prj/ai/bin/ai"
-
-if [ -f "$REPO_AI" ]; then
-  if cmp -s "$AI" "$REPO_AI"; then
-    ok "live ~/bin/ai matches repo bin/ai"
-  else
-    fail "live ~/bin/ai matches repo bin/ai"
-  fi
-else
-  warn "repo bin/ai not found: $REPO_AI"
-fi
-
-AI_CLI="$HOME/.config/ai/lib/ai_cli.py"
+AI_CLI="$ROOT/lib/ai_cli.py"
 grep_ok "ai_cli has common command model" 'ai run <provider> --cwd DIR' "$AI_CLI"
-grep_ok "ai_cli has resource commands" 'if cmd=="bridge":|if cmd=="gateway":|if cmd=="gw":' "$AI_CLI"
 grep_ok "ai_cli has tui command" 'def tui_cmd' "$AI_CLI"
 grep_absent "ai_cli has no old wrapper commands" 'cmd=="gm"|cmd=="cm"|cmd=="hm"' "$AI_CLI"
 
-section "4. Resource wiring"
-
-grep_ok "hgb uses ai_plan" 'ai_plan' "$HOME/bin/hgb"
-grep_ok "approve.py uses hgm" 'hgm approve' "$HOME/.config/hgm/lib/approve.py"
-
-echo "== hgm status =="
-hgm status
-RC=$?
-if [ "$RC" -eq 0 ]; then
-  ok "hgm status"
+PROVIDERS="$(PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" provider list | cut -f1 | tr '\n' ' ' | xargs)"
+if [ "$PROVIDERS" = "codex agy hermes" ]; then
+  ok "provider order is strictly: codex agy hermes"
 else
-  warn "hgm status rc=$RC"
+  fail "provider order is: $PROVIDERS (expected: codex agy hermes)"
 fi
 
-echo "== ai bridge status =="
-ai bridge status
-RC=$?
-if [ "$RC" -eq 0 ]; then
-  ok "ai bridge status"
-else
-  warn "ai bridge status rc=$RC"
-fi
+section "4. Independent clip proxy checks"
+
+CLIP_HELP="$(bash "$ROOT/bin/clip" help 2>&1)"
+echo "$CLIP_HELP" | grep -q 'clip = Command Line Interface Proxy Manager' && ok "clip help works" || fail "clip help works"
+echo "$CLIP_HELP" | grep -q 'clip auto' && ok "clip auto command available" || fail "clip auto command available"
+
+CLIP_STATUS="$(bash "$ROOT/bin/clip" auto status 2>&1)"
+echo "$CLIP_STATUS" | grep -q 'clip auto-start:' && ok "clip auto status works" || fail "clip auto status works"
 
 section "5. Help text checks"
 
-HELP="$(ai help 2>&1)"
+HELP="$(PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" help 2>&1)"
 echo "$HELP" | grep -q 'run <provider>' && ok "ai help mentions run" || fail "ai help mentions run"
 echo "$HELP" | grep -q 'ask <provider>' && ok "ai help mentions ask" || fail "ai help mentions ask"
 echo "$HELP" | grep -q 'chat <provider>' && ok "ai help mentions chat" || fail "ai help mentions chat"
 echo "$HELP" | grep -q 'raw <provider>' && ok "ai help mentions raw" || fail "ai help mentions raw"
-echo "$HELP" | grep -q 'ai bridge' && ok "ai help mentions bridge" || fail "ai help mentions bridge"
-echo "$HELP" | grep -q 'ai gateway' && ok "ai help mentions gateway" || fail "ai help mentions gateway"
-echo "$HELP" | grep -q 'ai gw' && ok "ai help mentions gw" || fail "ai help mentions gw"
 echo "$HELP" | grep -q 'ai tui' && ok "ai help mentions tui" || fail "ai help mentions tui"
+echo "$HELP" | grep -q 'ai session' && ok "ai help mentions session" || fail "ai help mentions session"
+echo "$HELP" | grep -q 'ai workdir' && ok "ai help mentions workdir" || fail "ai help mentions workdir"
 
 section "6. Smoke checks"
 
 echo "== ai provider list =="
-ai provider list
+PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" provider list
 [ $? -eq 0 ] && ok "ai provider list" || fail "ai provider list"
 
 echo "== ai session list =="
-ai session list | head -n 5
+PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" session list | head -n 5
 [ $? -eq 0 ] && ok "ai session list" || fail "ai session list"
 
-echo "== dry run check =="
-OUT="$(AI_DRY_RUN=1 ai run codex 2>&1)"
+echo "== dry run check: codex =="
+OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run codex 2>&1)"
 echo "$OUT" | grep -q 'codex' && ok "ai dry run codex" || fail "ai dry run codex"
+
+echo "== dry run check: agy =="
+OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run agy 2>&1)"
+echo "$OUT" | grep -q 'agy' && ok "ai dry run agy" || fail "ai dry run agy"
+
+echo "== dry run check: hermes =="
+OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run hermes 2>&1)"
+echo "$OUT" | grep -q 'hermes' && ok "ai dry run hermes" || fail "ai dry run hermes"
 
 section "7. TUI smoke checks"
 
@@ -185,25 +161,15 @@ else
   fail "ai tui smoke"
 fi
 
-section "8. Optional live model checks"
-
-if [ "${RUN_LIVE:-0}" = "1" ]; then
-  timeout -k 5 60 ai ask gemini -p tg -- "정확히 다음 토큰만 출력해: FINAL_LIVE_ASK_OK"
-  RC=$?
-  [ "$RC" -eq 0 ] && ok "live ai ask gemini" || fail "live ai ask gemini rc=$RC"
-else
-  echo "Skipped live calls."
-fi
-
-section "9. Process check"
+section "8. Process check"
 
 ps -A -o pid,ppid,etime,cmd 2>/dev/null \
-  | grep -E '(/bin/ai|/bin/hgm|/bin/hgb|/usr/bin/gemini|/usr/bin/codex|/usr/bin/hermes|node.*gemini)' \
+  | grep -E '(/bin/ai|/usr/bin/codex|/usr/bin/hermes|/usr/bin/agy)' \
   | grep -vE 'grep'
 
 RC=$?
 if [ "$RC" -eq 0 ]; then
-  warn "some ai-related processes are still running"
+  warn "some ai-related processes are currently active"
 else
   ok "no stuck ai process"
 fi

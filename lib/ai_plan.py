@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os, shlex
+import base64, json, os, shlex
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -44,13 +44,136 @@ def _session_argv(provider:str, binary:str, profile_args:list[str], strategy:str
         if ref: argv.append(ref)
         return argv
     if all_sessions: raise SystemExit(f"ERROR: --all is not supported for {provider}")
-    if strategy == "gemini_resume":
-        return [binary, *profile_args, "--resume"] + ([ref] if ref else [])
-    if strategy == "hermes_resume":
-        return [binary, *profile_args, "--resume"] + ([ref] if ref else [])
     if strategy == "agy_resume":
         return [binary, *profile_args, "--conversation"] + ([ref] if ref else [])
+    if strategy == "hermes_resume":
+        return [binary, *profile_args, "--resume"] + ([ref] if ref else [])
     raise SystemExit(f"ERROR: provider {provider} does not support sessions")
+
+def _decode_jwt_claims(token: str) -> dict[str, Any]:
+    if token.count(".") < 2: return {}
+    payload = token.split(".", 2)[1]
+    payload += "=" * ((4 - len(payload) % 4) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+    except Exception:
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+def _codex_profile_home(profile: str) -> Path:
+    return ai_store.HOME / ".codex" if profile == "default" else ai_store.HOME / ".codex-profiles" / profile
+
+def _codex_auth_identity(profile: str) -> dict[str, str]:
+    path = _codex_profile_home(profile) / "auth.json"
+    if not path.is_file(): return {"mode": "none"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"mode": "invalid"}
+    mode = str(data.get("auth_mode") or "unknown")
+    if mode == "chatgpt":
+        tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+        id_claims = _decode_jwt_claims(str(tokens.get("id_token") or ""))
+        access_claims = _decode_jwt_claims(str(tokens.get("access_token") or ""))
+        return {
+            "mode": mode,
+            "subject": str(id_claims.get("sub") or access_claims.get("sub") or ""),
+            "account_id": str(tokens.get("account_id") or ""),
+        }
+    if mode == "apikey":
+        return {"mode": mode, "api_key": str(data.get("OPENAI_API_KEY") or "")}
+    return {"mode": mode}
+
+def _codex_session_boundary_reason(source_profile: str, target_profile: str) -> str:
+    if source_profile == target_profile: return ""
+    if os.environ.get("CODEX_SESSION_ALLOW_CROSS_AUTH", "").lower() in {"1", "true", "yes"}: return ""
+    source = _codex_auth_identity(source_profile)
+    target = _codex_auth_identity(target_profile)
+    if source.get("mode") in {"none", "invalid"} or target.get("mode") in {"none", "invalid"}: return ""
+    if source.get("mode") != target.get("mode"):
+        return f"source auth mode {source.get('mode')!r} differs from target auth mode {target.get('mode')!r}"
+    if source.get("mode") == "chatgpt":
+        if source.get("subject") and target.get("subject") and source.get("subject") != target.get("subject"):
+            return "source ChatGPT user differs from target profile"
+        if source.get("account_id") and target.get("account_id") and source.get("account_id") != target.get("account_id"):
+            return "source ChatGPT account/workspace differs from target profile"
+    if source.get("mode") == "apikey":
+        if source.get("api_key") and target.get("api_key") and source.get("api_key") != target.get("api_key"):
+            return "source API key differs from target profile"
+    return ""
+
+def _require_session_boundary(provider: str, source_profile: str, target_profile: str) -> None:
+    if provider != "codex": return
+    reason = _codex_session_boundary_reason(source_profile, target_profile)
+    if not reason:
+        return
+
+    # Check if we can prompt the user interactively
+    is_interactive = False
+    try:
+        import sys
+        is_interactive = (
+            sys.stdin
+            and hasattr(sys.stdin, "isatty")
+            and sys.stdin.isatty()
+            and sys.stdout
+            and hasattr(sys.stdout, "isatty")
+            and sys.stdout.isatty()
+        )
+    except Exception:
+        pass
+
+    if is_interactive:
+        import sys
+        sys.stderr.write(
+            f"\nWARNING: Refusing cross-profile Codex session resume/share: {source_profile} -> {target_profile}: {reason}.\n"
+            f"To override this check manually, you can set CODEX_SESSION_ALLOW_CROSS_AUTH=1.\n\n"
+            f"Choose an option:\n"
+            f"  1) Reset authentication on target profile '{target_profile}' (forces re-login on next start) [Recommended]\n"
+            f"  2) Proceed anyway (override this check for this action)\n"
+            f"  3) Abort execution\n"
+        )
+        sys.stderr.flush()
+        
+        try:
+            sys.stderr.write("Enter choice [1-3] (default 3): ")
+            sys.stderr.flush()
+            choice = sys.stdin.readline().strip()
+        except (KeyboardInterrupt, EOFError):
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+            choice = "3"
+
+        if choice == "1":
+            auth_path = _codex_profile_home(target_profile) / "auth.json"
+            if auth_path.is_file():
+                try:
+                    auth_path.unlink()
+                    sys.stderr.write(f"Successfully reset authentication on profile '{target_profile}'.\n")
+                    sys.stderr.flush()
+                    # Re-verify the boundary after deletion
+                    reason = _codex_session_boundary_reason(source_profile, target_profile)
+                    if not reason:
+                        return
+                except OSError as e:
+                    sys.stderr.write(f"Error resetting authentication: {e}\n")
+                    sys.stderr.flush()
+            else:
+                sys.stderr.write(f"No authentication file found for profile '{target_profile}'.\n")
+                sys.stderr.flush()
+                reason = _codex_session_boundary_reason(source_profile, target_profile)
+                if not reason:
+                    return
+        elif choice == "2":
+            sys.stderr.write("Overriding check and proceeding...\n")
+            sys.stderr.flush()
+            return
+
+    raise SystemExit(
+        "ERROR: refusing cross-profile Codex session resume/share: "
+        f"{source_profile} -> {target_profile}: {reason}. "
+        "Set CODEX_SESSION_ALLOW_CROSS_AUTH=1 to override explicitly."
+    )
 
 def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
     cmdspec=ai_spec.command_spec(spec.command); typ=cmdspec.get("type")
@@ -81,20 +204,18 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
             
             # Cross-profile session auto-sharing/symlinking
             if session_profile != profile:
+                _require_session_boundary(provider, str(session_profile), str(profile))
                 try:
                     src_path = Path(found["path"])
                     if provider == "codex":
                         base_A = Path("~/.codex/sessions").expanduser() if session_profile == "default" else Path(f"~/.codex-profiles/{session_profile}/sessions").expanduser()
                         base_B = Path("~/.codex/sessions").expanduser() if profile == "default" else Path(f"~/.codex-profiles/{profile}/sessions").expanduser()
-                    elif provider == "hermes":
-                        base_A = Path("~/.hermes/sessions").expanduser() if session_profile == "default" else Path(f"~/.hermes/profiles/{session_profile}/sessions").expanduser()
-                        base_B = Path("~/.hermes/sessions").expanduser() if profile == "default" else Path(f"~/.hermes/profiles/{profile}/sessions").expanduser()
-                    elif provider == "gemini":
-                        base_A = Path("~/.gemini").expanduser() if session_profile == "default" else Path(f"~/.gemini-profiles/{session_profile}").expanduser()
-                        base_B = Path("~/.gemini").expanduser() if profile == "default" else Path(f"~/.gemini-profiles/{profile}").expanduser()
                     elif provider == "agy":
                         base_A = Path("~/.gemini").expanduser() if session_profile == "default" else Path(f"~/.agy-profiles/{session_profile}/.gemini").expanduser()
                         base_B = Path("~/.gemini").expanduser() if profile == "default" else Path(f"~/.agy-profiles/{profile}/.gemini").expanduser()
+                    elif provider == "hermes":
+                        base_A = Path("~/.hermes/sessions").expanduser() if session_profile == "default" else Path(f"~/.hermes/profiles/{session_profile}/sessions").expanduser()
+                        base_B = Path("~/.hermes/sessions").expanduser() if profile == "default" else Path(f"~/.hermes/profiles/{profile}/sessions").expanduser()
                     else:
                         base_A = None
                         base_B = None
@@ -133,7 +254,6 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
     elif typ == "inline_prompt":
         prompt=_guard(spec.command, spec.prompt or "")
         if provider == "codex": argv=[binary,*profile_args,"exec","--skip-git-repo-check",prompt]
-        elif provider == "gemini": argv=[binary,*profile_args,"--skip-trust","-p",prompt]
         elif provider == "agy": argv=[binary,*profile_args,"--dangerously-skip-permissions","-p",prompt]
         elif provider == "hermes": argv=[binary,*profile_args,"-z",prompt]
         else: argv=[binary,*profile_args,prompt]

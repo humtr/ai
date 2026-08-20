@@ -1,108 +1,74 @@
-# ai refactor Stage 6 — Resource Split, Session Resolve, and Bridge De-wrapper
+# ai & clip — Unified AI CLI & Decoupled Proxy Suite
 
-Stage 6 turns the Stage 5 run core into a resource-oriented launcher/manager.
+## 1. Overview
 
-## Canonical syntax
+- **`ai`**: Pure config-driven CLI launcher and curses TUI for primary AI assistants (`codex`, `agy`, `hermes`).
+- **`clip`**: Standalone Command Line Interface Proxy manager (Telegram gateways, web fetcher, approvals, Gemini/AGY proxy bridges).
+
+---
+
+## 2. Supported Providers
+
+1. **`codex`** (OpenAI Codex CLI)
+   - Profile home: `CODEX_HOME` (`~/.codex` or `~/.codex-profiles/<profile>`)
+   - Session resume: `codex resume <session-ref>`
+2. **`agy`** (Antigravity CLI)
+   - Profile home: `AGY_PROFILE_HOME` (`~/.gemini` or `~/.agy-profiles/<profile>/.gemini`)
+   - Session resume: `agy --conversation <session-ref>`
+3. **`hermes`** (Hermes Agent)
+   - Profile arg: `--profile <profile>`
+   - Session resume: `hermes --resume <session-ref>`
+
+---
+
+## 3. Canonical `ai` Syntax
 
 ```sh
-ai run codex
-ai run codex -p main
-ai run codex -d ~/work/main
-ai run codex -p main -d ~/work/main -s <session-ref>
+ai run <provider> [-p PROFILE] [-d DIRECTORY] [-s SESSION]
+ai ask <provider> [-p PROFILE] -- "prompt"
+ai chat <provider> [-p PROFILE] -- "prompt"
+ai raw <provider> [-p PROFILE] -- <native args>
+ai tui
 ```
 
-Removed syntax remains removed:
-
-```sh
-ai resume ...
-ai codex
-aioops # unknown commands error
-ai cm / ai gm / ai hm
-```
-
-## Resource commands
-
+### Resource Management
 ```sh
 ai provider list|show|check
-ai profile list|show
+ai profile list|show|add|delete
 ai session refresh|list|show|resolve
 ai workdir list|add|archive
-ai bridge start|stop|restart|status|logs|test|config|set ...
-ai gateway list|show|status|start|stop|restart|logs|view
-ai gw
 ```
 
-Resource names are singular by design.
+---
 
-## Module split
+## 4. `clip` Proxy Manager
 
-- `ai_spec.py`: command/provider config loading and validation.
-- `ai_store.py`: paths, JSON read/write, workdir/gateway stores.
-- `ai_provider.py`: provider profile adapters.
-- `ai_session.py`: session discovery, parsing, indexing, resolution.
-- `ai_plan.py`: `LaunchSpec -> ExecutionPlan`.
-- `ai_resource.py`: resource command implementation.
-- `ai_cli.py`: CLI frontend.
-- `ai_tui.py`: TUI frontend only.
-
-## Gateway changes
-
-`hgw` is renamed to `hgm` (Hermes Gateway Manager). Its config path is now:
-
-```text
-~/.config/hgm
-```
-
-`hgb` remains the Hermes Gemini Bridge, but no longer calls `gm task`. It uses the same `ai_plan` / Gemini profile adapter as `ai run/raw`.
-
-`ai gw` opens a separate gateway TUI and leaves the normal session launcher TUI
-unchanged. It shows current bridge/gateway status first, then top-level
-operations. `Start all`, `Stop all`, and `Restart all` include both the bridge
-and Telegram gateways. Use Up/Down to select, Left/Right or Tab to switch
-panels, Enter to run the visible command, and Esc to quit.
-
-## Validation
+`clip` operates independently from `ai`:
 
 ```sh
-bash -n bin/ai bin/hgm lib/ai_core.sh
-python -m py_compile lib/*.py bin/hgb
-AI_DRY_RUN=1 bin/ai run codex
-AI_DRY_RUN=1 bin/ai run gemini -p tg
-AI_DRY_RUN=1 bin/ai run hermes -p main
-bin/ai provider list
-bin/ai session refresh
+clip list
+clip run <profile|alias|all>
+clip stop <profile|alias|all>
+clip restart <profile|alias|all>
+clip status
+clip auto on|off|status|run
+clip web <url>
+clip approve <request|allow|deny|list|show|cleanup>
+clip gemini start|stop|status|logs|test|config|set
+clip agy start|stop|status|logs|test|config|set
 ```
 
-## Stage 6.2 notes
+---
 
-- The old monolithic registry facade has been removed. New code imports `ai_spec`, `ai_provider`, `ai_store`, and `ai_session` directly.
-- TUI is forward-ported from the original UI/UX: `Provider / Profile / Session / Workdir / Sessions`; the old `Mode` row is removed.
-- TUI commands are always generated as `ai run ...`. Existing sessions use `-s`; directories use `-d`.
-- TUI session rows are cached by scope/provider/profile to avoid reloading on every draw or row movement.
+## 5. Verification & Installation
 
-## Termux install
+### Verification
+```bash
+bash verify/final-verify.sh
+bash verify/ai-tui-smoke.sh
+```
 
-Install the current working tree into the Termux runtime:
-
+### Termux Installation
 ```bash
 ./scripts/install-termux.sh
-```
-
-Default install paths:
-
-```text
-~/bin/ai
-~/.config/ai/lib
-```
-
-The installer backs up existing runtime files under:
-
-```text
-~/.config/ai/backups/
-```
-
-Override destinations when needed:
-
-```bash
-AI_BIN_DEST="$HOME/bin/ai" AI_LIB_DEST="$HOME/.config/ai/lib" ./scripts/install-termux.sh
 ```

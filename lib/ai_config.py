@@ -13,12 +13,11 @@ import sys
 from pathlib import Path
 
 DEFAULTS: dict[str, str] = {
-    "AI_DEFAULT_PROVIDER": "hermes",
+    "AI_DEFAULT_PROVIDER": "codex",
     "AI_FALLBACK_ENABLED": "false",
-    "AI_FALLBACK_PROVIDERS": "hermes gemini codex agy",
+    "AI_FALLBACK_PROVIDERS": "codex agy hermes",
     "AI_EXPLICIT_FALLBACK": "false",
     "AI_ASK_TIMEOUT": "180",
-    "AI_AUTO_START_BRIDGE": "false",
 }
 
 ALIASES: dict[str, str] = {
@@ -27,10 +26,9 @@ ALIASES: dict[str, str] = {
     "fallback-providers": "AI_FALLBACK_PROVIDERS",
     "explicit-fallback": "AI_EXPLICIT_FALLBACK",
     "ask-timeout": "AI_ASK_TIMEOUT",
-    "auto-start-bridge": "AI_AUTO_START_BRIDGE",
 }
 
-PROVIDERS = {"codex", "gemini", "hermes", "agy"}
+PROVIDERS = {"codex", "agy", "hermes"}
 BOOLS = {"true", "false"}
 
 
@@ -51,7 +49,6 @@ def validate(key: str, value: str) -> None:
     elif key in {
         "AI_FALLBACK_ENABLED",
         "AI_EXPLICIT_FALLBACK",
-        "AI_AUTO_START_BRIDGE",
     }:
         if value not in BOOLS:
             raise SystemExit(f"invalid boolean for {key}: {value}")

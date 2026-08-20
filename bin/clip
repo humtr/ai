@@ -6,10 +6,26 @@ SESSION="clip-gw"
 PROFILE_DIR="$HOME/.hermes/profiles"
 CONFIG_DIR="$HOME/.config/clip"
 ALIASES_FILE="$CONFIG_DIR/aliases.tsv"
+AUTO_DISABLED_FILE="$CONFIG_DIR/auto.disabled"
+
+SELF="${BASH_SOURCE[0]:-$0}"
+SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd -P || pwd)"
+if [ -n "${CLIP_LIB_DIR:-}" ] && [ -f "$CLIP_LIB_DIR/clip_gemini.py" ]; then
+  CLIP_LIB="$CLIP_LIB_DIR"
+elif [ -f "$HOME/.config/clip/lib/clip_gemini.py" ]; then
+  CLIP_LIB="$HOME/.config/clip/lib"
+elif [ -f "$SELF_DIR/../lib/clip_gemini.py" ]; then
+  CLIP_LIB="$(cd "$SELF_DIR/../lib" && pwd -P)"
+else
+  CLIP_LIB="$HOME/.config/clip/lib"
+fi
+
 CLIP_GEMINI_ENV="$CONFIG_DIR/clip_gemini.env"
-CLIP_GEMINI_BIN="$HOME/.config/clip/lib/clip_gemini.py"
+CLIP_GEMINI_BIN="$CLIP_LIB/clip_gemini.py"
 CLIP_AGY_ENV="$CONFIG_DIR/clip_agy.env"
-CLIP_AGY_BIN="$HOME/.config/clip/lib/clip_agy.py"
+CLIP_AGY_BIN="$CLIP_LIB/clip_agy.py"
+CLIP_APPROVE_BIN="$CLIP_LIB/clip_approve.py"
+CLIP_WEB_BIN="$CLIP_LIB/clip_web_fetch.py"
 INTERNAL_PREFIX="clip-"
 
 mkdir -p "$CONFIG_DIR"
@@ -938,11 +954,43 @@ cmd="${1:-help}"
 shift || true
 
 
+clip_auto_cmd() {
+  local sub="${1:-status}"
+  shift || true
+  case "$sub" in
+    on|enable)
+      rm -f "$AUTO_DISABLED_FILE"
+      echo "clip auto-start: ENABLED"
+      ;;
+    off|disable)
+      touch "$AUTO_DISABLED_FILE"
+      echo "clip auto-start: DISABLED"
+      ;;
+    status)
+      if [ -f "$AUTO_DISABLED_FILE" ]; then
+        echo "clip auto-start: DISABLED ($AUTO_DISABLED_FILE exists)"
+      else
+        echo "clip auto-start: ENABLED"
+      fi
+      ;;
+    run)
+      if [ -f "$AUTO_DISABLED_FILE" ]; then
+        echo "clip auto-start is disabled; skipping run all"
+        return 0
+      fi
+      require_tmux
+      run_target run all
+      ;;
+    *)
+      echo "Usage: clip auto <on|off|status|run>"
+      return 1
+      ;;
+  esac
+}
+
 # clip web/approve early dispatch
 if [ "$cmd" = "approve" ]; then
-  # Execute clip_approve.py which resides in clip lib directory
-  # On Termux, the installation puts it in $HOME/.config/clip/lib/clip_approve.py
-  exec python3 "$HOME/.config/clip/lib/clip_approve.py" "$@"
+  exec python3 "$CLIP_APPROVE_BIN" "$@"
 fi
 
 if [ "$cmd" = "web" ]; then
@@ -950,7 +998,7 @@ if [ "$cmd" = "web" ]; then
     echo "Usage: clip web <url>"
     exit 2
   }
-  exec python3 "$HOME/.config/clip/lib/clip_web_fetch.py" "$@"
+  exec python3 "$CLIP_WEB_BIN" "$@"
 fi
 
 case "$cmd" in
@@ -1001,6 +1049,12 @@ case "$cmd" in
   status)
     require_tmux
     status_all ;;
+  auto)
+    clip_auto_cmd "$@" ;;
+  enable)
+    clip_auto_cmd on ;;
+  disable)
+    clip_auto_cmd off ;;
   gemini|g)
     clip_gemini_cmd "$@" ;;
   agy|a)

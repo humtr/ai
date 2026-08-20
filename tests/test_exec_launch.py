@@ -62,7 +62,7 @@ def test_tuis_replace_cli_manager() -> None:
 
     os.execv = fake
     try:
-        for launch, name in ((ai_cli.tui_cmd, "ai_tui.py"), (ai_cli.gw_cmd, "ai_gw_tui.py")):
+        for launch, name in ((ai_cli.tui_cmd, "ai_tui.py"),):
             try:
                 launch(["--test"])
             except Executed:

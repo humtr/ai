@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 
+import shutil
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 DEFAULT_PROFILE = os.environ.get("CLIP_GEMINI_PROFILE", "tg")
@@ -27,8 +29,12 @@ DEFAULT_ROUTES_FILE = os.environ.get(
 # Use absolute node path on Termux by default to bypass shebang /usr/bin/env resolution issues
 if Path("/data/data/com.termux/files/usr/bin/gemini").exists():
     DEFAULT_EXEC_TEMPLATE = "node /data/data/com.termux/files/usr/bin/gemini --skip-trust -p {prompt} --output-format json"
-else:
+elif shutil.which("gemini"):
     DEFAULT_EXEC_TEMPLATE = "gemini --skip-trust -p {prompt} --output-format json"
+elif Path("/data/data/com.termux/files/usr/bin/agy").exists():
+    DEFAULT_EXEC_TEMPLATE = "/data/data/com.termux/files/usr/bin/agy --dangerously-skip-permissions -p {prompt}"
+else:
+    DEFAULT_EXEC_TEMPLATE = "agy --dangerously-skip-permissions -p {prompt}"
 
 
 def get_tmp_dir() -> Path:
@@ -73,7 +79,7 @@ def extract_text_content(content: Any) -> str:
 
 
 _CLIP_AT_PATH_RE = re.compile(
-    r'(?<![\\w.+-])@(?=(?:[./~]|[A-Za-z0-9_.-]+/))'
+    r'(?<![\w.+-])@(?=(?:[./~]|[A-Za-z0-9_.-]+/))'
 )
 
 _CLIP_HERMES_SKILLS_RE = re.compile(
@@ -82,7 +88,7 @@ _CLIP_HERMES_SKILLS_RE = re.compile(
 )
 
 _CLIP_REFERENCED_FILES_RE = re.compile(
-    r'\\n--- Content from referenced files ---.*?\\n--- End of content ---',
+    r'\n--- Content from referenced files ---.*?\n--- End of content ---',
     re.S,
 )
 
@@ -96,7 +102,7 @@ def guard_gemini_prompt_text(text: str) -> str:
     )
 
     text = _CLIP_REFERENCED_FILES_RE.sub(
-        '\\n[referenced file contents omitted by clip_gemini prompt guard]\\n',
+        '\n[referenced file contents omitted by clip_gemini prompt guard]\n',
         text,
     )
 
@@ -194,16 +200,21 @@ def call_gemini_decoupled(prompt: str, route_name: str, route: Dict[str, Any], d
 
     env = os.environ.copy()
     if profile and profile != "default":
-        temp_base = Path("~/.cache/clip/gemini-home").expanduser()
-        run_home = temp_base.parent / f"{temp_base.name}-{profile}"
-        run_home.mkdir(parents=True, exist_ok=True)
-        symlink = run_home / ".gemini"
-        if symlink.exists() or symlink.is_symlink():
-            symlink.unlink()
-        profile_dir = Path("~/.gemini-profiles").expanduser() / profile
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        symlink.symlink_to(profile_dir)
-        env["HOME"] = str(run_home)
+        if "agy" in cmd_str:
+            profile_dir = Path("~/.agy-profiles").expanduser() / profile
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            env["AGY_PROFILE_HOME"] = str(profile_dir)
+        else:
+            temp_base = Path("~/.cache/clip/gemini-home").expanduser()
+            run_home = temp_base.parent / f"{temp_base.name}-{profile}"
+            run_home.mkdir(parents=True, exist_ok=True)
+            symlink = run_home / ".gemini"
+            if symlink.exists() or symlink.is_symlink():
+                symlink.unlink()
+            profile_dir = Path("~/.gemini-profiles").expanduser() / profile
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            symlink.symlink_to(profile_dir)
+            env["HOME"] = str(run_home)
 
     log(f"CALL route={route_name} profile={profile} model={model} chars={len(prompt)}")
     started = time.time()
@@ -227,11 +238,17 @@ def call_gemini_decoupled(prompt: str, route_name: str, route: Dict[str, Any], d
         err = proc.stderr.strip() or proc.stdout.strip() or f"gemini exited with code {proc.returncode}"
         raise RuntimeError(err[:4000])
 
-    data = parse_gemini_json(proc.stdout)
-    response = data.get("response", "")
-    if response is None:
-        response = ""
-    return str(response), data
+    raw_stdout = proc.stdout.strip()
+    if "{" in raw_stdout and "}" in raw_stdout:
+        try:
+            data = parse_gemini_json(raw_stdout)
+            response = data.get("response", "")
+            if response is not None:
+                return str(response), data
+        except Exception:
+            pass
+
+    return raw_stdout, {"response": raw_stdout}
 
 
 def usage_from_stats(data: Dict[str, Any]) -> Dict[str, int]:

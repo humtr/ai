@@ -37,6 +37,37 @@ def read_project_root(path: Path) -> str:
 def codex_session_id(path: Path) -> str:
     stem=path.stem; return re.sub(r"^rollout-[0-9TZ:-]+-", "", stem) or stem
 
+def codex_profile_for_session_path(path: Path) -> str:
+    try:
+        wanted = Path(path).expanduser().resolve(strict=False)
+    except OSError:
+        wanted = Path(path).expanduser()
+    roots = [("default", HOME / ".codex" / "sessions")]
+    profiles = HOME / ".codex-profiles"
+    if profiles.is_dir():
+        roots.extend((ph.name, ph / "sessions") for ph in sorted(x for x in profiles.iterdir() if x.is_dir()))
+    for profile, root in roots:
+        try:
+            root_resolved = root.expanduser().resolve(strict=False)
+            if os.path.commonpath([str(wanted), str(root_resolved)]) == str(root_resolved):
+                return profile
+        except ValueError:
+            continue
+    return ""
+
+def add_codex_session_record(records:list[dict[str,Any]], profile:str, path:Path) -> None:
+    source_profile = profile
+    source_path = path
+    if path.is_symlink():
+        try:
+            source_path = path.resolve(strict=True)
+        except OSError:
+            return
+        resolved_profile = codex_profile_for_session_path(source_path)
+        if resolved_profile:
+            source_profile = resolved_profile
+    add_session_record(records, "codex", source_profile, source_path)
+
 def hermes_session_id(path: Path) -> str:
     stem=path.stem; return stem[len("session_"):] if stem.startswith("session_") else stem
 
@@ -57,50 +88,38 @@ def discover_session_files(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
     records=[]
     codex_sessions=HOME/".codex"/"sessions"
     if codex_sessions.is_dir():
-        for p in codex_sessions.rglob("*.jsonl"): add_session_record(records,"codex","default",p)
+        for p in codex_sessions.rglob("*.jsonl"): add_codex_session_record(records,"default",p)
     codex_profiles=HOME/".codex-profiles"
     if codex_profiles.is_dir():
         for ph in sorted(x for x in codex_profiles.iterdir() if x.is_dir()):
             s=ph/"sessions"
             if s.is_dir():
-                for p in s.rglob("*.jsonl"): add_session_record(records,"codex",ph.name,p)
-    def scan_gemini(root: Path, profile: str):
-        tmp=root/"tmp"
-        if not tmp.is_dir(): return
-        for project_dir in sorted(x for x in tmp.iterdir() if x.is_dir()):
-            chats=project_dir/"chats"
-            if not chats.is_dir(): continue
-            workdir=read_project_root(project_dir/".project_root")
-            for p in chats.rglob("*.jsonl"): add_session_record(records,"gemini",profile,p,workdir)
-    scan_gemini(HOME/".gemini","default")
-    gemini_profiles=HOME/".gemini-profiles"
-    if gemini_profiles.is_dir():
-        for ph in sorted(x for x in gemini_profiles.iterdir() if x.is_dir()): scan_gemini(ph, ph.name)
+                for p in s.rglob("*.jsonl"): add_codex_session_record(records,ph.name,p)
 
-    def scan_agy(root: Path, profile: str):
-        gemini_dir = root / ".gemini"
-        tmp = gemini_dir / "tmp"
-        if not tmp.is_dir(): return
-        for project_dir in sorted(x for x in tmp.iterdir() if x.is_dir()):
-            chats = project_dir / "chats"
-            if not chats.is_dir(): continue
-            workdir = read_project_root(project_dir / ".project_root")
-            for p in chats.rglob("*.jsonl"): add_session_record(records, "agy", profile, p, workdir)
-    scan_agy(HOME, "default")
-    agy_profiles = HOME / ".agy-profiles"
-    if agy_profiles.is_dir():
-        for ph in sorted(x for x in agy_profiles.iterdir() if x.is_dir()): scan_agy(ph, ph.name)
-
-    # Scan Antigravity CLI transcript sessions and map them under gemini and agy
-    antigravity_dir = HOME / ".gemini" / "antigravity-cli"
-    if antigravity_dir.is_dir():
+    def scan_agy_tree(root: Path, profile: str):
+        antigravity_dir = root / ".gemini" / "antigravity-cli"
+        if not antigravity_dir.is_dir():
+            antigravity_dir = root / "antigravity-cli"
         brain_dir = antigravity_dir / "brain"
         if brain_dir.is_dir():
             for conv_dir in sorted(x for x in brain_dir.iterdir() if x.is_dir()):
                 transcript_file = conv_dir / ".system_generated" / "logs" / "transcript.jsonl"
                 if transcript_file.is_file():
-                    add_session_record(records, "gemini", "default", transcript_file)
-                    add_session_record(records, "agy", "default", transcript_file)
+                    add_session_record(records, "agy", profile, transcript_file)
+        tmp = (root / ".gemini" / "tmp") if (root / ".gemini").is_dir() else (root / "tmp")
+        if tmp.is_dir():
+            for project_dir in sorted(x for x in tmp.iterdir() if x.is_dir()):
+                chats = project_dir / "chats"
+                if not chats.is_dir(): continue
+                workdir = read_project_root(project_dir / ".project_root")
+                for p in chats.rglob("*.jsonl"):
+                    add_session_record(records, "agy", profile, p, workdir)
+
+    scan_agy_tree(HOME, "default")
+    agy_profiles = HOME / ".agy-profiles"
+    if agy_profiles.is_dir():
+        for ph in sorted(x for x in agy_profiles.iterdir() if x.is_dir()):
+            scan_agy_tree(ph, ph.name)
 
     hs=HOME/".hermes"/"sessions"
     if hs.is_dir():
@@ -143,14 +162,17 @@ def entry_from_messages(record:dict[str,Any], meta:dict[str,Any], messages:list[
     return finalize({"provider":record["provider"],"profile":record["profile"],"session_id":sid,"native_session_ref":sid,"title":text_summary(title,120) or sid,"last_prompt_summary":text_summary(last_user,360),"last_response_summary":text_summary(last_assistant,360),"turns":len(users),"updated":str(meta.get("updated") or last.get("timestamp") or iso_from_mtime(path)),"workdir":str(meta.get("workdir") or record.get("workdir_hint") or ""),"source":"session-file","source_path":str(path),"path":str(path),"mtime":record["mtime"],"size":record["size"]})
 
 def parse_codex_session(record:dict[str,Any]) -> dict[str,Any]:
-    path=Path(record["path"]); meta={"session_id":codex_session_id(path),"workdir":"","updated":""}; messages=[]; fallback=[]
+    path=Path(record["path"]); meta={"session_id":codex_session_id(path),"workdir":"","updated":""}; messages=[]; fallback=[]; found_session_meta=False
     try:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try: item=json.loads(line)
             except json.JSONDecodeError: continue
             payload=item.get("payload") if isinstance(item.get("payload"), dict) else {}; ts=str(item.get("timestamp") or payload.get("timestamp") or "")
             if ts: meta["updated"]=ts
-            if item.get("type")=="session_meta": meta["session_id"]=str(payload.get("id") or meta["session_id"]); meta["workdir"]=str(payload.get("cwd") or meta["workdir"]); continue
+            if item.get("type")=="session_meta":
+                if not found_session_meta:
+                    meta["session_id"]=str(payload.get("id") or meta["session_id"]); meta["workdir"]=str(payload.get("cwd") or meta["workdir"]); found_session_meta=True
+                continue
             if item.get("type")=="response_item" and payload.get("type")=="message": add_message(messages, str(payload.get("role") or ""), payload.get("content"), ts); continue
             if item.get("type")=="event_msg":
                 if payload.get("type")=="user_message": add_message(fallback,"user",payload.get("message"),ts)
@@ -254,8 +276,8 @@ def parse_session_record(record:dict[str,Any]) -> dict[str,Any]:
     path_str = str(record.get("path") or "")
     if "antigravity-cli" in path_str:
         return parse_antigravity_session(record)
+    if record.get("provider")=="agy": return parse_gemini_session(record)
     if record.get("provider")=="codex": return parse_codex_session(record)
-    if record.get("provider") in {"gemini", "agy"}: return parse_gemini_session(record)
     if record.get("provider")=="hermes": return parse_hermes_session(record)
     return entry_from_messages(record,{"session_id":Path(record["path"]).stem},[])
 
