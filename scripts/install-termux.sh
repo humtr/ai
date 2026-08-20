@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST_BIN="${AI_BIN_DEST:-$HOME/bin/ai}"
 DEST_LIB="${AI_LIB_DEST:-$HOME/.config/ai/lib}"
+DEST_CONFIG="${AI_CONFIG_DEST:-$HOME/.config/ai/config}"
 DEST_AGY="${AI_AGY_DEST:-$HOME/bin/agy}"
 
 # Rebranded CLI Proxy Suite destinations
@@ -20,6 +21,7 @@ say "== ai & clip Termux installer =="
 say "repo: $ROOT"
 say "dest bin: $DEST_BIN"
 say "dest lib: $DEST_LIB"
+say "dest config: $DEST_CONFIG"
 say "dest clip: $DEST_CLIP"
 say "dest clip lib: $DEST_CLIP_LIB"
 say "backup: $BACKUP_DIR"
@@ -57,6 +59,12 @@ else
   say "no existing runtime lib to back up at $DEST_LIB"
 fi
 
+# Back up config
+if [ -e "$DEST_CONFIG" ]; then
+  cp -a "$DEST_CONFIG" "$BACKUP_DIR/config.bak"
+  say "backed up config -> $BACKUP_DIR/config.bak"
+fi
+
 # Back up clip bin & lib
 if [ -e "$DEST_CLIP" ]; then
   cp -a "$DEST_CLIP" "$BACKUP_DIR/clip.bak"
@@ -81,6 +89,10 @@ say "-- installing runtime lib --"
 rm -rf "$DEST_LIB"
 mkdir -p "$DEST_LIB"
 cp -a "$ROOT/lib/." "$DEST_LIB/"
+
+say "-- installing config --"
+mkdir -p "$DEST_CONFIG"
+cp -a "$ROOT/config/." "$DEST_CONFIG/"
 
 say "-- installing command --"
 mkdir -p "$(dirname "$DEST_BIN")"
