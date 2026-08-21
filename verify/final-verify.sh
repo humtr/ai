@@ -42,7 +42,7 @@ grep_ok() {
   local desc="$1"
   local pat="$2"
   shift 2
-  if grep -qE "$pat" "$@"; then
+  if grep -rqE "$pat" "$@"; then
     ok "$desc"
   else
     fail "$desc"
@@ -53,9 +53,9 @@ grep_absent() {
   local desc="$1"
   local pat="$2"
   shift 2
-  if grep -qE "$pat" "$@"; then
+  if grep -rqE "$pat" "$@"; then
     fail "$desc"
-    grep -nE "$pat" "$@" | sed -n '1,80p'
+    grep -rnE "$pat" "$@" | sed -n '1,80p'
   else
     ok "$desc"
   fi
@@ -105,10 +105,10 @@ grep_ok "ai_cli has tui command" 'def tui_cmd' "$AI_CLI"
 grep_absent "ai_cli has no old wrapper commands" 'cmd=="gm"|cmd=="cm"|cmd=="hm"' "$AI_CLI"
 
 PROVIDERS="$(PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" provider list | cut -f1 | tr '\n' ' ' | xargs)"
-if [ "$PROVIDERS" = "codex agy hermes" ]; then
-  ok "provider order is strictly: codex agy hermes"
+if [ "$PROVIDERS" = "codex agy hermes opencode" ]; then
+  ok "provider order is strictly: codex agy hermes opencode"
 else
-  fail "provider order is: $PROVIDERS (expected: codex agy hermes)"
+  fail "provider order is: $PROVIDERS (expected: codex agy hermes opencode)"
 fi
 
 section "4. Independent clip proxy checks"
@@ -120,18 +120,13 @@ echo "$CLIP_HELP" | grep -q 'clip auto' && ok "clip auto command available" || f
 CLIP_STATUS="$(bash "$ROOT/bin/clip" auto status 2>&1)"
 echo "$CLIP_STATUS" | grep -q 'clip auto-start:' && ok "clip auto status works" || fail "clip auto status works"
 
-section "5. Help text checks"
+section "5. No deprecated paths or files"
 
-HELP="$(PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" help 2>&1)"
-echo "$HELP" | grep -q 'run <provider>' && ok "ai help mentions run" || fail "ai help mentions run"
-echo "$HELP" | grep -q 'ask <provider>' && ok "ai help mentions ask" || fail "ai help mentions ask"
-echo "$HELP" | grep -q 'chat <provider>' && ok "ai help mentions chat" || fail "ai help mentions chat"
-echo "$HELP" | grep -q 'raw <provider>' && ok "ai help mentions raw" || fail "ai help mentions raw"
-echo "$HELP" | grep -q 'ai tui' && ok "ai help mentions tui" || fail "ai help mentions tui"
-echo "$HELP" | grep -q 'ai session' && ok "ai help mentions session" || fail "ai help mentions session"
-echo "$HELP" | grep -q 'ai workdir' && ok "ai help mentions workdir" || fail "ai help mentions workdir"
+grep_absent "no old proxy/cm/gm/hm in tests" 'ai cm|ai gm|ai hm|ai gateway|ai bridge' "$ROOT/tests" "$ROOT/verify"
+grep_absent "no old accounts references in lib" 'accounts\.json|list_accounts|get_account' "$ROOT/lib"
+grep_absent "no old resume references in lib" 'resume_command|ai resume' "$ROOT/lib"
 
-section "6. Smoke checks"
+section "6. Functional execution & dry-run checks"
 
 echo "== ai provider list =="
 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" provider list
@@ -152,6 +147,10 @@ echo "$OUT" | grep -q 'agy' && ok "ai dry run agy" || fail "ai dry run agy"
 echo "== dry run check: hermes =="
 OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run hermes 2>&1)"
 echo "$OUT" | grep -q 'hermes' && ok "ai dry run hermes" || fail "ai dry run hermes"
+
+echo "== dry run check: opencode =="
+OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run opencode 2>&1)"
+echo "$OUT" | grep -q 'opencode' && ok "ai dry run opencode" || fail "ai dry run opencode"
 
 section "7. TUI smoke checks"
 

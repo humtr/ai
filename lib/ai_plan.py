@@ -48,6 +48,8 @@ def _session_argv(provider:str, binary:str, profile_args:list[str], strategy:str
         return [binary, *profile_args, "--conversation"] + ([ref] if ref else [])
     if strategy == "hermes_resume":
         return [binary, *profile_args, "--resume"] + ([ref] if ref else [])
+    if strategy == "opencode_resume":
+        return [binary, *profile_args, "--session", ref] if ref else [binary, *profile_args, "--continue"]
     raise SystemExit(f"ERROR: provider {provider} does not support sessions")
 
 def _decode_jwt_claims(token: str) -> dict[str, Any]:
@@ -216,6 +218,9 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
                     elif provider == "hermes":
                         base_A = Path("~/.hermes/sessions").expanduser() if session_profile == "default" else Path(f"~/.hermes/profiles/{session_profile}/sessions").expanduser()
                         base_B = Path("~/.hermes/sessions").expanduser() if profile == "default" else Path(f"~/.hermes/profiles/{profile}/sessions").expanduser()
+                    elif provider == "opencode":
+                        base_A = Path("~/.local/share/opencode").expanduser() if session_profile == "default" else Path(f"~/.opencode-profiles/{session_profile}/.local/share/opencode").expanduser()
+                        base_B = Path("~/.local/share/opencode").expanduser() if profile == "default" else Path(f"~/.opencode-profiles/{profile}/.local/share/opencode").expanduser()
                     else:
                         base_A = None
                         base_B = None
@@ -279,6 +284,7 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
         if provider == "codex": argv=[binary,*profile_args,"exec","--skip-git-repo-check",prompt]
         elif provider == "agy": argv=[binary,*profile_args,"--dangerously-skip-permissions","-p",prompt]
         elif provider == "hermes": argv=[binary,*profile_args,"-z",prompt]
+        elif provider == "opencode": argv=[binary,*profile_args,"run",prompt]
         else: argv=[binary,*profile_args,prompt]
     else:
         raise SystemExit(f"ERROR: unsupported command type: {typ}")

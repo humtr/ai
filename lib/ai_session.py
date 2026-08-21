@@ -303,6 +303,74 @@ def parse_antigravity_session(record: dict[str, Any]) -> dict[str, Any]:
         entry["title"] = f"Antigravity Chat ({conversation_id[:8]})"
     return entry
 
+def scan_opencode_sessions(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
+    import sqlite3
+    roots = [("default", HOME / ".local" / "share" / "opencode" / "opencode.db")]
+    profiles = HOME / ".opencode-profiles"
+    if profiles.is_dir():
+        for ph in sorted(x for x in profiles.iterdir() if x.is_dir()):
+            db = ph / ".local" / "share" / "opencode" / "opencode.db"
+            if not db.is_file():
+                db = ph / "opencode.db"
+            if db.is_file():
+                roots.append((ph.name, db))
+    entries = []
+    for profile, db_path in roots:
+        if not db_path.is_file(): continue
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            cur = conn.cursor()
+            sessions = cur.execute(
+                "SELECT id, slug, directory, title, time_created, time_updated, time_archived FROM session ORDER BY time_updated DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            for sid, slug, directory, title, t_created, t_updated, t_archived in sessions:
+                if t_archived: continue
+                parts = cur.execute(
+                    "SELECT data FROM part WHERE session_id = ? ORDER BY time_created ASC", (sid,)
+                ).fetchall()
+                messages = []
+                for (data_raw,) in parts:
+                    try:
+                        data = json.loads(data_raw) if isinstance(data_raw, str) else {}
+                        t = data.get("type")
+                        if t == "text":
+                            add_message(messages, "user", data.get("text", ""))
+                        elif t in {"reasoning", "response"}:
+                            add_message(messages, "assistant", data.get("text", ""))
+                    except Exception:
+                        continue
+                mtime = (t_updated or t_created or 0) / 1000.0
+                iso_time = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(mtime)) if mtime else ""
+                users = [m for m in messages if m.get("role") == "user"]
+                assistants = [m for m in messages if m.get("role") == "assistant"]
+                last_user = users[-1].get("text", "") if users else ""
+                last_assistant = assistants[-1].get("text", "") if assistants else ""
+                session_title = title or (users[0].get("text", "") if users else slug or sid)
+                entry = finalize({
+                    "provider": "opencode",
+                    "profile": profile,
+                    "session_id": sid,
+                    "native_session_ref": sid,
+                    "slug": slug or "",
+                    "title": text_summary(session_title, 120) or sid,
+                    "last_prompt_summary": text_summary(last_user, 360),
+                    "last_response_summary": text_summary(last_assistant, 360),
+                    "turns": len(users),
+                    "updated": iso_time,
+                    "workdir": directory or "",
+                    "source": "session-db",
+                    "source_path": str(db_path),
+                    "path": str(db_path),
+                    "mtime": mtime,
+                    "size": db_path.stat().st_size if db_path.exists() else 0
+                })
+                entries.append(entry)
+            conn.close()
+        except Exception:
+            pass
+    return entries
+
 def parse_session_record(record:dict[str,Any]) -> dict[str,Any]:
     path_str = str(record.get("path") or "")
     if "antigravity-cli" in path_str:
@@ -328,6 +396,7 @@ def refresh_session_index(limit:int=SESSION_SCAN_LIMIT) -> dict[str,Any]:
         key=f"{rec['provider']}:{rec['path']}"; prev=old_by_key.get(key)
         if reusable and prev and prev.get("mtime")==rec.get("mtime") and prev.get("size")==rec.get("size"): entries.append(finalize(dict(prev)))
         else: entries.append(parse_session_record(rec))
+    entries.extend(scan_opencode_sessions(limit))
     entries.sort(key=lambda x: float(x.get("mtime") or 0), reverse=True)
     data={"version":ai_store.SESSION_INDEX_VERSION,"generated_at":ai_store.now_iso(),"sessions":entries}; save_session_index(data)
     _SESSION_INDEX_CACHE = data
@@ -407,7 +476,7 @@ def resolve_session(session_ref:str, provider:str|None=None, profile:str|None=No
             if provider and r.get("provider") != provider: continue
             if profile and r.get("profile") != profile: continue
             if workdir and ai_store.normalize_path(str(r.get("workdir") or "")) != ai_store.normalize_path(workdir): continue
-            candidates={str(r.get("session_id") or ""), str(r.get("native_session_ref") or ""), str(r.get("stable_session_key") or ""), str(r.get("stable_key") or "")}
+            candidates={str(r.get("session_id") or ""), str(r.get("native_session_ref") or ""), str(r.get("slug") or ""), str(r.get("stable_session_key") or ""), str(r.get("stable_key") or "")}
             if session_ref in candidates: found.append(r)
         return found
 

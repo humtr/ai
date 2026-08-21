@@ -56,6 +56,25 @@
         "supports_picker": true,
         "supports_last": true
       }
+    },
+    "opencode": {
+      "label": "OpenCode",
+      "binary": "opencode",
+      "profile": {
+        "supported": true,
+        "base_dir": "~/.opencode-profiles",
+        "strategy": "env_home",
+        "env_var": "HOME",
+        "default_uses_native_home": true
+      },
+      "session": {
+        "supported": true,
+        "strategy": "opencode_resume",
+        "supports_all": false,
+        "supports_specific_ref": true,
+        "supports_picker": true,
+        "supports_last": true
+      }
     }
   }
 }

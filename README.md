@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-- **`ai`**: Pure config-driven CLI launcher and curses TUI for primary AI assistants (`codex`, `agy`, `hermes`).
+- **`ai`**: Pure config-driven CLI launcher and curses TUI for primary AI assistants (`codex`, `agy`, `hermes`, `opencode`).
 - **`clip`**: Standalone Command Line Interface Proxy manager (Telegram gateways, web fetcher, approvals, Gemini/AGY proxy bridges).
 
 ---
@@ -18,6 +18,9 @@
 3. **`hermes`** (Hermes Agent)
    - Profile arg: `--profile <profile>`
    - Session resume: `hermes --resume <session-ref>`
+4. **`opencode`** (OpenCode AI)
+   - Profile home: `HOME` (`~/.local/share/opencode` or `~/.opencode-profiles/<profile>`)
+   - Session resume: `opencode --session <session-ref>` (or `opencode --continue`)
 
 ---
 
