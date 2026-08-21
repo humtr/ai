@@ -1340,10 +1340,8 @@ class App:
         if section == "workdir":
             if self.workdir_dropdown_open():
                 self.commit_workdir_dropdown()
-                return True
-            if getattr(self, "workdir_editing", False):
+            elif getattr(self, "workdir_editing", False):
                 self.commit_workdir_text_if_present()
-                return True
             self.set_section(self.command_focus_section())
         elif section in COMMAND_SECTIONS:
             self.last_command_section = section
@@ -1364,10 +1362,8 @@ class App:
         if section == "workdir":
             if self.workdir_dropdown_open():
                 self.commit_workdir_dropdown()
-                return True
-            if getattr(self, "workdir_editing", False):
+            elif getattr(self, "workdir_editing", False):
                 self.commit_workdir_text_if_present()
-                return True
             if self.can_focus_sessions():
                 self.set_section("session")
             else:
@@ -1387,10 +1383,12 @@ class App:
             return True
         if self.workdir_dropdown_open():
             self.commit_workdir_dropdown()
+            self.set_section(self.command_focus_section())
             return True
         section = self.section_name()
         if section == "workdir":
             self.commit_workdir_text_if_present()
+            self.set_section(self.command_focus_section())
             return True
         if section == "sessions":
             cmd = self.command_for_current_focus()
@@ -2493,10 +2491,9 @@ class App:
         child_rows = max(0, rows)
         active = self.active_section()
         
-        # Add 1 line empty space and DIRECTORY panel title (ALL CAP)
         self.add_line(y, 0, "", width - 1)
-        workdir_active = active == "workdir"
-        self.add_line(y + 1, 0, self.panel_title("DIRECTORY", workdir_active), width - 1, self.section_label_attr(workdir_active))
+        builder_active = active in BUILDER_SECTIONS
+        self.add_line(y + 1, 0, self.panel_title("COMMAND BUILDER", builder_active), width - 1, self.section_label_attr(builder_active))
         
         self.draw_workdir_row(y + 2, width)
         next_y = y + 3
@@ -2506,16 +2503,12 @@ class App:
         )
         if show_dropdown:
             next_y = self.draw_workdir_children(next_y, width, child_rows)
-        self.add_line(next_y, 0, "", width - 1)
-        next_y += 1
 
-        command_active = active in COMMAND_SECTIONS
-        self.add_line(next_y, 0, self.panel_title("COMMAND", command_active), width - 1, self.section_label_attr(command_active))
         providers = getattr(self, "providers", []) or [self.current_provider()]
-        self.draw_choice_row(next_y + 1, width, "provider", "Provider", [p.title() for p in providers], self.indices["provider"])
+        self.draw_choice_row(next_y, width, "provider", "Provider", [p.title() for p in providers], self.indices["provider"])
         profiles = getattr(self, "profiles", ["default"])
-        self.draw_choice_row(next_y + 2, width, "profile", "Profile", profiles, self.indices["profile"])
-        return next_y + 3
+        self.draw_choice_row(next_y + 1, width, "profile", "Profile", profiles, self.indices["profile"])
+        return next_y + 2
 
     def draw_sessions(self, y: int, width: int, rows: int) -> None:
         if rows <= 2:
@@ -2688,7 +2681,7 @@ class App:
             self.draw_sessions(sessions_y, w, max(0, h - sessions_y - 4))
             
             active_sec = self.active_section()
-            self.add_line(h - 4, 0, "Navigation: Tab cycles Workdir/Command/Sessions", w - 1, curses.A_DIM)
+            self.add_line(h - 4, 0, "Navigation: Tab cycles Builder/Sessions", w - 1, curses.A_DIM)
             if active_sec == "profile":
                 self.add_line(h - 3, 0, "Profile actions: Ctrl-A to add, Ctrl-D to delete", w - 1, curses.A_DIM)
             elif active_sec == "sessions":

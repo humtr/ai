@@ -321,7 +321,7 @@ MAIN_OUT="$TMP_BASE/main.out"
 run_tui "\033\033" "$MAIN_OUT"
 assert_contains "main shows default run command" "ai run codex" "$MAIN_OUT"
 assert_not_contains "main omits default profile arg" "--profile default" "$MAIN_OUT"
-assert_contains "main shows command heading" "COMMAND" "$MAIN_OUT"
+assert_contains "main shows command heading" "COMMAND BUILDER" "$MAIN_OUT"
 assert_contains "main shows scope row" "Scope" "$MAIN_OUT"
 assert_contains "main shows provider row" "Provider" "$MAIN_OUT"
 assert_contains "main shows profile row" "Profile" "$MAIN_OUT"
@@ -335,7 +335,7 @@ assert_contains "main shows sessions panel" "SESSION LIST" "$MAIN_OUT"
 assert_contains "main shows new session row" "New session" "$MAIN_OUT"
 assert_not_contains "main shows no latest session row" "Latest:" "$MAIN_OUT"
 assert_contains "main still shows session preview rows" "smoke prompt summary" "$MAIN_OUT"
-assert_contains "main documents panel tab navigation" "Tab cycles Workdir/Command/Sessions" "$MAIN_OUT"
+assert_contains "main documents panel tab navigation" "Tab cycles Builder/Sessions" "$MAIN_OUT"
 assert_contains "main documents cwd editor key" "/ edits cwd" "$MAIN_OUT"
 assert_contains "main documents esc quit" "Esc back/confirm quit" "$MAIN_OUT"
 
@@ -388,7 +388,7 @@ SESSION_UP_OUT="$(
 ENTER_WORKDIR_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.last_builder_section=app.section; app.last_command_section="provider"; app.workdir_layer="path"; app.handle_main_key(10); print(app.section)'
 )"
-[ "$ENTER_WORKDIR_OUT" = "0" ] && ok "enter moves from workdir tier to command tier" || { fail "enter moves from workdir tier to command tier"; printf 'actual: %s\n' "$ENTER_WORKDIR_OUT" >&2; }
+[ "$ENTER_WORKDIR_OUT" = "1" ] && ok "enter moves from workdir tier to command tier" || { fail "enter moves from workdir tier to command tier"; printf 'actual: %s\n' "$ENTER_WORKDIR_OUT" >&2; }
 
 ENTER_SESSIONS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("session"); app.last_builder_section=0; app.session_index=-1; app.session_scroll=0; app.current_sessions=lambda:[{"session_id":"s"}]; app.handle_main_key(10); print("{} {}".format(app.section, app.session_index))'
@@ -562,7 +562,7 @@ WORKDIR_TAB_FOCUS_OUT="$(
 WORKDIR_BAD_INPUT_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.last_builder_section=app.section; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_layer="children"; app.workdir_child_index=0; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print("{} {} {}".format(app.section, ai_tui.short(app.current_workdir_path()), app.workdir_layer))'
 )"
-[ "$WORKDIR_BAD_INPUT_OUT" = "0 ~/work/main/src path" ] && ok "workdir tab commits focused dropdown child and stays in workdir section" || { fail "workdir tab commits focused dropdown child and stays in workdir section"; printf 'actual: %s\n' "$WORKDIR_BAD_INPUT_OUT" >&2; }
+[ "$WORKDIR_BAD_INPUT_OUT" = "1 ~/work/main/src path" ] && ok "workdir tab commits focused dropdown child and advances to command tier" || { fail "workdir tab commits focused dropdown child and advances to command tier"; printf 'actual: %s\n' "$WORKDIR_BAD_INPUT_OUT" >&2; }
 
 WORKDIR_TYPE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_child_index=0; app.handle_main_key(ord("w")); print("{} {}".format(getattr(app, "workdir_text", None), app.workdir_child_index))'
@@ -695,7 +695,7 @@ WORKDIR_HOME_PREFIX_LEFT_RIGHT_OUT="$(
 WORKDIR_TAB_CHILD_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdir_text="~/work/main/"; app.workdir_layer="children"; app.workdir_child_index=1; app.session_index=0; app.session_scroll=0; app.handle_main_key(9); print("{} {} {} {} {}".format(app.workdir_text, app.workdir_layer, app.workdir_child_index, ai_tui.short(app.current_workdir_path()), app.section))'
 )"
-[ "$WORKDIR_TAB_CHILD_OUT" = "~/work/main/tests path -1 ~/work/main/tests 0" ] && ok "workdir tab commits focused dropdown child and stays in workdir section" || { fail "workdir tab commits focused dropdown child and stays in workdir section"; printf 'actual: %s\n' "$WORKDIR_TAB_CHILD_OUT" >&2; }
+[ "$WORKDIR_TAB_CHILD_OUT" = "~/work/main/tests path -1 ~/work/main/tests 1" ] && ok "workdir tab commits focused dropdown child and advances to command tier" || { fail "workdir tab commits focused dropdown child and advances to command tier"; printf 'actual: %s\n' "$WORKDIR_TAB_CHILD_OUT" >&2; }
 
 WORKDIR_VISUAL_LIST_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'from pathlib import Path; import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("workdir"); app.list_meta={}; app.workdir_text="~/wo"; app.workdir_modified=True; app.workdir_layer="inline"; app.workdir_child_index=-1; app.filtered_workdir_children=lambda:[Path("'"$HOME_FIXTURE"'/work")]; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.draw_workdir_row(0,100); app.draw_workdir_children(1,100,3); print(any(y == 1 and text == "work/" for y,text,attr in calls), any(y == 1 and attr & curses.A_REVERSE for y,text,attr in calls))'
@@ -730,7 +730,7 @@ WORKDIR_CHILD_OUT="$(
 
 NAV_OUT="$TMP_BASE/nav.out"
 run_tui "\t\t\t\t\033\033\033" "$NAV_OUT"
-assert_contains "tab toggles upper selection and sessions" "COMMAND" "$NAV_OUT"
+assert_contains "tab toggles upper selection and sessions" "COMMAND BUILDER" "$NAV_OUT"
 assert_contains "session list remains browsable" "smoke prompt summary one" "$NAV_OUT"
 
 SCROLL_OUT="$(
@@ -749,7 +749,7 @@ SESSION_ROWS_OUT="$(
 LAYOUT_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.indices={"mode":0,"provider":0,"profile":0,"workdir":0}; app.profiles=["default"]; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.workdirs=[]; app.workdir_child_index=0; app.list_meta={}; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda *args, **kwargs: None; y1=app.draw_controls(4,100,6); app.section=ai_tui.SECTIONS.index("workdir"); y2=app.draw_controls(4,100,6); print("{} {}".format(y1,y2))'
 )"
-[ "$LAYOUT_OUT" = "11 11" ] && ok "command builder reserves stable workdir panel height" || { fail "command builder reserves stable workdir panel height"; printf 'actual: %s\n' "$LAYOUT_OUT" >&2; }
+[ "$LAYOUT_OUT" = "9 9" ] && ok "command builder reserves stable workdir panel height" || { fail "command builder reserves stable workdir panel height"; printf 'actual: %s\n' "$LAYOUT_OUT" >&2; }
 
 SESSION_SCOPE_LABELS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.list_meta={}; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append(text); app.draw_choice_row(0,80,"session","Scope",ai_tui.SESSION_SCOPE_LABELS,0); print(" ".join([text for text in calls if text in set(ai_tui.SESSION_SCOPE_LABELS)]))'
