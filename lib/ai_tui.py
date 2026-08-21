@@ -34,9 +34,9 @@ SESSION_SCOPE_FIELDS = {
     "profile": {"profile"},
     "all": set(),
 }
-COMMAND_SECTIONS = ["session", "provider", "profile"]
-BUILDER_SECTIONS = ["session", "provider", "profile", "workdir"]
-SECTIONS = BUILDER_SECTIONS + ["sessions"]
+COMMAND_SECTIONS = ["provider", "profile"]
+BUILDER_SECTIONS = ["workdir", "provider", "profile"]
+SECTIONS = ["workdir", "provider", "profile", "session", "sessions"]
 
 
 TZ_UTC9 = datetime.timezone(datetime.timedelta(hours=9))
@@ -1161,10 +1161,10 @@ class App:
         self.workdir_editing = False
 
     def command_focus_section(self) -> str:
-        section = getattr(self, "last_command_section", "session")
+        section = getattr(self, "last_command_section", "provider")
         if section in COMMAND_SECTIONS:
             return section
-        return "session"
+        return "provider"
 
     def can_focus_sessions(self) -> bool:
         try:
@@ -1175,7 +1175,7 @@ class App:
     def tab_sections(self) -> list[str]:
         sections = ["workdir", self.command_focus_section()]
         if self.can_focus_sessions():
-            sections.append("sessions")
+            sections.append("session")
         return sections
 
     def normalize_focus(self) -> None:
@@ -1336,17 +1336,22 @@ class App:
     def handle_tab(self) -> bool:
         if self.in_run_confirm():
             self.leave_run_confirm("run cancelled")
-        if self.workdir_dropdown_open():
-            self.commit_workdir_dropdown()
-            if self.is_dry_run():
-                return True
         section = self.section_name()
         if section == "workdir":
+            if self.workdir_dropdown_open():
+                self.commit_workdir_dropdown()
+                return True
+            if getattr(self, "workdir_editing", False):
+                self.commit_workdir_text_if_present()
+                return True
             self.set_section(self.command_focus_section())
         elif section in COMMAND_SECTIONS:
             self.last_command_section = section
-            self.enter_sessions()
-        elif section == "sessions":
+            if self.can_focus_sessions():
+                self.set_section("session")
+            else:
+                self.set_section("workdir")
+        elif section in {"session", "sessions"}:
             self.set_section("workdir")
         else:
             self.set_section("workdir")
@@ -1355,17 +1360,22 @@ class App:
     def handle_shift_tab(self) -> bool:
         if self.in_run_confirm():
             self.leave_run_confirm("run cancelled")
-        if self.workdir_dropdown_open():
-            self.commit_workdir_dropdown()
-            if self.is_dry_run():
-                return True
         section = self.section_name()
         if section == "workdir":
-            self.enter_sessions()
+            if self.workdir_dropdown_open():
+                self.commit_workdir_dropdown()
+                return True
+            if getattr(self, "workdir_editing", False):
+                self.commit_workdir_text_if_present()
+                return True
+            if self.can_focus_sessions():
+                self.set_section("session")
+            else:
+                self.set_section(self.command_focus_section())
         elif section in COMMAND_SECTIONS:
             self.set_section("workdir")
-        elif section == "sessions":
-            target = getattr(self, "last_command_section", "profile") or "profile"
+        elif section in {"session", "sessions"}:
+            target = getattr(self, "last_command_section", "provider") or "provider"
             self.set_section(target)
         else:
             self.set_section("workdir")
@@ -1376,19 +1386,19 @@ class App:
             self.execute_run_confirm()
             return True
         if self.workdir_dropdown_open():
-            if self.commit_workdir_dropdown():
-                self.set_section(self.command_focus_section())
+            self.commit_workdir_dropdown()
             return True
         section = self.section_name()
+        if section == "workdir":
+            self.commit_workdir_text_if_present()
+            return True
         if section == "sessions":
             cmd = self.command_for_current_focus()
             if cmd is not None:
                 self.enter_run_confirm(cmd)
             return True
-        if section == "workdir":
-            if not self.commit_workdir_text_if_present():
-                return True
-            self.set_section(self.command_focus_section())
+        if section == "session":
+            self.enter_sessions()
             return True
         if section in COMMAND_SECTIONS:
             if self.can_focus_sessions():
@@ -2300,8 +2310,7 @@ class App:
             self.add_text(y, x, item, item_width, attr)
             x += item_width
             if offset + 1 < len(visible_items) and x < width - 1:
-                gap_attr = self.subdued_attr(active)
-                self.add_text(y, x, " " * gap, min(gap, width - 1 - x), gap_attr)
+                self.add_text(y, x, " " * gap, min(gap, width - 1 - x), 0)
                 x += gap
         if visible_start + len(visible_items) < len(items) and x < width - 1:
             self.add_text(y, x, "...", min(3, width - 1 - x), curses.A_DIM)
@@ -2770,19 +2779,39 @@ class App:
     def return_to_builder(self) -> None:
         self.section = max(0, min(self.last_builder_section, len(BUILDER_SECTIONS) - 1))
 
-    def move_section(self, direction: int) -> None:
+    def next_section(self) -> None:
+        section = self.active_section()
+        if section == "workdir":
+            self.commit_focused_workdir()
+            self.set_section("provider")
+        elif section == "provider":
+            self.set_section("profile")
+        elif section == "profile":
+            if self.can_focus_sessions():
+                self.set_section("session")
+        elif section == "session":
+            self.enter_sessions()
+        elif section == "sessions":
+            pass
+
+    def previous_section(self) -> None:
         section = self.active_section()
         if section == "sessions":
-            self.return_to_builder()
-            return
-        if section == "workdir":
-            if direction > 0:
-                self.set_section(self.command_focus_section())
-            return
-        if section in COMMAND_SECTIONS:
-            current = COMMAND_SECTIONS.index(section)
-            target = (current + direction) % len(COMMAND_SECTIONS)
-            self.set_section(COMMAND_SECTIONS[target])
+            self.set_section("session")
+        elif section == "session":
+            self.set_section("profile")
+        elif section == "profile":
+            self.set_section("provider")
+        elif section == "provider":
+            self.set_section("workdir")
+        elif section == "workdir":
+            pass
+
+    def move_section(self, direction: int) -> None:
+        if direction > 0:
+            self.next_section()
+        else:
+            self.previous_section()
 
     def toggle_panel(self) -> None:
         if self.active_section() == "sessions":
@@ -2791,35 +2820,13 @@ class App:
         else:
             self.enter_sessions()
 
-    def next_section(self) -> None:
-        section = self.active_section()
-        if section == "sessions":
-            return
-        if section == "workdir":
-            self.commit_focused_workdir()
-            self.set_section(self.command_focus_section())
-            return
-        if section in COMMAND_SECTIONS:
-            current = COMMAND_SECTIONS.index(section)
-            self.set_section(COMMAND_SECTIONS[min(current + 1, len(COMMAND_SECTIONS) - 1)])
-
-    def previous_section(self) -> None:
-        section = self.active_section()
-        if section == "workdir":
-            return
-        if section == "sessions":
-            return
-        if section in COMMAND_SECTIONS:
-            current = COMMAND_SECTIONS.index(section)
-            if current == 0:
-                self.set_section("workdir")
-            else:
-                self.set_section(COMMAND_SECTIONS[current - 1])
-
     def vertical_action(self, direction: int) -> None:
         section = self.active_section()
         if section == "sessions":
-            self.move_selection(direction)
+            if direction < 0 and self.session_index <= 0:
+                self.set_section("session")
+            else:
+                self.move_selection(direction)
         elif section == "workdir":
             if getattr(self, "workdir_layer", "path") == "children" or (getattr(self, "workdir_layer", "path") == "inline" and getattr(self, "workdir_editing", False)):
                 self.cycle_workdir_child(direction)
