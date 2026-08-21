@@ -27,9 +27,7 @@ Resources:
   ai tui
 
 Removed:
-  ai resume ...
-  ai cm / ai gm / ai hm
-  ai bridge / ai gateway / ai gw (managed via clip)
+  legacy wrappers and bridges (use ai run -s / clip instead)
 """)
 
 def _require_value(args:list[str], i:int, option:str) -> str:

@@ -53,9 +53,9 @@ grep_absent() {
   local desc="$1"
   local pat="$2"
   shift 2
-  if grep -rqE "$pat" "$@"; then
+  if grep --exclude-dir=__pycache__ --exclude=final-verify.sh -rqE "$pat" "$@"; then
     fail "$desc"
-    grep -rnE "$pat" "$@" | sed -n '1,80p'
+    grep --exclude-dir=__pycache__ --exclude=final-verify.sh -rnE "$pat" "$@" | sed -n '1,80p'
   else
     ok "$desc"
   fi

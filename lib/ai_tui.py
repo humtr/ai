@@ -672,6 +672,7 @@ class App:
         if not sessions or self.session_index < 0 or self.session_index >= len(sessions):
             return
         if sessions[self.session_index].get("_kind") == "new":
+            self.session_memory[self.session_scope_key(scope)] = "__new__"
             return
         session_key = self.stable_session_key(sessions[self.session_index])
         if not session_key:
@@ -687,6 +688,12 @@ class App:
             return
         remembered = self.session_memory.get(self.session_scope_key(scope), "")
         if remembered:
+            if remembered == "__new__":
+                for idx, item in enumerate(sessions):
+                    if item.get("_kind") == "new":
+                        self.session_index = idx
+                        self.session_scroll = 0
+                        return
             for idx, item in enumerate(sessions):
                 if self.stable_session_key(item) == remembered:
                     self.session_index = idx
@@ -1340,13 +1347,23 @@ class App:
         if section == "workdir":
             if self.workdir_dropdown_open():
                 self.commit_workdir_dropdown()
+                self.focus_workdir_path()
+                self.set_section("workdir")
             elif getattr(self, "workdir_editing", False):
                 self.commit_workdir_text_if_present()
-            self.set_section(self.command_focus_section())
+                self.focus_workdir_path()
+                self.set_section("workdir")
+            else:
+                current = self.normalize_workdir_path(Path(self.current_workdir_path()))
+                if not getattr(self, "workdir_override", False) and current == self.home_path():
+                    self.open_workdir_dropdown(current)
+                else:
+                    self.open_workdir_dropdown(current.parent, current)
+                self.set_section("workdir")
         elif section in COMMAND_SECTIONS:
             self.last_command_section = section
             if self.can_focus_sessions():
-                self.set_section("session")
+                self.enter_sessions()
             else:
                 self.set_section("workdir")
         elif section in {"session", "sessions"}:
@@ -1362,10 +1379,12 @@ class App:
         if section == "workdir":
             if self.workdir_dropdown_open():
                 self.commit_workdir_dropdown()
+                self.focus_workdir_path()
             elif getattr(self, "workdir_editing", False):
                 self.commit_workdir_text_if_present()
+                self.focus_workdir_path()
             if self.can_focus_sessions():
-                self.set_section("session")
+                self.enter_sessions()
             else:
                 self.set_section(self.command_focus_section())
         elif section in COMMAND_SECTIONS:
@@ -1383,12 +1402,20 @@ class App:
             return True
         if self.workdir_dropdown_open():
             self.commit_workdir_dropdown()
-            self.set_section(self.command_focus_section())
+            self.focus_workdir_path()
+            if self.can_focus_sessions():
+                self.enter_sessions()
+            else:
+                self.set_section(self.command_focus_section())
             return True
         section = self.section_name()
         if section == "workdir":
             self.commit_workdir_text_if_present()
-            self.set_section(self.command_focus_section())
+            self.focus_workdir_path()
+            if self.can_focus_sessions():
+                self.enter_sessions()
+            else:
+                self.set_section(self.command_focus_section())
             return True
         if section == "sessions":
             cmd = self.command_for_current_focus()
@@ -2823,12 +2850,6 @@ class App:
         elif section == "workdir":
             if getattr(self, "workdir_layer", "path") == "children" or (getattr(self, "workdir_layer", "path") == "inline" and getattr(self, "workdir_editing", False)):
                 self.cycle_workdir_child(direction)
-            elif direction > 0:
-                current = self.normalize_workdir_path(Path(self.current_workdir_path()))
-                if not getattr(self, "workdir_override", False) and current == self.home_path():
-                    self.open_workdir_dropdown(current)
-                else:
-                    self.open_workdir_dropdown(current.parent, current)
             else:
                 self.move_section(direction)
         else:
@@ -2911,7 +2932,8 @@ class App:
                     self.commit_focused_workdir()
                 self.open_workdir_dropdown(self.normalize_workdir_path(Path(self.current_workdir_path())))
         elif section == "sessions":
-            self.move_selection(direction)
+            self.remember_session_selection()
+            self.change_option("session", direction)
 
     def handle_workdir_text_key(self, ch: int) -> bool:
         if self.active_section() != "workdir":
