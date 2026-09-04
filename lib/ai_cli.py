@@ -25,9 +25,6 @@ Resources:
   ai session refresh|list|show|resolve
   ai workdir list|add|archive
   ai tui
-
-Removed:
-  legacy wrappers and bridges (use ai run -s / clip instead)
 """)
 
 def _require_value(args:list[str], i:int, option:str) -> str:
@@ -100,15 +97,11 @@ def main(argv:list[str]|None=None) -> int:
     if cmd in {"-h","--help","help"}: usage(); return 0
     if cmd=="__json": return json_cmd(argv)
     if ai_spec.is_provider(cmd): print(f"ERROR: provider-first syntax is not supported: ai {cmd}\nUse: ai run {cmd} ...", file=sys.stderr); return 2
-    if cmd=="resume": print("ERROR: subcommand 'resume' is not available.\nUse: ai run <provider> -s <session-ref>", file=sys.stderr); return 2
-    if cmd in {"cm","gm","hm"}: print(f"ERROR: ai {cmd} is disabled to avoid double wrapping.", file=sys.stderr); return 2
     if cmd in {"run","ask","chat","raw"}: return run_command(cmd, argv)
     if cmd=="provider": return ai_resource.provider_cmd(argv)
     if cmd=="profile": return ai_resource.profile_cmd(argv)
     if cmd=="session": return ai_resource.session_cmd(argv)
     if cmd=="workdir": return ai_resource.workdir_cmd(argv)
-    if cmd in {"bridge", "gateway", "gw"}:
-        print(f"ERROR: ai {cmd} was moved to clip proxy suite. Use: clip ...", file=sys.stderr); return 2
     if cmd=="tui": return tui_cmd(argv)
     if cmd=="status":
         ai_resource.provider_cmd(["list"]); return 0

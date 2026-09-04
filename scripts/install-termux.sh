@@ -193,6 +193,13 @@ bash -n "$DEST_CLIP"
 bash -n "$DEST_AGY"
 
 say "-- resolution --"
+RESOLVED_AI="$(command -v ai || true)"
+say "command -v ai: ${RESOLVED_AI:-not found}"
+if [ -n "$RESOLVED_AI" ] && [ "$RESOLVED_AI" != "$DEST_BIN" ]; then
+  say "WARNING: PATH resolves ai to a different file:"
+  say "  resolved: $RESOLVED_AI"
+  say "  installed: $DEST_BIN"
+fi
 RESOLVED="$(command -v clip || true)"
 say "command -v clip: ${RESOLVED:-not found}"
 if [ -n "$RESOLVED" ] && [ "$RESOLVED" != "$DEST_CLIP" ]; then

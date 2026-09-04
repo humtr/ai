@@ -100,9 +100,12 @@ fi
 section "3. ai structure and provider order checks"
 
 AI_CLI="$ROOT/lib/ai_cli.py"
+AI_ENTRYPOINT="$ROOT/bin/ai"
 grep_ok "ai_cli has common command model" 'ai run <provider> --cwd DIR' "$AI_CLI"
 grep_ok "ai_cli has tui command" 'def tui_cmd' "$AI_CLI"
 grep_absent "ai_cli has no old wrapper commands" 'cmd=="gm"|cmd=="cm"|cmd=="hm"' "$AI_CLI"
+grep_ok "ai entrypoint uses installed runtime" '\.config/ai/lib' "$AI_ENTRYPOINT"
+grep_absent "ai entrypoint has no source-tree fallback" 'SELF_DIR|BASH_SOURCE|\.\./lib/ai_cli\.py' "$AI_ENTRYPOINT"
 
 PROVIDERS="$(PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" provider list | cut -f1 | tr '\n' ' ' | xargs)"
 if [ "$PROVIDERS" = "codex agy hermes opencode" ]; then

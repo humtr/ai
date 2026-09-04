@@ -1,17 +1,11 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# ai = thin entrypoint for Stage 6 resource/run core.
+# ai = thin entrypoint for the installed runtime.
 set -euo pipefail
-SELF="${BASH_SOURCE[0]:-$0}"
-SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd -P || pwd)"
-if [ -n "${AI_LIB_DIR:-}" ] && [ -f "$AI_LIB_DIR/ai_cli.py" ]; then
-  LIB="$AI_LIB_DIR"
-elif [ -f "$SELF_DIR/../lib/ai_cli.py" ]; then
-  LIB="$(cd "$SELF_DIR/../lib" && pwd -P)"
-elif [ -f "$HOME/.config/ai/lib/ai_cli.py" ]; then
-  LIB="$HOME/.config/ai/lib"
-else
-  echo "ERROR: ai_cli.py not found" >&2
+
+LIB="${AI_LIB_DIR:-$HOME/.config/ai/lib}"
+if [ ! -f "$LIB/ai_cli.py" ]; then
+  echo "ERROR: ai runtime is not installed: $LIB" >&2
   exit 127
 fi
-export AI_LIB_DIR="$LIB"
+
 exec python "$LIB/ai_cli.py" "$@"
