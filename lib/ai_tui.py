@@ -13,6 +13,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+import ai_plan
 import ai_spec
 import ai_provider
 import ai_store
@@ -811,6 +812,14 @@ class App:
     def session_command(self, item: dict[str, Any]) -> list[str]:
         return [AI_BIN, "run", *self.session_args(item, display=False)]
 
+    def validate_session_provider(self, item: dict[str, Any]) -> bool:
+        source_provider = str(item.get("provider") or self.current_provider())
+        warning = ai_plan.session_provider_warning(source_provider, self.current_provider())
+        if warning:
+            self.message = warning
+            return False
+        return True
+
     def session_launch_profile(self, item: dict[str, Any]) -> str:
         selected = self.current_profile_label() or "default"
         provider = str(item.get("provider") or self.current_provider())
@@ -1312,6 +1321,8 @@ class App:
                 and selected.get("_kind") != "new"
                 and str(selected.get("native_session_ref") or selected.get("session_id") or "")
             ):
+                if not self.validate_session_provider(selected):
+                    return None
                 return self.session_command(selected)
         if not self.validate_builder_profile():
             return None
@@ -2173,6 +2184,8 @@ class App:
         session_ref = str(item.get("native_session_ref") or item.get("session_id") or "")
         if not session_ref:
             self.message = "selected session has no id"
+            return
+        if not self.validate_session_provider(item):
             return
         self.confirm_exec_or_preview(self.session_command(item))
 
