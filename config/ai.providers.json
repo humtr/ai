@@ -17,7 +17,72 @@
         "supports_specific_ref": true,
         "supports_picker": true,
         "supports_last": true
-      }
+      },
+      "options": [
+        {
+          "id": "sandbox",
+          "label": "Sandbox",
+          "flag": "--sandbox",
+          "type": "choice",
+          "choices": ["off", "danger-full-access", "workspace-write", "read-only"],
+          "default": "off"
+        },
+        {
+          "id": "approval",
+          "label": "Approval",
+          "flag": "--ask-for-approval",
+          "type": "choice",
+          "choices": ["off", "never", "on-request"],
+          "default": "off"
+        },
+        {
+          "id": "search",
+          "label": "Search",
+          "flag": "--search",
+          "type": "toggle",
+          "default": false
+        },
+        {
+          "id": "context",
+          "label": "Context",
+          "flag": "-c",
+          "type": "choice",
+          "choices": ["off", "200k", "500k", "1M", "1050k", "2M"],
+          "default": "off",
+          "args_map": {
+            "200k": [
+              "-c", "model_context_window=200000",
+              "-c", "model_auto_compact_token_limit=180000",
+              "-c", "model_auto_compact_token_limit_scope=total"
+            ],
+            "500k": [
+              "-c", "model_context_window=500000",
+              "-c", "model_auto_compact_token_limit=450000",
+              "-c", "model_auto_compact_token_limit_scope=total"
+            ],
+            "1M": [
+              "-c", "model_context_window=1000000",
+              "-c", "model_auto_compact_token_limit=900000",
+              "-c", "model_auto_compact_token_limit_scope=total"
+            ],
+            "1050k": [
+              "-c", "model_context_window=1050000",
+              "-c", "model_auto_compact_token_limit=900000",
+              "-c", "model_auto_compact_token_limit_scope=total"
+            ],
+            "1.05M": [
+              "-c", "model_context_window=1050000",
+              "-c", "model_auto_compact_token_limit=900000",
+              "-c", "model_auto_compact_token_limit_scope=total"
+            ],
+            "2M": [
+              "-c", "model_context_window=2000000",
+              "-c", "model_auto_compact_token_limit=1800000",
+              "-c", "model_auto_compact_token_limit_scope=total"
+            ]
+          }
+        }
+      ]
     },
     "agy": {
       "label": "Agy",
@@ -36,7 +101,32 @@
         "supports_specific_ref": true,
         "supports_picker": true,
         "supports_last": true
-      }
+      },
+      "options": [
+        {
+          "id": "skip_permissions",
+          "label": "Auto-Approve",
+          "flag": "--dangerously-skip-permissions",
+          "type": "toggle",
+          "default": false
+        },
+        {
+          "id": "mode",
+          "label": "Mode",
+          "flag": "--mode",
+          "type": "choice",
+          "choices": ["off", "plan", "accept-edits"],
+          "default": "off"
+        },
+        {
+          "id": "effort",
+          "label": "Effort",
+          "flag": "--effort",
+          "type": "choice",
+          "choices": ["off", "low", "medium", "high"],
+          "default": "off"
+        }
+      ]
     },
     "hermes": {
       "label": "Hermes",
@@ -55,7 +145,16 @@
         "supports_specific_ref": true,
         "supports_picker": true,
         "supports_last": true
-      }
+      },
+      "options": [
+        {
+          "id": "yes",
+          "label": "Auto-Confirm",
+          "flag": "-y",
+          "type": "toggle",
+          "default": false
+        }
+      ]
     },
     "opencode": {
       "label": "OpenCode",
@@ -74,7 +173,23 @@
         "supports_specific_ref": true,
         "supports_picker": true,
         "supports_last": true
-      }
+      },
+      "options": [
+        {
+          "id": "auto",
+          "label": "Auto-Approve",
+          "flag": "--auto",
+          "type": "toggle",
+          "default": false
+        },
+        {
+          "id": "mini",
+          "label": "Mini UI",
+          "flag": "--mini",
+          "type": "toggle",
+          "default": false
+        }
+      ]
     }
   }
 }

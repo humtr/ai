@@ -33,7 +33,7 @@ def _require_value(args:list[str], i:int, option:str) -> str:
     return args[i + 1]
 
 def parse_common(args:list[str]):
-    profile="default"; directory=None; session=None; here=False; all_sessions=False; out=[]; i=0
+    profile="default"; directory=None; session=None; here=False; all_sessions=False; context=None; out=[]; i=0
     while i < len(args):
         a=args[i]
         if a in {"-p","--profile"}:
@@ -45,28 +45,59 @@ def parse_common(args:list[str]):
             session=_require_value(args, i, a); i+=2
         elif a in {"-d","--directory","--cwd","--cd","-C"}:
             directory=_require_value(args, i, a); i+=2
+        elif a=="--context":
+            context=_require_value(args, i, a); i+=2
         elif a=="--account": raise SystemExit("--account was removed; use --profile NAME")
         elif a=="--home": raise SystemExit("--home was removed; use --profile NAME")
         elif a=="--here": here=True; i+=1
         elif a=="--all": all_sessions=True; i+=1
         elif a=="--": out.extend(args[i+1:]); break
         else: out.append(a); i+=1
-    return profile,directory,session,here,all_sessions,out
+    return profile,directory,session,here,all_sessions,context,out
+
+def resolve_context_args(provider: str, context: str) -> list[str]:
+    pspec = ai_spec.provider_spec(provider)
+    for opt in pspec.get("options", []):
+        if opt.get("id") == "context":
+            args_map = opt.get("args_map", {})
+            if context in args_map:
+                mapped = args_map[context]
+                return list(mapped) if isinstance(mapped, list) else [mapped]
+    val = context.strip().lower()
+    mult = 1
+    if val.endswith("k"):
+        mult = 1000
+        val = val[:-1]
+    elif val.endswith("m"):
+        mult = 1000000
+        val = val[:-1]
+    try:
+        limit = int(float(val) * mult)
+        compact = 900000 if limit in {1000000, 1050000} else (int(limit * 0.85) if limit < 1000000 else int(limit * 0.88))
+        return [
+            "-c", f"model_context_window={limit}",
+            "-c", f"model_auto_compact_token_limit={compact}",
+            "-c", "model_auto_compact_token_limit_scope=total"
+        ]
+    except Exception:
+        raise SystemExit(f"ERROR: invalid context window format: '{context}' (use e.g. 200k, 500k, 1M, 1050k, 2M)")
 
 def run_command(command:str, argv:list[str]) -> int:
     if not argv: print(f"Usage: ai {command} <provider> ...", file=sys.stderr); return 2
     provider=argv[0]
     if not ai_spec.is_provider(provider): print(f"ERROR: unknown provider: {provider}", file=sys.stderr); return 2
     try:
-        profile,directory,session,here,all_sessions,rest=parse_common(argv[1:])
+        profile,directory,session,here,all_sessions,context,rest=parse_common(argv[1:])
     except SystemExit as e:
         msg=str(e)
         if msg and msg != "0": print(msg, file=sys.stderr)
         return int(e.code) if isinstance(e.code,int) else 2
     prompt=None; native_args=[]
-    typ=ai_spec.command_spec(command).get("type")
-    if typ=="inline_prompt": prompt=" ".join(rest).strip();
-    elif typ=="native_passthrough": native_args=rest
+    cspec=ai_spec.command_spec(command); typ=cspec.get("type")
+    if context:
+        native_args.extend(resolve_context_args(provider, context))
+    if typ=="inline_prompt": prompt=" ".join(rest).strip()
+    elif typ=="native_passthrough" or cspec.get("accepts_native_args"): native_args.extend(rest)
     elif rest: print(f"ERROR: unexpected arguments for {command}: {' '.join(rest)}", file=sys.stderr); return 2
     try:
         spec=ai_plan.LaunchSpec(command=command, provider=provider, profile=profile, directory=directory, session_ref=session, prompt=prompt, native_args=native_args, here=here, all_sessions=all_sessions)

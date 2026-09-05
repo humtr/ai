@@ -110,13 +110,28 @@ def add_agy_session_record(records:list[dict[str,Any]], profile:str, path:Path, 
             source_profile = resolved_profile
     add_session_record(records, "agy", source_profile, source_path, workdir_hint)
 
+class SessionRecords(list):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_paths: set[tuple[str, str]] = set()
+
 def add_session_record(records:list[dict[str,Any]], provider:str, profile:str, path:Path, workdir_hint:str="") -> None:
     st=safe_stat(path)
     if st is None or not path.is_file(): return
+    try:
+        resolved = str(path.resolve())
+    except OSError:
+        resolved = str(path)
+    seen = getattr(records, "seen_paths", None)
+    if seen is not None:
+        key = (provider, resolved)
+        if key in seen:
+            return
+        seen.add(key)
     records.append({"provider":provider,"profile":profile,"path":path,"workdir_hint":workdir_hint,"mtime":st.st_mtime,"size":st.st_size})
 
 def discover_session_files(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
-    records=[]
+    records = SessionRecords()
     codex_sessions=HOME/".codex"/"sessions"
     if codex_sessions.is_dir():
         for p in codex_sessions.rglob("*.jsonl"): add_codex_session_record(records,"default",p)
@@ -195,19 +210,20 @@ def entry_from_messages(record:dict[str,Any], meta:dict[str,Any], messages:list[
 def parse_codex_session(record:dict[str,Any]) -> dict[str,Any]:
     path=Path(record["path"]); meta={"session_id":codex_session_id(path),"workdir":"","updated":""}; messages=[]; fallback=[]; found_session_meta=False
     try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            try: item=json.loads(line)
-            except json.JSONDecodeError: continue
-            payload=item.get("payload") if isinstance(item.get("payload"), dict) else {}; ts=str(item.get("timestamp") or payload.get("timestamp") or "")
-            if ts: meta["updated"]=ts
-            if item.get("type")=="session_meta":
-                if not found_session_meta:
-                    meta["session_id"]=str(payload.get("id") or meta["session_id"]); meta["workdir"]=str(payload.get("cwd") or meta["workdir"]); found_session_meta=True
-                continue
-            if item.get("type")=="response_item" and payload.get("type")=="message": add_message(messages, str(payload.get("role") or ""), payload.get("content"), ts); continue
-            if item.get("type")=="event_msg":
-                if payload.get("type")=="user_message": add_message(fallback,"user",payload.get("message"),ts)
-                elif payload.get("type")=="agent_message": add_message(fallback,"assistant",payload.get("message"),ts)
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try: item=json.loads(line)
+                except json.JSONDecodeError: continue
+                payload=item.get("payload") if isinstance(item.get("payload"), dict) else {}; ts=str(item.get("timestamp") or payload.get("timestamp") or "")
+                if ts: meta["updated"]=ts
+                if item.get("type")=="session_meta":
+                    if not found_session_meta:
+                        meta["session_id"]=str(payload.get("id") or meta["session_id"]); meta["workdir"]=str(payload.get("cwd") or meta["workdir"]); found_session_meta=True
+                    continue
+                if item.get("type")=="response_item" and payload.get("type")=="message": add_message(messages, str(payload.get("role") or ""), payload.get("content"), ts); continue
+                if item.get("type")=="event_msg":
+                    if payload.get("type")=="user_message": add_message(fallback,"user",payload.get("message"),ts)
+                    elif payload.get("type")=="agent_message": add_message(fallback,"assistant",payload.get("message"),ts)
     except OSError: pass
     return entry_from_messages(record, meta, messages or fallback)
 
@@ -258,41 +274,40 @@ def parse_antigravity_session(record: dict[str, Any]) -> dict[str, Any]:
     
     try:
         if path.exists():
-            # Read first few lines to extract workdir hint if available from tool_calls args
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            for line in lines:
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                
-                # Check tool calls for directory paths
-                if "tool_calls" in item:
-                    for tc in item["tool_calls"] or []:
-                        args = tc.get("args") or {}
-                        # Look for common path arguments in tool_calls
-                        for path_arg in ("Cwd", "DirectoryPath", "SearchPath", "TargetFile"):
-                            if path_arg in args and isinstance(args[path_arg], str):
-                                val = args[path_arg].strip('"')
-                                if val:
-                                    # Normalize / extract directory path
-                                    try:
-                                        p = Path(val)
-                                        meta["workdir"] = str(p.parent if p.is_file() else p)
-                                        break
-                                    except Exception:
-                                        pass
-                        if meta["workdir"]:
-                            break
-                
-                k = item.get("type")
-                if k == "USER_INPUT":
-                    content = item.get("content") or ""
-                    # strip tags if needed, but summary is fine
-                    add_message(messages, "user", content)
-                elif k == "PLANNER_RESPONSE":
-                    content = item.get("content") or ""
-                    add_message(messages, "assistant", content)
+            with path.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    
+                    # Check tool calls for directory paths
+                    if "tool_calls" in item:
+                        for tc in item["tool_calls"] or []:
+                            args = tc.get("args") or {}
+                            # Look for common path arguments in tool_calls
+                            for path_arg in ("Cwd", "DirectoryPath", "SearchPath", "TargetFile"):
+                                if path_arg in args and isinstance(args[path_arg], str):
+                                    val = args[path_arg].strip('"')
+                                    if val:
+                                        # Normalize / extract directory path
+                                        try:
+                                            p = Path(val)
+                                            meta["workdir"] = str(p.parent if p.is_file() else p)
+                                            break
+                                        except Exception:
+                                            pass
+                            if meta["workdir"]:
+                                break
+                    
+                    k = item.get("type")
+                    if k == "USER_INPUT":
+                        content = item.get("content") or ""
+                        # strip tags if needed, but summary is fine
+                        add_message(messages, "user", content)
+                    elif k == "PLANNER_RESPONSE":
+                        content = item.get("content") or ""
+                        add_message(messages, "assistant", content)
     except OSError:
         pass
         

@@ -37,19 +37,20 @@ def _guard(command:str, prompt:str) -> str:
         return "도구, 검색, 파일 탐색, 파일 읽기, 파일 쓰기, 셸 실행을 사용하지 말고 답해. 이 지시는 보안 경계가 아니라 응답 방식 요청이다.\n\n" + prompt
     return prompt
 
-def _session_argv(provider:str, binary:str, profile_args:list[str], strategy:str, ref:str|None, all_sessions:bool) -> list[str]:
+def _session_argv(provider:str, binary:str, profile_args:list[str], strategy:str, ref:str|None, all_sessions:bool, native_args:list[str]|None=None) -> list[str]:
+    extra=list(native_args or [])
     if strategy == "codex_resume":
-        argv=[binary, *profile_args, "resume"]
+        argv=[binary, *profile_args, *extra, "resume"]
         if all_sessions: argv.append("--all")
         if ref: argv.append(ref)
         return argv
     if all_sessions: raise SystemExit(f"ERROR: --all is not supported for {provider}")
     if strategy == "agy_resume":
-        return [binary, *profile_args, "--conversation"] + ([ref] if ref else [])
+        return [binary, *profile_args, *extra, "--conversation"] + ([ref] if ref else [])
     if strategy == "hermes_resume":
-        return [binary, *profile_args, "--resume"] + ([ref] if ref else [])
+        return [binary, *profile_args, *extra, "--resume"] + ([ref] if ref else [])
     if strategy == "opencode_resume":
-        return [binary, *profile_args, "--session", ref] if ref else [binary, *profile_args, "--continue"]
+        return [binary, *profile_args, *extra, "--session", ref] if ref else [binary, *profile_args, *extra, "--continue"]
     raise SystemExit(f"ERROR: provider {provider} does not support sessions")
 
 
@@ -163,10 +164,10 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
     if typ == "launch":
         if session_ref:
             strategy=(pspec.get("session") or {}).get("strategy","none")
-            argv=_session_argv(provider,binary,profile_args,strategy,session_ref,spec.all_sessions)
+            argv=_session_argv(provider,binary,profile_args,strategy,session_ref,spec.all_sessions,spec.native_args)
         else:
             if spec.all_sessions: raise SystemExit("ERROR: --all requires a session/picker-capable command")
-            argv=[binary,*profile_args]
+            argv=[binary,*profile_args,*spec.native_args]
     elif typ == "native_passthrough":
         argv=[binary,*profile_args,*spec.native_args]
     elif typ == "inline_prompt":

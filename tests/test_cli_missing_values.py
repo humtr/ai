@@ -20,7 +20,7 @@ def expect_missing_value(args: list[str]) -> None:
 
 
 def main() -> None:
-    for opt in ("-p", "--profile", "-s", "--session", "-d", "--directory", "--cwd", "--cd", "-C"):
+    for opt in ("-p", "--profile", "-s", "--session", "-d", "--directory", "--cwd", "--cd", "-C", "--context"):
         expect_missing_value([opt])
         expect_missing_value([opt, "--"])
 

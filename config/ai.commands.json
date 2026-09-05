@@ -5,7 +5,7 @@
       "tui_visible": true,
       "accepts_session": true,
       "accepts_prompt": false,
-      "accepts_native_args": false
+      "accepts_native_args": true
     },
     "ask": {
       "type": "inline_prompt",
