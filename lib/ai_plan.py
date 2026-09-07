@@ -160,7 +160,13 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
 
         elif not directory and not spec.here:
             raise SystemExit("ERROR: session workdir is unknown. Use -d/--directory DIR or --here.")
-    cwd=ai_store.normalize_path(directory) if directory else str(Path.cwd())
+    if directory:
+        p = Path(directory).expanduser()
+        if not p.is_dir():
+            raise SystemExit(f"ERROR: directory not found: {directory}")
+        cwd = ai_store.normalize_path(directory)
+    else:
+        cwd = str(Path.cwd())
     if typ == "launch":
         if session_ref:
             strategy=(pspec.get("session") or {}).get("strategy","none")
@@ -185,5 +191,8 @@ def execute_plan(plan: ExecutionPlan) -> int:
     env=os.environ.copy(); env.update(plan.env)
     if os.environ.get("AI_DRY_RUN"):
         import json; print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2)); return 0
-    os.chdir(plan.cwd)
+    try:
+        os.chdir(plan.cwd)
+    except OSError as e:
+        raise SystemExit(f"ERROR: cannot change directory to {plan.cwd}: {e}")
     os.execvpe(plan.argv[0], plan.argv, env)

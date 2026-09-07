@@ -24,62 +24,93 @@
           "label": "Sandbox",
           "flag": "--sandbox",
           "type": "choice",
-          "choices": ["off", "danger-full-access", "workspace-write", "read-only"],
-          "default": "off"
+          "choices": ["danger-full-access (default)", "dangerously-bypass-approvals-and-sandbox"],
+          "default": "danger-full-access (default)",
+          "args_map": {
+            "danger-full-access (default)": [],
+            "danger-full-access": ["--sandbox", "danger-full-access"],
+            "dangerously-bypass-approvals-and-sandbox": ["--dangerously-bypass-approvals-and-sandbox"],
+            "danger-bypass": ["--dangerously-bypass-approvals-and-sandbox"]
+          }
         },
         {
           "id": "approval",
           "label": "Approval",
           "flag": "--ask-for-approval",
           "type": "choice",
-          "choices": ["off", "never", "on-request"],
-          "default": "off"
+          "choices": ["on-request (default)", "never"],
+          "default": "on-request (default)",
+          "args_map": {
+            "on-request (default)": [],
+            "on-request": ["--ask-for-approval", "on-request"],
+            "never": ["--ask-for-approval", "never"]
+          }
         },
         {
-          "id": "search",
-          "label": "Search",
-          "flag": "--search",
-          "type": "toggle",
-          "default": false
+          "id": "reviewer",
+          "label": "Reviewer",
+          "type": "choice",
+          "choices": ["auto_review (default)", "human"],
+          "default": "auto_review (default)",
+          "args_map": {
+            "auto_review (default)": [],
+            "auto_review": ["-c", "approvals_reviewer=\"auto_review\""],
+            "auto (default)": [],
+            "auto": ["-c", "approvals_reviewer=\"auto_review\""],
+            "human": ["-c", "approvals_reviewer=\"human\""]
+          }
         },
         {
           "id": "context",
           "label": "Context",
           "flag": "-c",
           "type": "choice",
-          "choices": ["off", "200k", "500k", "1M", "1050k", "2M"],
-          "default": "off",
+          "choices": ["272k (default)", "372k", "1M", "custom"],
+          "default": "272k (default)",
           "args_map": {
-            "200k": [
-              "-c", "model_context_window=200000",
-              "-c", "model_auto_compact_token_limit=180000",
-              "-c", "model_auto_compact_token_limit_scope=total"
+            "272k (default)": [],
+            "272k": [
+              "-c", "model_context_window=272000"
             ],
-            "500k": [
-              "-c", "model_context_window=500000",
-              "-c", "model_auto_compact_token_limit=450000",
-              "-c", "model_auto_compact_token_limit_scope=total"
+            "372k": [
+              "-c", "model_context_window=372000"
             ],
             "1M": [
-              "-c", "model_context_window=1000000",
-              "-c", "model_auto_compact_token_limit=900000",
-              "-c", "model_auto_compact_token_limit_scope=total"
-            ],
-            "1050k": [
-              "-c", "model_context_window=1050000",
-              "-c", "model_auto_compact_token_limit=900000",
-              "-c", "model_auto_compact_token_limit_scope=total"
-            ],
-            "1.05M": [
-              "-c", "model_context_window=1050000",
-              "-c", "model_auto_compact_token_limit=900000",
-              "-c", "model_auto_compact_token_limit_scope=total"
-            ],
-            "2M": [
-              "-c", "model_context_window=2000000",
-              "-c", "model_auto_compact_token_limit=1800000",
-              "-c", "model_auto_compact_token_limit_scope=total"
+              "-c", "model_context_window=1000000"
             ]
+          }
+        },
+        {
+          "id": "context_mgmt",
+          "label": "Ctx Mgmt",
+          "type": "choice",
+          "choices": ["on (default)", "off"],
+          "default": "on (default)",
+          "args_map": {
+            "on (default)": [],
+            "on": ["--enable", "context_management"],
+            "off": ["--disable", "context_management"]
+          }
+        },
+        {
+          "id": "compact",
+          "label": "Compact",
+          "flag": "-c",
+          "type": "choice",
+          "choices": ["off (default)", "90%", "85%", "-30k", "custom"],
+          "default": "off (default)"
+        },
+        {
+          "id": "search",
+          "label": "Search",
+          "flag": "--search",
+          "type": "choice",
+          "choices": ["off (default)", "on"],
+          "default": "off (default)",
+          "args_map": {
+            "off (default)": [],
+            "on": ["--search"],
+            "off": []
           }
         }
       ]
@@ -115,16 +146,29 @@
           "label": "Mode",
           "flag": "--mode",
           "type": "choice",
-          "choices": ["off", "plan", "accept-edits"],
-          "default": "off"
+          "choices": ["normal (default)", "plan", "accept-edits"],
+          "default": "normal (default)",
+          "args_map": {
+            "normal (default)": [],
+            "normal": ["--mode", "normal"],
+            "plan": ["--mode", "plan"],
+            "accept-edits": ["--mode", "accept-edits"]
+          }
         },
         {
           "id": "effort",
           "label": "Effort",
           "flag": "--effort",
           "type": "choice",
-          "choices": ["off", "low", "medium", "high"],
-          "default": "off"
+          "choices": ["auto (default)", "low", "medium", "high"],
+          "default": "auto (default)",
+          "args_map": {
+            "auto (default)": [],
+            "auto": ["--effort", "auto"],
+            "low": ["--effort", "low"],
+            "medium": ["--effort", "medium"],
+            "high": ["--effort", "high"]
+          }
         }
       ]
     },

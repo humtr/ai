@@ -12,8 +12,12 @@ def provider_cmd(argv:list[str]) -> int:
     if sub=="list":
         print_rows([[n, ai_spec.provider_spec(n).get("label", n)] for n in ai_spec.provider_names()]); return 0
     if sub=="show" and len(argv)>=2:
+        if not ai_spec.is_provider(argv[1]):
+            print(f"ERROR: unknown provider: {argv[1]}", file=sys.stderr); return 1
         print(json.dumps(ai_spec.provider_spec(argv[1]), ensure_ascii=False, indent=2)); return 0
     if sub=="check" and len(argv)>=2:
+        if not ai_spec.is_provider(argv[1]):
+            print(f"ERROR: unknown provider: {argv[1]}", file=sys.stderr); return 1
         info=ai_provider.provider_check(argv[1]); info["binary_found"] = bool(shutil.which(info["binary"])); print(json.dumps(info, ensure_ascii=False, indent=2)); return 0
     print("Usage: ai provider list|show PROVIDER|check PROVIDER", file=sys.stderr); return 2
 
@@ -21,15 +25,22 @@ def profile_cmd(argv:list[str]) -> int:
     sub=argv[0] if argv else "list"
     if sub=="list":
         provider=argv[1] if len(argv)>1 else None
+        if provider and not ai_spec.is_provider(provider):
+            print(f"ERROR: unknown provider: {provider}", file=sys.stderr); return 1
         providers=[provider] if provider else ai_spec.provider_names()
         for p in providers:
             for prof in ai_provider.list_profiles(p): print(f"{p}\t{prof}")
         return 0
     if sub=="show" and len(argv)>=3:
-        p, prof=argv[1], argv[2]; base=ai_provider.profile_base_dir(p); path=(base/prof) if base and prof!="default" else None
+        p, prof=argv[1], argv[2]
+        if not ai_spec.is_provider(p):
+            print(f"ERROR: unknown provider: {p}", file=sys.stderr); return 1
+        base=ai_provider.profile_base_dir(p); path=(base/prof) if base and prof!="default" else None
         print(json.dumps({"provider":p,"profile":prof,"path":str(path or ""),"exists":bool(path and path.exists())}, ensure_ascii=False, indent=2)); return 0
     if sub=="add" and len(argv)>=3:
         p, prof=argv[1], argv[2]
+        if not ai_spec.is_provider(p):
+            print(f"ERROR: unknown provider: {p}", file=sys.stderr); return 1
         try:
             ai_provider.validate_profile_name(prof)
         except ValueError as e:
@@ -50,6 +61,8 @@ def profile_cmd(argv:list[str]) -> int:
         return 0
     if sub in {"delete", "remove"} and len(argv)>=3:
         p, prof=argv[1], argv[2]
+        if not ai_spec.is_provider(p):
+            print(f"ERROR: unknown provider: {p}", file=sys.stderr); return 1
         if prof == "default":
             print("ERROR: cannot delete 'default' profile", file=sys.stderr); return 1
         base=ai_provider.profile_base_dir(p)
@@ -72,10 +85,20 @@ def session_cmd(argv:list[str]) -> int:
     provider=profile=workdir=None; limit=20; ranking="strict"; i=0
     while i < len(rest):
         a=rest[i]
+        if a in {"--provider", "--profile", "-d", "--directory", "--limit", "--rank"}:
+            if i + 1 >= len(rest):
+                print(f"ERROR: {a} requires a value", file=sys.stderr)
+                return 2
         if a=="--provider": provider=rest[i+1]; i+=2
         elif a=="--profile": profile=rest[i+1]; i+=2
         elif a in {"-d","--directory"}: workdir=rest[i+1]; i+=2
-        elif a=="--limit": limit=int(rest[i+1]); i+=2
+        elif a=="--limit":
+            try:
+                limit=int(rest[i+1])
+            except ValueError:
+                print("ERROR: --limit must be an integer", file=sys.stderr)
+                return 2
+            i+=2
         elif a=="--rank": ranking=rest[i+1]; i+=2
         else: break
     tail=rest[i:]

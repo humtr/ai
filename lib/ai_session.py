@@ -288,7 +288,7 @@ def parse_antigravity_session(record: dict[str, Any]) -> dict[str, Any]:
                             # Look for common path arguments in tool_calls
                             for path_arg in ("Cwd", "DirectoryPath", "SearchPath", "TargetFile"):
                                 if path_arg in args and isinstance(args[path_arg], str):
-                                    val = args[path_arg].strip('"')
+                                    val = args[path_arg].strip("'\"")
                                     if val:
                                         # Normalize / extract directory path
                                         try:
@@ -303,7 +303,14 @@ def parse_antigravity_session(record: dict[str, Any]) -> dict[str, Any]:
                     k = item.get("type")
                     if k == "USER_INPUT":
                         content = item.get("content") or ""
-                        # strip tags if needed, but summary is fine
+                        if isinstance(content, str):
+                            m = re.search(r"<USER_REQUEST>(.*?)</USER_REQUEST>", content, re.DOTALL)
+                            if m:
+                                content = m.group(1).strip()
+                            else:
+                                content = re.sub(r"<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>", "", content, flags=re.DOTALL)
+                                content = re.sub(r"<USER_SETTINGS_CHANGE>.*?</USER_SETTINGS_CHANGE>", "", content, flags=re.DOTALL)
+                                content = content.strip()
                         add_message(messages, "user", content)
                     elif k == "PLANNER_RESPONSE":
                         content = item.get("content") or ""
@@ -417,15 +424,11 @@ def refresh_session_index(limit:int=SESSION_SCAN_LIMIT) -> dict[str,Any]:
     _SESSION_INDEX_CACHE = data
     return data
 
-def fresh_session_index() -> dict[str,Any]:
+def fresh_session_index(force: bool = False) -> dict[str, Any]:
     global _SESSION_INDEX_CACHE
-    if _SESSION_INDEX_CACHE is not None:
+    if not force and _SESSION_INDEX_CACHE is not None:
         return _SESSION_INDEX_CACHE
     try:
-        old = load_session_index()
-        if old.get("version") == ai_store.SESSION_INDEX_VERSION and old.get("sessions"):
-            _SESSION_INDEX_CACHE = old
-            return old
         _SESSION_INDEX_CACHE = refresh_session_index()
         return _SESSION_INDEX_CACHE
     except Exception:

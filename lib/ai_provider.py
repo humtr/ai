@@ -11,10 +11,12 @@ def validate_profile_name(profile: str | None) -> None:
         raise ValueError(f"invalid or reserved profile name: {profile}")
 
 def profile_base_dir(provider: str) -> Path | None:
+    if not provider or not ai_spec.is_provider(provider): return None
     spec=ai_spec.provider_spec(provider); base=(spec.get("profile") or {}).get("base_dir")
     return Path(base).expanduser() if base else None
 
 def list_profiles(provider: str) -> list[str]:
+    if not provider or not ai_spec.is_provider(provider): return ["default"]
     spec=ai_spec.provider_spec(provider); prof=spec.get("profile") or {}
     names=["default"]
     if not prof.get("supported", False): return names
@@ -65,8 +67,12 @@ def apply_profile(provider: str, profile: str | None) -> tuple[list[str], dict[s
         return [], {"AI_PROFILE_USE": profile}
     return [], {}
 
-def provider_binary(provider: str) -> str: return str(ai_spec.provider_spec(provider).get("binary") or provider)
+def provider_binary(provider: str) -> str:
+    if not provider or not ai_spec.is_provider(provider): return provider
+    return str(ai_spec.provider_spec(provider).get("binary") or provider)
 
 def provider_check(provider: str) -> dict[str, Any]:
+    if not provider or not ai_spec.is_provider(provider):
+        return {"name": provider, "binary": provider, "profile_base": "", "profile_base_exists": False, "profile_strategy": "none", "session_strategy": "none"}
     spec=ai_spec.provider_spec(provider); base=profile_base_dir(provider)
     return {"name": provider, "binary": provider_binary(provider), "profile_base": str(base or ""), "profile_base_exists": bool(base and base.exists()), "profile_strategy": (spec.get("profile") or {}).get("strategy","none"), "session_strategy": (spec.get("session") or {}).get("strategy","none")}

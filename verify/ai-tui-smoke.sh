@@ -361,6 +361,11 @@ TAB_COMMAND_OUT="$(
 )"
 [ "$TAB_COMMAND_OUT" = "1 1" ] && ok "tab cycles provider item and keeps provider focus" || { fail "tab cycles provider item and keeps provider focus"; printf 'actual: %s\n' "$TAB_COMMAND_OUT" >&2; }
 
+TAB_SCOPE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("session"); app.last_builder_section=0; app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.session_extra_fields=set(); app.invalidate_session_cache=lambda *a,**k:None; app.remember_session_selection=lambda *a,**k:None; app.in_run_confirm=lambda:False; app.message=""; app.handle_main_key(9); s1=(app.section, app.indices["session"]); app.handle_main_key(curses.KEY_BTAB); s2=(app.section, app.indices["session"]); print("{} {} {} {}".format(s1[0], s1[1], s2[0], s2[1]))'
+)"
+[ "$TAB_SCOPE_OUT" = "3 1 3 0" ] && ok "tab cycles scope forward and shift-tab cycles backward" || { fail "tab cycles scope forward and shift-tab cycles backward"; printf 'actual: %s\n' "$TAB_SCOPE_OUT" >&2; }
+
 TAB_RETURN_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("sessions"); app.last_builder_section=ai_tui.BUILDER_SECTIONS.index("workdir"); app.message=""; app.pending_action=None; app.pending_cmd=None; app.workdir_layer="path"; app.session_index=-1; app.session_scroll=0; app.current_sessions=lambda:[]; app.handle_main_key(9); print(app.section)'
 )"
@@ -708,6 +713,87 @@ WORKDIR_VISUAL_LIST_OUT="$(
 )"
 [ "$WORKDIR_VISUAL_LIST_OUT" = "True False" ] && ok "workdir completion list previews candidates before activation" || { fail "workdir completion list previews candidates before activation"; printf 'actual: %s\n' "$WORKDIR_VISUAL_LIST_OUT" >&2; }
 
+WORKDIR_TYPING_SLASH_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("workdir")
+app.workdir_layer = "children"
+app.workdir_text = "~/work/main"
+app.current_workdir_path = lambda: "'"$HOME_FIXTURE"'/work/main"
+app.home_path = lambda: ai_tui.Path("'"$HOME_FIXTURE"'")
+app.normalize_workdir_path = lambda p: ai_tui.Path(p)
+app.workdir_children = lambda p: []
+app.handle_workdir_text_key(ord("s"))
+print(app.workdir_text, app.workdir_layer, app.workdir_editing)'
+)"
+[ "$WORKDIR_TYPING_SLASH_OUT" = "~/work/main/s inline True" ] && ok "workdir typing from dropdown preserves trailing slash and appends child" || { fail "workdir typing from dropdown preserves trailing slash and appends child"; printf 'actual: %s\n' "$WORKDIR_TYPING_SLASH_OUT" >&2; }
+
+WORKDIR_ROOT_SLASH_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, pathlib
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("workdir")
+app.current_workdir_path = lambda: "'"$HOME_FIXTURE"'/work/main"
+app.home_path = lambda: ai_tui.Path("'"$HOME_FIXTURE"'")
+app.workdir_override = False
+app.workdir_text = "/d"
+base, prefix = app.workdir_text_base_and_prefix()
+print(str(base), prefix)'
+)"
+[ "$WORKDIR_ROOT_SLASH_OUT" = "/ d" ] && ok "workdir root slash path base and prefix does not clamp to home" || { fail "workdir root slash path base and prefix does not clamp to home"; printf 'actual: %s\n' "$WORKDIR_ROOT_SLASH_OUT" >&2; }
+
+WORKDIR_ESC_CANCEL_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("workdir")
+app.current_workdir_path = lambda: "'"$HOME_FIXTURE"'/work/main"
+app.home_path = lambda: ai_tui.Path("'"$HOME_FIXTURE"'")
+app.normalize_workdir_path = lambda p: ai_tui.Path(p)
+app.workdir_text = "~/work/main/temp"
+app.workdir_editing = True
+app.workdir_expanded = False
+app.workdir_layer = "inline"
+app.pending_action = None
+app.handle_main_key(27)
+print(app.workdir_editing, app.pending_action, app.message)'
+)"
+[ "$WORKDIR_ESC_CANCEL_OUT" = "False None workdir edit cancelled" ] && ok "workdir esc cancels workdir editing mode without quitting" || { fail "workdir esc cancels workdir editing mode without quitting"; printf 'actual: %s\n' "$WORKDIR_ESC_CANCEL_OUT" >&2; }
+
+WORKDIR_INLINE_EXPAND_TAB_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+from pathlib import Path
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("workdir")
+app.custom_workdir = "'"$HOME_FIXTURE"'/work/main"
+app.workdir_text = "~/work"
+app.workdir_editing = True
+app.workdir_layer = "inline"
+app.workdir_modified = True
+app.home_path = lambda: ai_tui.Path("'"$HOME_FIXTURE"'")
+app.normalize_workdir_path = lambda p: ai_tui.Path(p)
+app.workdir_children = lambda p: [ai_tui.Path("'"$HOME_FIXTURE"'/work/main")]
+app.handle_main_key(9)
+display = app.selected_workdir_path()
+print(app.workdir_layer, app.workdir_expanded, display[0])'
+)"
+[ "$WORKDIR_INLINE_EXPAND_TAB_OUT" = "children True ~/work/" ] && ok "workdir inline edit to parent directory expands target children on tab" || { fail "workdir inline edit to parent directory expands target children on tab"; printf 'actual: %s\n' "$WORKDIR_INLINE_EXPAND_TAB_OUT" >&2; }
+
+WORKDIR_HOME_BASE_DISPLAY_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+from pathlib import Path
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("workdir")
+app.custom_workdir = "'"$HOME_FIXTURE"'/work"
+app.workdir_layer = "children"
+app.workdir_dropdown_base = "'"$HOME_FIXTURE"'"
+app.home_path = lambda: ai_tui.Path("'"$HOME_FIXTURE"'")
+app.normalize_workdir_path = lambda p: ai_tui.Path(p)
+app.filtered_workdir_children = lambda: [ai_tui.Path("'"$HOME_FIXTURE"'/work")]
+app.workdir_child_index = 0
+display = app.selected_workdir_path()
+print(display[0], display[1])'
+)"
+[ "$WORKDIR_HOME_BASE_DISPLAY_OUT" = "~/work work" ] && ok "workdir dropdown with home base displays child path and segment" || { fail "workdir dropdown with home base displays child path and segment"; printf 'actual: %s\n' "$WORKDIR_HOME_BASE_DISPLAY_OUT" >&2; }
+
 NEW_SESSION_OUT="$(
   HOME="$HOME_FIXTURE" AI_BIN="$BIN_FIXTURE/ai" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.indices={"mode":0,"provider":0,"profile":0,"session":3,"workdir":0}; app.profiles=["default"]; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.session_index=-1; app.session_scroll=0; app.current_sessions=lambda:[{"session_id":"smoke-session-one","updated":"2026-05-05T00:00:00Z","profile":"default","workdir":"'"$HOME_FIXTURE"'/work/main","title":"smoke prompt summary one","last_prompt_summary":"prompt","last_response_summary":"answer"}]; app.execute_new_session(); print(" ".join(getattr(app, "pending_cmd", []) or []))'
 )"
@@ -784,10 +870,15 @@ print(app.active_section(), before_expanded, app.options_expanded, app.options_s
 )"
 [ "$OPTIONS_ENTER_OUT" = "options False True 0" ] && ok "options row is selectable and opens on tab" || { fail "options row is selectable and opens on tab"; printf 'actual: %s\n' "$OPTIONS_ENTER_OUT" >&2; }
 
-OPTIONS_TAB_CYCLE_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("options"); app.options_expanded=True; app.options_sub_index=0; app.current_provider=lambda:"codex"; app.provider_options={}; app.launch_state={}; app.save_options_state=lambda:None; app.handle_main_key(9); print(app.current_provider_options("codex")["sandbox"])'
+OPTIONS_TAB_COLLAPSE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("options"); app.options_expanded=True; app.options_sub_index=0; app.current_provider=lambda:"codex"; app.needs_erase=False; app.handle_main_key(9); print(app.options_expanded, app.options_sub_index, app.needs_erase)'
 )"
-[ "$OPTIONS_TAB_CYCLE_OUT" = "danger-full-access" ] && ok "options tab cycles choice of first option" || { fail "options tab cycles choice of first option"; printf 'actual: %s\n' "$OPTIONS_TAB_CYCLE_OUT" >&2; }
+[ "$OPTIONS_TAB_COLLAPSE_OUT" = "False -1 True" ] && ok "options tab collapses options when expanded" || { fail "options tab collapses options when expanded"; printf 'actual: %s\n' "$OPTIONS_TAB_COLLAPSE_OUT" >&2; }
+
+CODEX_SANDBOX_CHOICES_OUT="$(
+  PYTHONPATH="$ROOT/lib" python3 -c 'import ai_spec; print(" ".join([opt["choices"] for opt in ai_spec.provider_spec("codex")["options"] if opt["id"] == "sandbox"][0]))'
+)"
+[ "$CODEX_SANDBOX_CHOICES_OUT" = "danger-full-access (default) dangerously-bypass-approvals-and-sandbox" ] && ok "codex sandbox choices exclude workspace-write and read-only" || { fail "codex sandbox choices exclude workspace-write and read-only"; printf 'actual: %s\n' "$CODEX_SANDBOX_CHOICES_OUT" >&2; }
 
 SESSION_SCOPE_LABELS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.list_meta={}; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append(text); app.draw_choice_row(0,80,"session","Scope",ai_tui.SESSION_SCOPE_LABELS,0); print(" ".join([text for text in calls if text in set(ai_tui.SESSION_SCOPE_LABELS)]))'
@@ -1043,10 +1134,142 @@ cargs = app.common_args()
 sargs = app.session_args({"session_id": "s1", "resume_target": "s1"})
 print(" ".join(flags), "::", " ".join(cargs), "::", " ".join(sargs))'
 )"
-EXPECTED_OPTIONS_FLAGS="--sandbox danger-full-access --ask-for-approval never"
-EXPECTED_OPTIONS_CARGS="codex -d $HOME_FIXTURE/work/main -- --sandbox danger-full-access --ask-for-approval never"
-EXPECTED_OPTIONS_SARGS="codex -s s1 -- --sandbox danger-full-access --ask-for-approval never"
+EXPECTED_OPTIONS_FLAGS="--dangerously-bypass-approvals-and-sandbox --ask-for-approval never"
+EXPECTED_OPTIONS_CARGS="codex -d $HOME_FIXTURE/work/main -- --dangerously-bypass-approvals-and-sandbox --ask-for-approval never"
+EXPECTED_OPTIONS_SARGS="codex -s s1 -- --dangerously-bypass-approvals-and-sandbox --ask-for-approval never"
 [ "$OPTIONS_TOGGLE_OUT" = "$EXPECTED_OPTIONS_FLAGS :: $EXPECTED_OPTIONS_CARGS :: $EXPECTED_OPTIONS_SARGS" ] && ok "provider options toggle cycles value and updates native args" || { fail "provider options toggle cycles value and updates native args"; printf 'actual: %s\n' "$OPTIONS_TOGGLE_OUT" >&2; }
+
+CODEX_SANDBOX_CYCLE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex", "agy", "hermes", "opencode"]
+app.profiles = ["default"]
+app.provider_options = {}
+res = ["default=" + " ".join(app.native_args_for_provider("codex"))]
+app.cycle_option_value("codex", "sandbox", 1)
+res.append("dangerously-bypass-approvals-and-sandbox=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "sandbox", 1)
+res.append("back-to-default=" + " ".join(app.native_args_for_provider("codex")))
+print(" | ".join(res))'
+)"
+EXPECTED_CODEX_SANDBOX_CYCLE_OUT="default= | dangerously-bypass-approvals-and-sandbox=--dangerously-bypass-approvals-and-sandbox | back-to-default="
+[ "$CODEX_SANDBOX_CYCLE_OUT" = "$EXPECTED_CODEX_SANDBOX_CYCLE_OUT" ] && ok "codex unified sandbox option cycles mutually exclusive modes" || { fail "codex unified sandbox option cycles mutually exclusive modes"; printf 'actual: %s\n' "$CODEX_SANDBOX_CYCLE_OUT" >&2; }
+
+CODEX_APPROVAL_CYCLE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex", "agy", "hermes", "opencode"]
+app.profiles = ["default"]
+app.provider_options = {}
+res = ["default=" + " ".join(app.native_args_for_provider("codex"))]
+app.cycle_option_value("codex", "approval", 1)
+res.append("never=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "approval", 1)
+res.append("back-to-default=" + " ".join(app.native_args_for_provider("codex")))
+print(" | ".join(res))'
+)"
+EXPECTED_CODEX_APPROVAL_CYCLE_OUT="default= | never=--ask-for-approval never | back-to-default="
+[ "$CODEX_APPROVAL_CYCLE_OUT" = "$EXPECTED_CODEX_APPROVAL_CYCLE_OUT" ] && ok "codex approval option cycles on-request and never" || { fail "codex approval option cycles on-request and never"; printf 'actual: %s\n' "$CODEX_APPROVAL_CYCLE_OUT" >&2; }
+
+CODEX_REVIEWER_CYCLE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex", "agy", "hermes", "opencode"]
+app.profiles = ["default"]
+app.provider_options = {}
+res = ["default=" + " ".join(app.native_args_for_provider("codex"))]
+app.cycle_option_value("codex", "reviewer", 1)
+res.append("human=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "reviewer", 1)
+res.append("back-to-default=" + " ".join(app.native_args_for_provider("codex")))
+print(" | ".join(res))'
+)"
+EXPECTED_CODEX_REVIEWER_CYCLE_OUT="default= | human=-c approvals_reviewer=\"human\" | back-to-default="
+[ "$CODEX_REVIEWER_CYCLE_OUT" = "$EXPECTED_CODEX_REVIEWER_CYCLE_OUT" ] && ok "codex reviewer option cycles auto and human" || { fail "codex reviewer option cycles auto and human"; printf 'actual: %s\n' "$CODEX_REVIEWER_CYCLE_OUT" >&2; }
+
+CODEX_CONTEXT_PRESETS_OUT="$(
+  PYTHONPATH="$ROOT/lib" python3 -c 'import ai_spec; print(" ".join([opt["choices"] for opt in ai_spec.provider_spec("codex")["options"] if opt["id"] == "context"][0]))'
+)"
+[ "$CODEX_CONTEXT_PRESETS_OUT" = "272k (default) 372k 1M custom" ] && ok "codex context presets match actual openai model limits" || { fail "codex context presets match actual openai model limits"; printf 'actual: %s\n' "$CODEX_CONTEXT_PRESETS_OUT" >&2; }
+
+CODEX_CUSTOM_CONTEXT_TYPE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("options")
+app.options_expanded = True
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex"]
+app.provider_options = {"codex": {"context": "272k (default)"}}
+specs = app.provider_options_specs("codex")
+app.options_sub_index = [s["id"] for s in specs].index("context")
+for ch in [ord("3"), ord("5"), ord("0"), ord("k")]:
+    app.handle_main_key(ch)
+val = app.current_provider_options("codex")["context"]
+flags = app.native_args_for_provider("codex")
+print(val, "::", " ".join(flags))'
+)"
+EXPECTED_CUSTOM_CONTEXT_FLAGS="350k :: -c model_context_window=350000"
+[ "$CODEX_CUSTOM_CONTEXT_TYPE_OUT" = "$EXPECTED_CUSTOM_CONTEXT_FLAGS" ] && ok "codex custom context accepts direct typing on far right" || { fail "codex custom context accepts direct typing on far right"; printf 'actual: %s\n' "$CODEX_CUSTOM_CONTEXT_TYPE_OUT" >&2; }
+
+CODEX_COMPACT_CYCLE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex"]
+app.provider_options = {"codex": {"context": "372k"}}
+res = ["default=" + " ".join(app.native_args_for_provider("codex"))]
+app.cycle_option_value("codex", "compact", 1)
+res.append("90%=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "compact", 1)
+res.append("85%=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "compact", 1)
+res.append("-30k=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "compact", 1)
+res.append("custom=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "compact", 1)
+res.append("back=" + " ".join(app.native_args_for_provider("codex")))
+print(" | ".join(res))'
+)"
+EXPECTED_CODEX_COMPACT_CYCLE_OUT="default=-c model_context_window=372000 | 90%=-c model_context_window=372000 -c model_auto_compact_token_limit=334800 -c model_auto_compact_token_limit_scope=total | 85%=-c model_context_window=372000 -c model_auto_compact_token_limit=316200 -c model_auto_compact_token_limit_scope=total | -30k=-c model_context_window=372000 -c model_auto_compact_token_limit=342000 -c model_auto_compact_token_limit_scope=total | custom=-c model_context_window=372000 -c model_auto_compact_token_limit=297600 -c model_auto_compact_token_limit_scope=total | back=-c model_context_window=372000"
+[ "$CODEX_COMPACT_CYCLE_OUT" = "$EXPECTED_CODEX_COMPACT_CYCLE_OUT" ] && ok "codex compact option cycles through percentage and headroom presets" || { fail "codex compact option cycles through percentage and headroom presets"; printf 'actual: %s\n' "$CODEX_COMPACT_CYCLE_OUT" >&2; }
+
+CODEX_CUSTOM_COMPACT_TYPE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("options")
+app.options_expanded = True
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex"]
+app.provider_options = {"codex": {"context": "272k (default)", "compact": "off (default)"}}
+specs = app.provider_options_specs("codex")
+app.options_sub_index = [s["id"] for s in specs].index("compact")
+for ch in [ord("-"), ord("2"), ord("0"), ord("k")]:
+    app.handle_main_key(ch)
+val = app.current_provider_options("codex")["compact"]
+flags = app.native_args_for_provider("codex")
+print(val, "::", " ".join(flags))'
+)"
+EXPECTED_CUSTOM_COMPACT_FLAGS="-20k :: -c model_auto_compact_token_limit=252000 -c model_auto_compact_token_limit_scope=total"
+[ "$CODEX_CUSTOM_COMPACT_TYPE_OUT" = "$EXPECTED_CUSTOM_COMPACT_FLAGS" ] && ok "codex custom compact accepts direct typing with headroom" || { fail "codex custom compact accepts direct typing with headroom"; printf 'actual: %s\n' "$CODEX_CUSTOM_COMPACT_TYPE_OUT" >&2; }
+
+CODEX_CTX_MGMT_CYCLE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex"]
+app.provider_options = {}
+res = ["default=" + " ".join(app.native_args_for_provider("codex"))]
+app.cycle_option_value("codex", "context_mgmt", 1)
+res.append("off=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "context_mgmt", 1)
+res.append("back-to-default=" + " ".join(app.native_args_for_provider("codex")))
+print(" | ".join(res))'
+)"
+EXPECTED_CODEX_CTX_MGMT_CYCLE_OUT="default= | off=--disable context_management | back-to-default="
+[ "$CODEX_CTX_MGMT_CYCLE_OUT" = "$EXPECTED_CODEX_CTX_MGMT_CYCLE_OUT" ] && ok "codex context_mgmt option cycles on and off" || { fail "codex context_mgmt option cycles on and off"; printf 'actual: %s\n' "$CODEX_CTX_MGMT_CYCLE_OUT" >&2; }
 
 CELL_TEXT_SANITIZE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
@@ -1054,6 +1277,138 @@ lines = ai_tui.wrap_cell_text("Line 1\r\nLine 2\twith\ttab", 40)
 print(repr(lines))'
 )"
 [ "$CELL_TEXT_SANITIZE_OUT" = "['Line 1', 'Line 2 with tab']" ] && ok "wrap_cell_text sanitizes carriage returns newlines and tabs" || { fail "wrap_cell_text sanitizes carriage returns newlines and tabs"; printf 'actual: %s\n' "$CELL_TEXT_SANITIZE_OUT" >&2; }
+
+NEW_SCOPE_RENDER_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex"]
+app.profiles = ["default"]
+app.custom_workdir = "'"$HOME_FIXTURE"'/work/main"
+app.section = ai_tui.SECTIONS.index("session")
+app.list_meta = {}
+lines = []
+app.add_line = lambda y, x, text, width, attr=0: lines.append(text)
+app.command_line = lambda: "ai run codex"
+app.effective_workdir_path = lambda: "'"$HOME_FIXTURE"'/work/main"
+app.draw_sessions(0, 80, 20)
+has_new_session = any("NEW SESSION" in line for line in lines)
+has_session_table = any("SESSION" in line and "NEW SESSION" not in line for line in lines)
+has_turns_header = any("TURNS" in line for line in lines)
+print(has_new_session, has_session_table, has_turns_header)'
+)"
+[ "$NEW_SCOPE_RENDER_OUT" = "True False False" ] && ok "new scope renders new session card and omits session list" || { fail "new scope renders new session card and omits session list"; printf 'actual: %s\n' "$NEW_SCOPE_RENDER_OUT" >&2; }
+
+NEW_SCOPE_JSON_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 "$ROOT/lib/ai_cli.py" __json sessions codex default new
+)"
+[ "$NEW_SCOPE_JSON_OUT" = "[]" ] && ok "new scope returns empty json session list" || { fail "new scope returns empty json session list"; printf 'actual: %s\n' "$NEW_SCOPE_JSON_OUT" >&2; }
+
+CTRL_O_EXPAND_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("workdir")
+app.options_expanded = False
+app.options_sub_index = -1
+app.current_provider = lambda: "codex"
+app.provider_options_specs = lambda *a, **kw: [{"id": "sandbox"}]
+app.needs_erase = False
+app.handle_main_key(15)  # Ctrl-O
+print(app.active_section(), app.options_expanded, app.options_sub_index, app.needs_erase)'
+)"
+[ "$CTRL_O_EXPAND_OUT" = "options True 0 True" ] && ok "Ctrl-O toggles options expansion and sets focus" || { fail "Ctrl-O toggles options expansion and sets focus"; printf 'actual: %s\n' "$CTRL_O_EXPAND_OUT" >&2; }
+
+SAVE_GLOBAL_CONFIG_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, pathlib
+app = ai_tui.App.__new__(ai_tui.App)
+app.current_provider_options = lambda p: {"sandbox": "danger-full-access", "approval": "never", "reviewer": "human", "context": "372k", "context_mgmt": "on", "compact": "90%"}
+cfg = pathlib.Path("'"$HOME_FIXTURE"'") / ".codex" / "config.toml"
+cfg.parent.mkdir(parents=True, exist_ok=True)
+cfg.write_text("# Initial config\nmodel = \"gpt-5.6-luna\"\n\n[features]\nfast_mode = true\n", encoding="utf-8")
+saved, msg = app.save_global_codex_config()
+content = cfg.read_text(encoding="utf-8")
+print(saved, "sandbox_mode = \"danger-full-access\"" in content, "approval_policy = \"never\"" in content, "approvals_reviewer = \"human\"" in content, "model_context_window = 372000" in content, "model_auto_compact_token_limit = 334800" in content, "context_management = true" in content, "# Initial config" in content)'
+)"
+[ "$SAVE_GLOBAL_CONFIG_OUT" = "True True True True True True True True" ] && ok "save_global_codex_config preserves comments and writes accurate toml settings" || { fail "save_global_codex_config preserves comments and writes accurate toml settings"; printf 'actual: %s\n' "$SAVE_GLOBAL_CONFIG_OUT" >&2; }
+
+SAVE_GLOBAL_CONFIG_OFF_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, pathlib
+app = ai_tui.App.__new__(ai_tui.App)
+app.current_provider_options = lambda p: {"context": "372k", "compact": "default(off)"}
+cfg = pathlib.Path("'"$HOME_FIXTURE"'") / ".codex" / "config.toml"
+cfg.write_text("model_context_window = 272000\nmodel_auto_compact_token_limit = 240000\nmodel_auto_compact_token_limit_scope = \"total\"\n", encoding="utf-8")
+saved, msg = app.save_global_codex_config()
+content = cfg.read_text(encoding="utf-8")
+print(saved, "model_context_window = 372000" in content, "model_auto_compact_token_limit" not in content)'
+)"
+[ "$SAVE_GLOBAL_CONFIG_OFF_OUT" = "True True True" ] && ok "save_global_codex_config removes compaction limits when compact is default(off)" || { fail "save_global_codex_config removes compaction limits when compact is default(off)"; printf 'actual: %s\n' "$SAVE_GLOBAL_CONFIG_OFF_OUT" >&2; }
+
+CONTEXT_LIMITS_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_cli
+args_272k = ai_cli.resolve_context_args("codex", "272k")
+args_372k = ai_cli.resolve_context_args("codex", "372k")
+args_1m = ai_cli.resolve_context_args("codex", "1M")
+args_custom = ai_cli.resolve_context_args("codex", "500k")
+print(" ".join(args_272k))
+print(" ".join(args_372k))
+print(" ".join(args_1m))
+print(" ".join(args_custom))'
+)"
+EXPECTED_CONTEXT_LIMITS="-c model_context_window=272000
+-c model_context_window=372000
+-c model_context_window=1000000
+-c model_context_window=500000"
+[ "$CONTEXT_LIMITS_OUT" = "$EXPECTED_CONTEXT_LIMITS" ] && ok "context limits accurately resolve model context window" || { fail "context limits accurately resolve model context window"; printf 'actual: %s\n' "$CONTEXT_LIMITS_OUT" >&2; }
+
+COMPACT_LIMITS_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_cli
+compact_default = ai_cli.resolve_compact_args("codex", "default(off)", "272k")
+compact_90 = ai_cli.resolve_compact_args("codex", "90%", "272k")
+compact_85 = ai_cli.resolve_compact_args("codex", "85%", "372k")
+compact_minus30k = ai_cli.resolve_compact_args("codex", "-30k", "272k")
+print(" ".join(compact_default))
+print(" ".join(compact_90))
+print(" ".join(compact_85))
+print(" ".join(compact_minus30k))'
+)"
+EXPECTED_COMPACT_LIMITS="
+-c model_auto_compact_token_limit=244800 -c model_auto_compact_token_limit_scope=total
+-c model_auto_compact_token_limit=316200 -c model_auto_compact_token_limit_scope=total
+-c model_auto_compact_token_limit=242000 -c model_auto_compact_token_limit_scope=total"
+[ "$COMPACT_LIMITS_OUT" = "$EXPECTED_COMPACT_LIMITS" ] && ok "compact limits accurately resolve percentage and headroom limits" || { fail "compact limits accurately resolve percentage and headroom limits"; printf 'actual: %s\n' "$COMPACT_LIMITS_OUT" >&2; }
+
+POPUP_BKGD_RESTORE_OUT="$(
+  PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui
+curses.color_pair = lambda n: n * 100
+class DummyScr:
+    def __init__(self):
+        self.bkgd_calls = []
+        self.erase_calls = 0
+    def erase(self): self.erase_calls += 1
+    def bkgd(self, val): self.bkgd_calls.append(val)
+    def getmaxyx(self): return (24, 80)
+    def addnstr(self, *a, **kw): pass
+app = ai_tui.App.__new__(ai_tui.App)
+app.stdscr = DummyScr()
+app.active_section = lambda: "workdir"
+app.current_provider = lambda: "codex"
+app.draw_header = lambda w: None
+app.draw_controls = lambda y, w, r: 10
+app.draw_sessions = lambda y, w, r: None
+app.effective_workdir_path = lambda: "/tmp"
+app.workdir_inline_focused = lambda: False
+app.update_cursor = lambda: None
+app.message = ""
+
+app.global_config_popup_active = True
+app.draw_main_background()
+app.global_config_popup_active = False
+app.draw_main_background()
+app.draw_main_background()
+print(getattr(app, "_active_bkgd_pair"), len(app.stdscr.bkgd_calls), app.stdscr.bkgd_calls[-1])'
+)"
+EXPECTED_POPUP_BKGD_RESTORE_OUT="0 2 0"
+[ "$POPUP_BKGD_RESTORE_OUT" = "$EXPECTED_POPUP_BKGD_RESTORE_OUT" ] && ok "popup cancel restores default background color" || { fail "popup cancel restores default background color"; printf 'actual: %s\n' "$POPUP_BKGD_RESTORE_OUT" >&2; }
 
 printf '\nPASS=%s FAIL=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

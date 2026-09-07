@@ -7,6 +7,7 @@ import curses
 import datetime
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import unicodedata
@@ -18,6 +19,7 @@ import ai_spec
 import ai_provider
 import ai_store
 import ai_session
+import ai_cli
 
 
 # Set ncurses ESC timeout to 50ms (default is 1000ms) to make Esc key responsive.
@@ -47,6 +49,108 @@ _SHORT_TIME_CACHE: dict[str, str] = {}
 
 def env_truthy(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).lower() in {"1", "true", "yes", "on"}
+
+
+def is_default_choice(val: Any) -> bool:
+    if val is None or val is False:
+        return True
+    s = str(val).strip().lower()
+    return s in {"none", "default"} or s.startswith("default(") or s.endswith("(default)") or s.endswith(" (default)")
+
+
+def is_default_option_value(spec: dict[str, Any] | None, val: Any) -> bool:
+    if val is None:
+        return True
+    if not spec:
+        return is_default_choice(val)
+    stype = spec.get("type", "toggle")
+    if stype == "toggle":
+        default_val = spec.get("default", False)
+        if isinstance(default_val, bool):
+            return bool(val) == default_val
+        return str(val).lower() in {"0", "false", "off", "no"}
+    choices = spec.get("choices", [])
+    default_val = spec.get("default", choices[0] if choices else "default")
+    s = str(val).strip()
+    if s == str(default_val):
+        return True
+    if is_default_choice(s):
+        return True
+    clean_s = s.replace(" (default)", "").replace("(default)", "").strip().lower()
+    clean_def = str(default_val).replace(" (default)", "").replace("(default)", "").strip().lower()
+    if clean_s == clean_def:
+        return True
+    return False
+
+
+def remove_toml_top_key(text: str, key: str) -> str:
+    lines = text.splitlines(keepends=True)
+    new_lines: list[str] = []
+    in_top_level = True
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_top_level = False
+        if in_top_level and (stripped.startswith(f"{key} ") or stripped.startswith(f"{key}=")):
+            continue
+        new_lines.append(line)
+    return "".join(new_lines)
+
+
+def update_toml_top_key(text: str, key: str, val_str: str) -> str:
+    lines = text.splitlines(keepends=True)
+    new_lines: list[str] = []
+    in_top_level = True
+    found = False
+    inserted = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_top_level = False
+            if not found and not inserted:
+                new_lines.append(f"{key} = {val_str}\n")
+                inserted = True
+        if in_top_level and (stripped.startswith(f"{key} ") or stripped.startswith(f"{key}=")):
+            new_lines.append(f"{key} = {val_str}\n")
+            found = True
+        else:
+            new_lines.append(line)
+    if not found and not inserted:
+        if new_lines and not new_lines[-1].endswith("\n"):
+            new_lines.append("\n")
+        new_lines.append(f"{key} = {val_str}\n")
+    return "".join(new_lines)
+
+
+def update_toml_section_key(text: str, section: str, key: str, val_str: str) -> str:
+    lines = text.splitlines(keepends=True)
+    new_lines: list[str] = []
+    in_target_section = False
+    section_found = False
+    key_found = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            if in_target_section and not key_found:
+                new_lines.append(f"{key} = {val_str}\n")
+                key_found = True
+            if stripped == f"[{section}]":
+                in_target_section = True
+                section_found = True
+            else:
+                in_target_section = False
+        elif in_target_section and (stripped.startswith(f"{key} ") or stripped.startswith(f"{key}=")):
+            new_lines.append(f"{key} = {val_str}\n")
+            key_found = True
+            continue
+        new_lines.append(line)
+    if section_found and not key_found:
+        new_lines.append(f"{key} = {val_str}\n")
+    elif not section_found:
+        if new_lines and not new_lines[-1].endswith("\n\n"):
+            new_lines.append("\n")
+        new_lines.append(f"[{section}]\n{key} = {val_str}\n")
+    return "".join(new_lines)
 
 
 def short(path: str) -> str:
@@ -281,6 +385,8 @@ class AppStateMixin:
 
     def reload(self) -> None:
         ai_store.ensure_store()
+        ai_session._SESSION_INDEX_CACHE = None
+        self.invalidate_session_cache(reset=True)
         cur_provider = self.current_provider() if getattr(self, "providers", None) else None
         cur_profile = self.current_profile_label() if getattr(self, "profiles", None) else None
 
@@ -497,8 +603,16 @@ class AppStateMixin:
         specs = self.provider_options_specs(provider)
         for s in specs:
             opt_id = s.get("id")
-            if opt_id and opt_id not in opts:
+            if not opt_id:
+                continue
+            if opt_id not in opts:
                 opts[opt_id] = s.get("default")
+            elif s.get("type") == "choice":
+                choices = s.get("choices") or []
+                if "custom" in choices:
+                    pass
+                elif choices and str(opts[opt_id]) not in choices:
+                    opts[opt_id] = s.get("default")
         return opts
 
 
@@ -511,6 +625,8 @@ class AppStateMixin:
             opt_id = s.get("id")
             flag = s.get("flag")
             val = opts.get(opt_id)
+            if is_default_option_value(s, val):
+                continue
             args_map = s.get("args_map")
             if args_map and isinstance(args_map, dict):
                 mapped = args_map.get(str(val))
@@ -519,6 +635,19 @@ class AppStateMixin:
                         args.extend(mapped)
                     elif isinstance(mapped, str):
                         args.append(mapped)
+                elif opt_id == "context" and str(val).lower() != "custom":
+                    try:
+                        args.extend(ai_cli.resolve_context_args(provider, str(val)))
+                    except Exception:
+                        pass
+                continue
+            if opt_id == "compact":
+                if str(val).lower() != "custom":
+                    ctx_val = opts.get("context", "272k")
+                    try:
+                        args.extend(ai_cli.resolve_compact_args(provider, str(val), str(ctx_val)))
+                    except Exception:
+                        pass
                 continue
             if not flag:
                 continue
@@ -527,8 +656,7 @@ class AppStateMixin:
                 if val is True or str(val).lower() in {"1", "true", "yes", "on"}:
                     args.append(flag)
             elif typ == "choice":
-                if val and str(val).lower() not in {"off", "none", "default"}:
-                    args.extend([flag, str(val)])
+                args.extend([flag, str(val)])
         return args
 
 
@@ -564,10 +692,36 @@ class AppStateMixin:
             cur = bool(opts.get(opt_id, spec.get("default", False)))
             opts[opt_id] = not cur
         elif typ == "choice":
-            choices = list(spec.get("choices", ["off"]))
-            cur = str(opts.get(opt_id, spec.get("default", "off")))
-            idx = choices.index(cur) if cur in choices else 0
-            opts[opt_id] = choices[(idx + direction) % len(choices)]
+            choices = list(spec.get("choices") or ["off"])
+            if not choices:
+                choices = ["off"]
+            default_val = spec.get("default", choices[0])
+            cur = str(opts.get(opt_id, default_val))
+            if cur in choices:
+                idx = choices.index(cur)
+            else:
+                clean_cur = cur.replace(" (default)", "").replace("(default)", "").strip().lower()
+                matched_idx = None
+                for ci, c in enumerate(choices):
+                    clean_c = c.replace(" (default)", "").replace("(default)", "").strip().lower()
+                    if clean_c == clean_cur:
+                        matched_idx = ci
+                        break
+                if matched_idx is not None:
+                    idx = matched_idx
+                elif "custom" in choices:
+                    idx = choices.index("custom")
+                else:
+                    idx = 0
+            new_choice = choices[(idx + direction) % len(choices)]
+            if new_choice == "custom":
+                if opt_id == "compact":
+                    saved_custom = getattr(self, "_last_custom_compact", "80%")
+                else:
+                    saved_custom = getattr(self, "_last_custom_context", "350k")
+                opts[opt_id] = saved_custom
+            else:
+                opts[opt_id] = new_choice
         self.save_options_state()
 
 
@@ -746,6 +900,7 @@ class AppStateMixin:
             layer="path",
             promote=False,
         )
+        self.workdir_expanded = False
         self.workdir_modified = False
 
 
@@ -766,11 +921,13 @@ class AppStateMixin:
             self.workdir_child_index = -1
             self.workdir_text = short(str(base))
             self.workdir_dropdown_base = None
+            self.workdir_expanded = False
             self.message = "no child directory"
             return
         self.workdir_text = short(str(base))
         self.workdir_layer = "children"
         self.workdir_dropdown_base = str(base)
+        self.workdir_expanded = True
         self.workdir_child_index = -1
         if selected is not None:
             selected_name = selected.name
@@ -813,11 +970,17 @@ class AppStateMixin:
             return self.home_path(), ""
         try:
             if text.endswith("/"):
-                return self.normalize_workdir_path(expand_workdir(text)), ""
+                p = expand_workdir(text)
+                if p.is_dir() and p.is_absolute():
+                    return p, ""
+                return self.normalize_workdir_path(p), ""
             head, sep, tail = text.rpartition("/")
             if sep:
                 base_text = head + "/" if head else "/"
-                return self.normalize_workdir_path(expand_workdir(base_text)), tail
+                p = expand_workdir(base_text)
+                if p.is_dir() and p.is_absolute():
+                    return p, tail
+                return self.normalize_workdir_path(p), tail
             return Path.cwd(), text
         except (OSError, RuntimeError, ValueError):
             return self.normalize_workdir_path(Path(self.current_workdir_path())), ""
@@ -1211,14 +1374,12 @@ class AppStateMixin:
             self.session_index = -1
             self.session_scroll = 0
             return
+        if scope == "new":
+            self.session_index = 0
+            self.session_scroll = 0
+            return
         remembered = self.session_memory.get(self.session_scope_key(scope), "")
-        if remembered:
-            if remembered == "__new__":
-                for idx, item in enumerate(sessions):
-                    if item.get("_kind") == "new":
-                        self.session_index = idx
-                        self.session_scroll = 0
-                        return
+        if remembered and remembered != "__new__":
             for idx, item in enumerate(sessions):
                 if self.stable_session_key(item) == remembered:
                     self.session_index = idx
@@ -1243,7 +1404,10 @@ class AppStateMixin:
 
     def refresh_sessions(self, silent: bool = False) -> None:
         try:
+            ai_session._SESSION_INDEX_CACHE = None
             data = ai_session.refresh_session_index()
+            self.invalidate_session_cache(reset=True)
+            self.needs_erase = True
         except Exception as exc:  # pragma: no cover - defensive TUI boundary
             if not silent:
                 self.message = f"session index failed: {exc}"
@@ -1254,6 +1418,16 @@ class AppStateMixin:
 
     def current_sessions(self) -> list[dict[str, Any]]:
         scope = self.current_session_scope()
+        if scope == "new":
+            key = (scope, self.current_provider(), self.current_profile_label(), ai_store.normalize_path(self.effective_workdir_path()))
+            if getattr(self, "_session_cache_key", None) == key:
+                return getattr(self, "_session_cache_rows", [])
+            row = self.new_session_row()
+            self._session_cache_key = key
+            self._session_cache_rows = [row]
+            self.session_index = 0
+            self.session_scroll = 0
+            return [row]
         fields = self.current_session_filter_fields()
         context_fields = self.session_context_fields(scope)
         provider = self.current_provider() if "provider" in fields else None
@@ -1381,7 +1555,6 @@ class AppStateMixin:
         path = base / profile
         try:
             if path.is_dir():
-                import shutil
                 shutil.rmtree(path)
                 self.set_status_message(f"deleted profile: {provider}/{profile}", "프로필을 삭제했다.")
             else:
@@ -1414,11 +1587,41 @@ class AppStateMixin:
         
         try:
             path = Path(path_str)
-            if path.is_file():
-                path.unlink()
-                self.set_status_message(f"deleted session: {session_id[:8]}", "세션을 삭제했다.")
+            if item.get("provider") == "opencode":
+                import sqlite3
+                if path.is_file():
+                    conn = sqlite3.connect(str(path))
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM part WHERE session_id = ?", (session_id,))
+                    cur.execute("DELETE FROM session WHERE id = ?", (session_id,))
+                    conn.commit()
+                    conn.close()
+                    self.set_status_message(f"deleted session: {session_id[:8]}", "세션을 삭제했다.")
+                else:
+                    self.set_status_message(f"database not found: {path_str}", "데이터베이스를 찾을 수 없다.")
+            elif item.get("provider") == "agy":
+                conv_dir = path.parents[2] if len(path.parents) >= 3 else None
+                conv_db = path.parents[3] / "conversations" / f"{session_id}.db" if len(path.parents) >= 4 else None
+                deleted = False
+                if conv_dir and conv_dir.is_dir():
+                    shutil.rmtree(conv_dir)
+                    deleted = True
+                if conv_db and conv_db.is_file():
+                    conv_db.unlink()
+                    deleted = True
+                if path.is_file():
+                    path.unlink()
+                    deleted = True
+                if deleted:
+                    self.set_status_message(f"deleted session: {session_id[:8]}", "세션을 삭제했다.")
+                else:
+                    self.set_status_message(f"session file not found: {path_str}", "세션 파일을 찾을 수 없다.")
             else:
-                self.set_status_message(f"session file not found: {path_str}", "세션 파일을 찾을 수 없다.")
+                if path.is_file():
+                    path.unlink()
+                    self.set_status_message(f"deleted session: {session_id[:8]}", "세션을 삭제했다.")
+                else:
+                    self.set_status_message(f"session file not found: {path_str}", "세션 파일을 찾을 수 없다.")
             ai_session.refresh_session_index()
             self.invalidate_session_cache(reset=True)
             self.session_index = -1
@@ -1561,8 +1764,97 @@ class AppStateMixin:
         editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            path.write_text("{}\n", encoding="utf-8")
+            if path.suffix == ".json":
+                path.write_text("{}\n", encoding="utf-8")
+            else:
+                path.write_text("", encoding="utf-8")
         self.shell([editor, str(path)])
+
+
+    def save_global_codex_config(self) -> tuple[bool, str]:
+        opts = self.current_provider_options("codex")
+        cfg_path = HOME / ".codex" / "config.toml"
+        try:
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            content = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else "# Shared Codex configuration\n"
+
+            def _clean(val: Any) -> str:
+                s = str(val or "").strip()
+                return s.replace(" (default)", "").replace("(default)", "").strip().lower()
+
+            sandbox_val = _clean(opts.get("sandbox"))
+            if sandbox_val == "danger-full-access":
+                content = update_toml_top_key(content, "sandbox_mode", '"danger-full-access"')
+            elif sandbox_val in ("danger-bypass", "dangerously-bypass-approvals-and-sandbox"):
+                content = update_toml_top_key(content, "sandbox_mode", '"danger-full-access"')
+                content = update_toml_top_key(content, "approval_policy", '"never"')
+
+            approval_val = _clean(opts.get("approval"))
+            if approval_val == "on-request":
+                content = update_toml_top_key(content, "approval_policy", '"on-request"')
+            elif approval_val == "never":
+                content = update_toml_top_key(content, "approval_policy", '"never"')
+
+            reviewer_val = _clean(opts.get("reviewer"))
+            if reviewer_val in ("auto", "auto_review", "approve-for-me"):
+                content = update_toml_top_key(content, "approvals_reviewer", '"auto_review"')
+            elif reviewer_val == "human":
+                content = update_toml_top_key(content, "approvals_reviewer", '"human"')
+
+            ctx_val = _clean(opts.get("context", "272k"))
+            if ctx_val in ("272k", "default"):
+                limit = 272000
+            elif ctx_val == "372k":
+                limit = 372000
+            elif ctx_val == "1m":
+                limit = 1000000
+            elif ctx_val != "custom":
+                try:
+                    limit = ai_cli.parse_context_window(ctx_val)
+                except Exception:
+                    limit = 272000
+            else:
+                limit = 272000
+
+            content = update_toml_top_key(content, "model_context_window", str(limit))
+
+            compact_val = _clean(opts.get("compact", "off"))
+            if compact_val.startswith("default") or compact_val in ("off", "none"):
+                content = remove_toml_top_key(content, "model_auto_compact_token_limit")
+                content = remove_toml_top_key(content, "model_auto_compact_token_limit_scope")
+            else:
+                try:
+                    compact_limit = ai_cli.parse_compact_limit(compact_val, limit)
+                except Exception:
+                    compact_limit = None
+                if compact_limit is not None:
+                    content = update_toml_top_key(content, "model_auto_compact_token_limit", str(compact_limit))
+                    content = update_toml_top_key(content, "model_auto_compact_token_limit_scope", '"total"')
+
+            ctx_mgmt_val = _clean(opts.get("context_mgmt", "on"))
+            if ctx_mgmt_val in ("on", "default"):
+                content = update_toml_section_key(content, "features", "context_management", "true")
+                content = update_toml_top_key(content, "suppress_unstable_features_warning", "true")
+            elif ctx_mgmt_val == "off":
+                content = update_toml_section_key(content, "features", "context_management", "false")
+
+            cfg_path.write_text(content, encoding="utf-8")
+            return True, f"Saved options to {short(str(cfg_path))}"
+        except Exception as e:
+            return False, f"Error saving global config: {e}"
+
+
+    def edit_global_config(self, provider: str | None = None) -> None:
+        provider = provider or self.current_provider()
+        if provider == "codex":
+            cfg_path = HOME / ".codex" / "config.toml"
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            if not cfg_path.exists():
+                cfg_path.write_text("# Shared Codex configuration\n", encoding="utf-8")
+            self.open_file(cfg_path)
+            self.message = f"edited {short(str(cfg_path))}"
+        else:
+            self.message = f"global config not defined for {provider}"
 
 
     def common_args(self, display: bool = False) -> list[str]:
@@ -1991,14 +2283,21 @@ class AppRendererMixin:
 
     def selected_workdir_path(self) -> tuple[str, str, str]:
         self.ensure_workdir_text()
-        path = self.normalize_workdir_path(Path(self.current_workdir_path()))
         if getattr(self, "workdir_text", None) == "":
             return "", "", ""
         if getattr(self, "workdir_layer", "inline") == "children":
+            base_text = getattr(self, "workdir_dropdown_base", None)
+            path = self.normalize_workdir_path(Path(base_text)) if base_text else self.normalize_workdir_path(Path(self.current_workdir_path()))
+            if path == self.home_path():
+                child = self.selected_workdir_child()
+                if child is not None:
+                    cpath = self.normalize_workdir_path(child)
+                    return short(str(cpath)), cpath.name or short(str(cpath)), ""
             text = short(str(path))
             if not text.endswith("/"):
                 text += "/"
             return text, "", ""
+        path = self.normalize_workdir_path(Path(self.current_workdir_path()))
         text = self.workdir_text or short(str(path))
         segment = "~" if path == self.home_path() else path.name or short(str(path))
         return text, segment, ""
@@ -2152,7 +2451,7 @@ class AppRendererMixin:
         if status_width and sx < width - 1:
             self.add_text(y, sx, right_hint, min(status_width, width - 1 - sx), curses.A_DIM)
 
-        expanded = getattr(self, "workdir_expanded", False)
+        expanded = getattr(self, "workdir_expanded", False) or getattr(self, "workdir_layer", "path") == "children"
         hint = "(Tab/Esc: collapse)" if expanded else "(Tab: expand)"
         hint_rem = max(0, width - (sx + 2) - 1)
         if display_path and not status_width and hint_rem >= cell_width(hint):
@@ -2214,10 +2513,11 @@ class AppRendererMixin:
                 val = opts.get(oid)
                 stype = s.get("type", "toggle")
                 lbl = s.get("label", oid)
-                if stype == "toggle" and (val is True or str(val).lower() in {"1", "true", "yes", "on"}):
-                    active_labels.append(lbl)
-                elif stype == "choice" and val and str(val).lower() not in {"off", "none", "default"}:
-                    active_labels.append(f"{lbl}={val}")
+                if not is_default_option_value(s, val):
+                    if stype == "toggle":
+                        active_labels.append(lbl)
+                    else:
+                        active_labels.append(f"{lbl}={val}")
 
             if active_labels:
                 active_str = ", ".join(active_labels)
@@ -2290,6 +2590,8 @@ class AppRendererMixin:
         }
 
         cur_y = y + 1
+        max_lbl_len = max([len(s.get("label", s.get("id", ""))) for s in specs] + [8])
+        opt_lbl_width = min(max_lbl_len, 10)
         for i, s in enumerate(specs):
             is_sub_active = active and sub_idx == i
             opt_id = s.get("id", "")
@@ -2299,7 +2601,7 @@ class AppRendererMixin:
             tree_char = "└─" if is_last else "├─"
             sub_marker = "> " if is_sub_active else "  "
 
-            sub_prefix = f"{sub_marker} {tree_char} {opt_label:<8}  "
+            sub_prefix = f"{sub_marker} {tree_char} {opt_label:<{opt_lbl_width}}  "
             self.add_line(cur_y, 0, "", width - 1)
             self.add_text(cur_y, 0, sub_prefix, min(width - 1, len(sub_prefix)), self.section_label_attr(is_sub_active))
 
@@ -2311,8 +2613,26 @@ class AppRendererMixin:
                 active_choice_idx = 1 if cur_val else 0
             else:
                 choices = list(s.get("choices", ["off"]))
-                cur_str = str(opts.get(opt_id, s.get("default", "off")))
-                active_choice_idx = choices.index(cur_str) if cur_str in choices else 0
+                default_choice = s.get("default", choices[0])
+                cur_str = str(opts.get(opt_id, default_choice))
+                clean_cur = cur_str.replace(" (default)", "").replace("(default)", "").strip().lower()
+                matched_idx = None
+                for ci, c in enumerate(choices):
+                    if c == cur_str:
+                        matched_idx = ci
+                        break
+                    clean_c = c.replace(" (default)", "").replace("(default)", "").strip().lower()
+                    if clean_c == clean_cur:
+                        matched_idx = ci
+                        break
+                if matched_idx is not None:
+                    active_choice_idx = matched_idx
+                elif "custom" in choices and not is_default_option_value(s, cur_str):
+                    custom_idx = choices.index("custom")
+                    choices[custom_idx] = cur_str
+                    active_choice_idx = custom_idx
+                else:
+                    active_choice_idx = 0
 
             self.draw_sub_choice_items(cur_y, sub_start_x, width, choices, active_choice_idx, is_sub_active)
 
@@ -2476,6 +2796,33 @@ class AppRendererMixin:
         panel_y = scope_y + (2 if show_gap else 1)
         if show_gap:
             self.add_line(scope_y + 1, 0, "", width - 1)
+        scope = self.current_session_scope()
+        if scope == "new":
+            active = self.active_section() in {"session", "sessions"}
+            self.list_meta["sessions"] = {
+                "y": panel_y,
+                "x": 0,
+                "w": width,
+                "rows": 0,
+                "start": 0,
+                "count": 0,
+                "top": panel_y,
+                "height": 0,
+            }
+            if panel_y < y + rows:
+                self.add_line(panel_y, 0, self.panel_title("NEW SESSION", active), width - 1, self.section_label_attr(active))
+            preview_text_attr = self.subdued_attr(active)
+            meta_line = f"Provider: {self.current_provider().title()}  │  Profile: {self.current_profile()}  │  Workdir: {short(self.effective_workdir_path())}"
+            if panel_y + 1 < y + rows:
+                self.add_line(panel_y + 1, 2, meta_line, width - 3, preview_text_attr)
+            if panel_y + 2 < y + rows:
+                self.add_line(panel_y + 2, 2, f"Command: {self.command_line()}", width - 3, preview_text_attr)
+            if panel_y + 3 < y + rows:
+                self.add_line(panel_y + 3, 2, "Start new session with current command settings (Enter to run)", width - 3, preview_text_attr)
+            for r in range(panel_y + 4, y + rows):
+                self.add_line(r, 0, "", width - 1)
+            return
+
         sessions_active = self.active_section() == "sessions"
         self.add_line(panel_y, 0, self.panel_title("SESSION", sessions_active), width - 1, self.section_label_attr(sessions_active))
         list_y = panel_y + 1
@@ -2496,18 +2843,6 @@ class AppRendererMixin:
             self.add_line(list_y, 0, "No summaries yet.", width - 1)
             for n in range(list_y + 1, y + rows):
                 self.add_line(n, 0, "", width - 1)
-            preview_y = list_y + 2
-            if preview_y < y + rows and (self.active_section() == "session" and session_idx == 0):
-                preview_attr = self.section_label_attr(sessions_active)
-                preview_text_attr = self.subdued_attr(sessions_active)
-                self.add_line(preview_y, 0, self.panel_title("NEW SESSION", sessions_active), width - 1, preview_attr)
-                meta_line = f"Provider: {self.current_provider().title()}  │  Profile: {self.current_profile()}  │  Workdir: {short(self.effective_workdir_path())}"
-                if preview_y + 1 < y + rows:
-                    self.add_line(preview_y + 1, 2, meta_line, width - 3, preview_text_attr)
-                if preview_y + 2 < y + rows:
-                    self.add_line(preview_y + 2, 2, f"Command: {self.command_line()}", width - 3, preview_text_attr)
-                if preview_y + 3 < y + rows:
-                    self.add_line(preview_y + 3, 2, "Start new session with current command settings (Enter to run)", width - 3, preview_text_attr)
             return
 
         if rows <= 8:
@@ -2577,25 +2912,6 @@ class AppRendererMixin:
             return
 
         active = self.active_section() in {"session", "sessions"}
-        is_new_mode = (self.active_section() == "session" and session_idx == 0)
-        if is_new_mode:
-            preview_attr = self.section_label_attr(active)
-            preview_text_attr = self.subdued_attr(active)
-            self.add_line(preview_y, 0, self.panel_title("NEW SESSION", active), width - 1, preview_attr)
-            cmd_line = self.command_line()
-            meta_line = f"Provider: {self.current_provider().title()}  │  Profile: {self.current_profile()}  │  Workdir: {short(self.effective_workdir_path())}"
-            if preview_y + 1 < y + rows:
-                self.add_line(preview_y + 1, 2, meta_line, width - 3, preview_text_attr)
-            if preview_y + 2 < y + rows:
-                self.add_line(preview_y + 2, 2, f"Command: {cmd_line}", width - 3, preview_text_attr)
-            if preview_y + 3 < y + rows:
-                self.add_line(preview_y + 3, 2, "Start new session with current command settings (Enter to run)", width - 3, preview_text_attr)
-            row = preview_y + 4
-            while row < y + rows:
-                self.add_line(row, 0, "", width - 1)
-                row += 1
-            return
-
         if self.session_index < 0:
             return
         if real_selected_idx >= 0:
@@ -2638,29 +2954,33 @@ class AppRendererMixin:
 
 
     def draw_main_background(self) -> None:
+        desired_bkgd = 0
+        if getattr(self, "delete_confirm_active", False):
+            desired_bkgd = 1
+        elif getattr(self, "add_profile_active", False):
+            desired_bkgd = 2
+        elif (
+            getattr(self, "help_popup_active", False)
+            or getattr(self, "session_details_popup_active", False)
+            or getattr(self, "options_popup_active", False)
+            or getattr(self, "global_config_popup_active", False)
+        ):
+            desired_bkgd = 3
+        elif getattr(self, "run_confirm_active", False):
+            desired_bkgd = 8
+
+        current_bkgd = getattr(self, "_active_bkgd_pair", 0)
+        if current_bkgd != desired_bkgd:
+            try:
+                self.stdscr.bkgd(curses.color_pair(desired_bkgd))
+                self.stdscr.erase()
+            except (curses.error, AttributeError):
+                pass
+            self._active_bkgd_pair = desired_bkgd
+
         if getattr(self, "needs_erase", True):
             self.stdscr.erase()
             self.needs_erase = False
-        if getattr(self, "delete_confirm_active", False):
-            try:
-                self.stdscr.bkgd(curses.color_pair(1))
-            except (curses.error, AttributeError):
-                pass
-        elif getattr(self, "add_profile_active", False):
-            try:
-                self.stdscr.bkgd(curses.color_pair(2))
-            except (curses.error, AttributeError):
-                pass
-        elif getattr(self, "help_popup_active", False) or getattr(self, "session_details_popup_active", False):
-            try:
-                self.stdscr.bkgd(curses.color_pair(3))
-            except (curses.error, AttributeError):
-                pass
-        elif getattr(self, "run_confirm_active", False):
-            try:
-                self.stdscr.bkgd(curses.color_pair(8))
-            except (curses.error, AttributeError):
-                pass
         self.list_meta = {}
         self.workdir_cursor = None
         h, w = self.stdscr.getmaxyx()
@@ -2693,19 +3013,19 @@ class AppRendererMixin:
             action_hint = "↑/↓ select, Tab: details, Enter: resume"
         elif active_sec == "session":
             if getattr(self, "indices", {}).get("session", 0) == 0:
-                action_hint = "←/→ select scope, Enter: run new"
+                action_hint = "Tab/←/→ cycle scope, Enter: run new"
             else:
-                action_hint = "←/→ select scope, Enter: list"
+                action_hint = "Tab/←/→ cycle scope, Enter: list"
         elif active_sec == "workdir":
             if getattr(self, "workdir_expanded", False):
                 action_hint = "Tab: confirm & close, Esc: cancel"
             else:
-                action_hint = "Tab: expand, Enter: scope, / edits cwd"
+                action_hint = "Tab: expand, Enter: scope, Ctrl-E (/ edits cwd)"
         elif active_sec == "options":
             if getattr(self, "options_expanded", False):
-                action_hint = "Tab: cycle choice, ↑/↓ select, Esc: close"
+                action_hint = "←/→ cycle, Ctrl-S: save global, Ctrl-G: modal, Ctrl-E: toml"
             else:
-                action_hint = "Tab: expand, Enter: scope"
+                action_hint = "Ctrl-O: expand, Ctrl-G: modal, Ctrl-S: save global"
         else:
             action_hint = "Tab: cycle, Enter: scope"
 
@@ -2729,6 +3049,12 @@ class AppRendererMixin:
 
 
     def draw_manage(self) -> None:
+        if getattr(self, "_active_bkgd_pair", 0) != 0:
+            try:
+                self.stdscr.bkgd(curses.color_pair(0))
+            except (curses.error, AttributeError):
+                pass
+            self._active_bkgd_pair = 0
         self.stdscr.erase()
         h, w = self.stdscr.getmaxyx()
         self.add_line(0, 0, " Management / settings", w - 1, curses.A_BOLD | curses.A_REVERSE)
@@ -2851,16 +3177,19 @@ class AppRendererMixin:
         lines = [
             "Keyboard Shortcuts",
             "──────────────────",
-            ("Tab", "Cycle panels (Workdir -> Command -> Sessions)"),
-            ("Shift-Tab", "Cycle panels backwards"),
+            ("Tab / S-Tab", "Cycle panels (Workdir -> Command -> Sessions)"),
             ("Enter", "Open sessions / Confirm action"),
             ("Esc", "Back / Exit launcher"),
-            ("o", "Configure CLI options (sandbox/approval/search)"),
-            ("Ctrl-E or /", "Edit Cwd in Workdir panel"),
+            ("Ctrl-O", "Expand / focus CLI options panel"),
+            ("Ctrl-G", "Open Global Config modal (~/.codex/config.toml)"),
+            ("Ctrl-S", "Save current options to global config.toml"),
+            ("Ctrl-E", "Edit Cwd (Workdir) / Edit config.toml (Options)"),
             ("Ctrl-A", "Add profile (in Profile panel)"),
             ("Ctrl-D", "Delete profile / session"),
             ("Ctrl-T", "Toggle automated/empty sessions"),
+            ("Ctrl-R", "Refresh sessions from disk"),
             ("Arrow Keys", "Navigate choices / items"),
+            ("Space", "Toggle / cycle options / select directory"),
             "",
             "Press any key to close..."
         ]
@@ -2908,7 +3237,7 @@ class AppRendererMixin:
                     lines.append((f"{marker} {label}", f"{val_str:<22} {s.get('flag','')}"))
                 lines.extend([
                     "",
-                    "↑/↓: Select  │  ←/→/Space: Toggle  │  Enter/Esc: Save"
+                    "↑/↓: Select  │  ←/→/Space: Toggle  │  Ctrl-S: Save Global  │  Ctrl-E: Edit TOML  │  Esc: Close"
                 ])
                 self.draw_popup_window(
                     title=f"{provider.upper()} CLI OPTIONS",
@@ -2918,20 +3247,97 @@ class AppRendererMixin:
                     has_input=False
                 )
                 ch = self.stdscr.getch()
-                if ch in (curses.KEY_UP, ord('k')):
+                if ch == curses.KEY_UP:
                     selected_idx = (selected_idx - 1) % len(specs)
-                elif ch in (curses.KEY_DOWN, ord('j')):
+                elif ch == curses.KEY_DOWN:
                     selected_idx = (selected_idx + 1) % len(specs)
-                elif ch in (curses.KEY_LEFT, ord('h')):
+                elif ch == curses.KEY_LEFT:
                     opt_id = specs[selected_idx].get("id", "")
                     self.cycle_option_value(provider, opt_id, -1)
-                elif ch in (curses.KEY_RIGHT, ord('l'), 32):  # 32 = Space
+                elif ch in (curses.KEY_RIGHT, 32):  # 32 = Space
                     opt_id = specs[selected_idx].get("id", "")
                     self.cycle_option_value(provider, opt_id, 1)
-                elif ch in (10, 13, 27, ord('o'), ord('O')):
+                elif ch == 19:  # Ctrl-S: save global
+                    if provider == "codex":
+                        saved, msg = self.save_global_codex_config()
+                        self.message = msg
+                    else:
+                        self.message = f"Global save not supported for {provider}"
+                elif ch == 5:  # Ctrl-E: edit toml
+                    self.edit_global_config(provider)
+                    break
+                elif ch in (10, 13, 27, 15, 7):  # Enter, Esc, Ctrl-O, Ctrl-G
                     break
         finally:
             self.options_popup_active = False
+            self.needs_erase = True
+            self.draw()
+
+
+    def show_global_config_popup(self) -> None:
+        self.global_config_popup_active = True
+        provider = self.current_provider()
+        specs = self.provider_options_specs(provider)
+        if not specs:
+            self.message = f"no options configured for {provider}"
+            self.global_config_popup_active = False
+            return
+        selected_idx = 0
+        cfg_path = HOME / ".codex" / "config.toml" if provider == "codex" else None
+        try:
+            while True:
+                opts = self.current_provider_options(provider)
+                lines: list[Any] = [
+                    f"Global Configuration ({short(str(cfg_path)) if cfg_path else provider}):",
+                    "────────────────────────────────────────────────"
+                ]
+                for i, s in enumerate(specs):
+                    opt_id = s.get("id", "")
+                    label = s.get("label", opt_id)
+                    typ = s.get("type", "toggle")
+                    val = opts.get(opt_id)
+                    marker = ">" if i == selected_idx else " "
+                    if typ == "toggle":
+                        val_str = "[ON]" if val else "[OFF]"
+                    else:
+                        val_str = f"<{val}>"
+                    lines.append((f"{marker} {label}", f"{val_str:<22} {s.get('flag','')}"))
+                lines.extend([
+                    "",
+                    "↑/↓: Select  │  ←/→/Space: Change  │  Enter/Ctrl-S: Save Global  │  Ctrl-E: Edit TOML  │  Esc: Close"
+                ])
+                self.draw_popup_window(
+                    title=f"{provider.upper()} GLOBAL CONFIG",
+                    lines=lines,
+                    accent_color_pair=7,
+                    align_right=False,
+                    has_input=False
+                )
+                ch = self.stdscr.getch()
+                if ch == curses.KEY_UP:
+                    selected_idx = (selected_idx - 1) % len(specs)
+                elif ch == curses.KEY_DOWN:
+                    selected_idx = (selected_idx + 1) % len(specs)
+                elif ch == curses.KEY_LEFT:
+                    opt_id = specs[selected_idx].get("id", "")
+                    self.cycle_option_value(provider, opt_id, -1)
+                elif ch in (curses.KEY_RIGHT, 32):  # 32 = Space
+                    opt_id = specs[selected_idx].get("id", "")
+                    self.cycle_option_value(provider, opt_id, 1)
+                elif ch in (10, 13, 19):  # Enter, Ctrl-S: save global
+                    if provider == "codex":
+                        saved, msg = self.save_global_codex_config()
+                        self.message = msg
+                    else:
+                        self.message = f"Global save not supported for {provider}"
+                    break
+                elif ch == 5:  # Ctrl-E: open in editor
+                    self.edit_global_config(provider)
+                    break
+                elif ch in (27, 7, 15):  # Esc, Ctrl-G, Ctrl-O: close
+                    break
+        finally:
+            self.global_config_popup_active = False
             self.needs_erase = True
             self.draw()
 
@@ -3002,7 +3408,7 @@ class AppRendererMixin:
                 )
                 while True:
                     ch = self.stdscr.getch()
-                    if ch in (9, 27, 10, 13, 32, ord("q"), ord("Q")):
+                    if ch in (9, 27, 10, 13, 32, 17):
                         break
         except Exception:
             pass
@@ -3080,6 +3486,7 @@ class AppRendererMixin:
             curses.curs_set(0)
             self.delete_confirm_active = False
             self.add_profile_active = False
+            self.needs_erase = True
             self.draw()
 
 
@@ -3141,6 +3548,7 @@ class AppRendererMixin:
         finally:
             curses.curs_set(0)
             self.delete_confirm_active = False
+            self.needs_erase = True
             self.draw()
 
 
@@ -3278,6 +3686,7 @@ class AppControllerMixin:
                     return
         finally:
             self.run_confirm_active = False
+            self.needs_erase = True
             self.draw()
 
 
@@ -3305,13 +3714,16 @@ class AppControllerMixin:
         if not self.workdir_dropdown_open():
             return False
         self.commit_focused_workdir()
+        self.workdir_expanded = False
+        self.workdir_layer = "path"
         self.set_section("workdir")
         return True
 
 
     def cancel_workdir_dropdown(self) -> bool:
+        was_editing = getattr(self, "workdir_editing", False)
         self.workdir_editing = False
-        if not self.workdir_dropdown_open() and not getattr(self, "workdir_expanded", False):
+        if not self.workdir_dropdown_open() and not getattr(self, "workdir_expanded", False) and not was_editing:
             return False
         self.focus_workdir_path()
         self.workdir_expanded = False
@@ -3319,7 +3731,7 @@ class AppControllerMixin:
         self.workdir_child_index = -1
         self.set_section("workdir")
         self.needs_erase = True
-        self.message = "workdir selection cancelled"
+        self.message = "workdir edit cancelled" if was_editing else "workdir selection cancelled"
         return True
 
 
@@ -3375,10 +3787,49 @@ class AppControllerMixin:
             return True
         section = self.section_name()
         if section == "workdir":
+            if getattr(self, "workdir_editing", False):
+                raw_text = (getattr(self, "workdir_text", "") or "").strip()
+                suffix = self.workdir_completion_suffix()
+                if suffix:
+                    match = self.workdir_best_match()
+                    if match is not None:
+                        self.workdir_text = self.workdir_text_for_child(match)
+                        self.workdir_modified = True
+                        raw_text = self.workdir_text.strip()
+                target_path = None
+                try:
+                    p = expand_workdir(raw_text)
+                    if p.is_dir():
+                        target_path = p
+                except Exception:
+                    pass
+                if target_path is not None:
+                    self.set_custom_workdir(target_path, "set", text=short(str(target_path)), layer="path")
+                    self.workdir_modified = False
+                    self.workdir_editing = False
+                    self.open_workdir_dropdown(target_path)
+                    children = self.filtered_workdir_children()
+                    self.workdir_sub_index = self.workdir_child_index if getattr(self, "workdir_child_index", -1) >= 0 else (0 if children else -1)
+                    self.workdir_child_index = self.workdir_sub_index
+                    self.workdir_layer = "children" if children else "path"
+                    self.workdir_expanded = bool(children)
+                    self.needs_erase = True
+                    return True
+                else:
+                    if not self.commit_workdir_text_if_present():
+                        return True
+                    self.focus_workdir_path()
+                    self.workdir_expanded = False
+                    self.workdir_sub_index = -1
+                    self.workdir_child_index = -1
+                    self.workdir_layer = "path"
+                    self.workdir_editing = False
+                    self.set_section("workdir")
+                    self.needs_erase = True
+                    return True
             expanded = (
                 getattr(self, "workdir_expanded", False)
                 or getattr(self, "workdir_layer", "path") == "children"
-                or getattr(self, "workdir_editing", False)
             )
             if not expanded:
                 self.workdir_expanded = True
@@ -3395,9 +3846,6 @@ class AppControllerMixin:
             else:
                 if self.workdir_dropdown_open():
                     self.commit_workdir_dropdown()
-                    self.focus_workdir_path()
-                elif getattr(self, "workdir_editing", False):
-                    self.commit_workdir_text_if_present()
                     self.focus_workdir_path()
                 else:
                     self.commit_focused_workdir()
@@ -3418,21 +3866,19 @@ class AppControllerMixin:
             return True
         elif section == "options":
             expanded = getattr(self, "options_expanded", False)
-            specs = self.provider_options_specs()
             if not expanded:
+                specs = self.provider_options_specs()
                 self.options_expanded = True
                 self.options_sub_index = 0 if specs else -1
                 self.needs_erase = True
             else:
-                if specs:
-                    sub_idx = getattr(self, "options_sub_index", 0)
-                    if sub_idx < 0 or sub_idx >= len(specs):
-                        sub_idx = 0
-                    self.options_sub_index = sub_idx
-                    self.cycle_option_value(self.current_provider(), specs[sub_idx].get("id", ""), 1)
+                self.options_expanded = False
+                self.options_sub_index = -1
+                self.needs_erase = True
             return True
         elif section == "session":
-            self.enter_sessions()
+            self.change_option("session", 1)
+            self.needs_erase = True
             return True
         elif section == "sessions":
             self.show_session_details_popup()
@@ -3447,8 +3893,12 @@ class AppControllerMixin:
             self.leave_run_confirm("run cancelled")
             return True
         section = self.section_name()
-        if section in {"session", "sessions"}:
+        if section == "sessions":
             self.return_to_builder()
+            return True
+        elif section == "session":
+            self.change_option("session", -1)
+            self.needs_erase = True
             return True
         elif section == "provider":
             self.change_option("provider", -1)
@@ -3459,13 +3909,9 @@ class AppControllerMixin:
         elif section == "options":
             expanded = getattr(self, "options_expanded", False)
             if expanded:
-                specs = self.provider_options_specs()
-                if specs:
-                    sub_idx = getattr(self, "options_sub_index", 0)
-                    if sub_idx < 0 or sub_idx >= len(specs):
-                        sub_idx = 0
-                    self.options_sub_index = sub_idx
-                    self.cycle_option_value(self.current_provider(), specs[sub_idx].get("id", ""), -1)
+                self.options_expanded = False
+                self.options_sub_index = -1
+                self.needs_erase = True
             else:
                 self.set_section("profile")
             return True
@@ -3480,7 +3926,8 @@ class AppControllerMixin:
                     self.commit_workdir_dropdown()
                     self.focus_workdir_path()
                 elif getattr(self, "workdir_editing", False):
-                    self.commit_workdir_text_if_present()
+                    if not self.commit_workdir_text_if_present():
+                        return True
                     self.focus_workdir_path()
                 else:
                     self.commit_focused_workdir()
@@ -3514,7 +3961,8 @@ class AppControllerMixin:
                     self.commit_workdir_dropdown()
                     self.focus_workdir_path()
                 elif getattr(self, "workdir_editing", False):
-                    self.commit_workdir_text_if_present()
+                    if not self.commit_workdir_text_if_present():
+                        return True
                     self.focus_workdir_path()
                 else:
                     self.commit_focused_workdir()
@@ -3734,7 +4182,8 @@ class AppControllerMixin:
             self.invalidate_session_cache(reset=True)
         elif section == "profile":
             self.remember_session_selection()
-            self.indices["profile"] = (self.indices["profile"] + direction) % len(self.profiles)
+            profiles = getattr(self, "profiles", []) or ["default"]
+            self.indices["profile"] = (self.indices["profile"] + direction) % len(profiles)
             self.remember_current_profile()
             self.promote_session_scope("profile")
             self.invalidate_session_cache(reset=True)
@@ -3787,16 +4236,24 @@ class AppControllerMixin:
         if is_text_key and ch == 5:
             return False
         self.ensure_workdir_text()
+        if getattr(self, "workdir_layer", "path") == "children":
+            if not self.workdir_text.endswith("/"):
+                self.workdir_text += "/"
         self.workdir_layer = "inline"
         self.workdir_editing = True
         if is_edit_key:
             if ch in (curses.KEY_BACKSPACE, 127, 8):
-                if self.workdir_text:
+                if self.workdir_text in {"~/", "~"}:
+                    self.workdir_text = ""
+                elif self.workdir_text:
                     self.workdir_text = self.workdir_text[:-1]
             elif ch == 21:
                 self.workdir_text = ""
         else:
-            self.workdir_text += chr(ch)
+            if self.workdir_text == "~" and ch != ord("/"):
+                self.workdir_text = "~/" + chr(ch)
+            else:
+                self.workdir_text += chr(ch)
         self.workdir_modified = True
         base, prefix = self.workdir_text_base_and_prefix()
         try:
@@ -4051,7 +4508,11 @@ class AppControllerMixin:
             self.message = "cancelled"
             return None
         if ch == 27:
-            if self.active_section() == "workdir" and (getattr(self, "workdir_expanded", False) or getattr(self, "workdir_layer", "path") == "children"):
+            if self.active_section() == "workdir" and (
+                getattr(self, "workdir_expanded", False)
+                or getattr(self, "workdir_layer", "path") == "children"
+                or getattr(self, "workdir_editing", False)
+            ):
                 self.cancel_workdir_dropdown()
                 return None
             elif self.active_section() == "options" and getattr(self, "options_expanded", False):
@@ -4087,13 +4548,66 @@ class AppControllerMixin:
         if ch == 20:
             self.toggle_empty_sessions()
             return None
+        if ch == 18:
+            self.refresh_sessions(silent=False)
+            return None
         if self.active_section() == "workdir" and self.handle_workdir_text_key(ch):
             return None
-        if ch in (ord('o'), ord('O')):
+        if self.active_section() == "options" and getattr(self, "options_expanded", False):
+            sub_idx = getattr(self, "options_sub_index", -1)
+            specs = self.provider_options_specs()
+            if 0 <= sub_idx < len(specs):
+                spec = specs[sub_idx]
+                opt_id = spec.get("id")
+                if opt_id in ("context", "compact"):
+                    if opt_id == "context":
+                        is_valid_char = (ord('0') <= ch <= ord('9')) or ch in (ord('.'), ord('k'), ord('K'), ord('m'), ord('M'))
+                    else:
+                        is_valid_char = (ord('0') <= ch <= ord('9')) or ch in (ord('%'), ord('-'), ord('.'), ord('k'), ord('K'), ord('m'), ord('M'))
+                    is_backspace = ch in (curses.KEY_BACKSPACE, 127, 8)
+                    if is_valid_char or is_backspace:
+                        opts = self.current_provider_options()
+                        default_val = str(spec.get("default", "272k (default)" if opt_id == "context" else "off (default)"))
+                        cur = str(opts.get(opt_id, default_val)).lower()
+                        preset_choices = [c.lower() for c in spec.get("choices", []) if c != "custom"]
+                        if is_backspace:
+                            if not is_default_option_value(spec, cur) and cur not in preset_choices and len(cur) > 1:
+                                new_val = cur[:-1]
+                            else:
+                                new_val = default_val
+                        else:
+                            char = chr(ch).lower()
+                            if is_default_option_value(spec, cur) or cur in preset_choices:
+                                new_val = char
+                            else:
+                                new_val = cur + char
+                        opts[opt_id] = new_val
+                        if not is_default_option_value(spec, new_val):
+                            if opt_id == "context":
+                                self._last_custom_context = new_val
+                            else:
+                                self._last_custom_compact = new_val
+                        self.save_options_state()
+                        self.needs_erase = True
+                        return None
+        if ch == 15:  # Ctrl-O: expand/focus options
             self.options_expanded = not getattr(self, "options_expanded", False)
             self.set_section("options")
             specs = self.provider_options_specs()
             self.options_sub_index = 0 if (self.options_expanded and specs) else -1
+            self.needs_erase = True
+            return None
+        if ch == 7:  # Ctrl-G: global config modal
+            if hasattr(self, "stdscr"):
+                self.show_global_config_popup()
+            return None
+        if ch == 19:  # Ctrl-S: save global config
+            provider = self.current_provider()
+            if provider == "codex":
+                saved, msg = self.save_global_codex_config()
+                self.message = msg
+            else:
+                self.message = f"Global save not supported for {provider}"
             self.needs_erase = True
             return None
         if ch == 32 and self.active_section() == "workdir" and getattr(self, "workdir_expanded", False):
@@ -4119,12 +4633,20 @@ class AppControllerMixin:
                         self.cycle_option_value(self.current_provider(), specs[sub_idx].get("id", ""), 1)
             self.needs_erase = True
             return None
-        if ch == 5 and self.active_section() == "workdir":
-            if hasattr(self, "stdscr"):
-                self.edit_workdir()
+        if ch == 5:  # Ctrl-E
+            if self.active_section() == "workdir":
+                if hasattr(self, "stdscr"):
+                    self.edit_workdir()
+                else:
+                    self.message = "press Ctrl-E to edit workdir"
+                return None
+            elif self.active_section() == "options":
+                if hasattr(self, "stdscr"):
+                    self.edit_global_config()
+                return None
             else:
-                self.message = "press Ctrl-E to edit workdir"
-            return None
+                self.message = "press Ctrl-E in Workdir or Options"
+                return None
         if ch == curses.KEY_RIGHT:
             self.horizontal_action(1)
         elif ch == curses.KEY_LEFT:
@@ -4163,6 +4685,14 @@ class AppControllerMixin:
         except Exception:
             pass
         self.init_colors()
+        try:
+            import termios
+            fd = sys.stdin.fileno()
+            attrs = termios.tcgetattr(fd)
+            attrs[0] &= ~termios.IXON
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        except Exception:
+            pass
         try:
             mouse_events = getattr(curses, "BUTTON4_PRESSED", 0) | getattr(curses, "BUTTON5_PRESSED", 0)
             mouse_events |= getattr(curses, "BUTTON1_PRESSED", 0) | getattr(curses, "BUTTON1_RELEASED", 0)
@@ -4232,6 +4762,7 @@ class App(AppRendererMixin, AppControllerMixin, AppStateMixin, AppFormattingMixi
         self.add_profile_active = False
         self.help_popup_active = False
         self.options_popup_active = False
+        self.global_config_popup_active = False
         self.session_details_popup_active = False
         self.run_confirm_active = False
         self.needs_erase = True
