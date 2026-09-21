@@ -1195,6 +1195,17 @@ CODEX_CONTEXT_PRESETS_OUT="$(
 )"
 [ "$CODEX_CONTEXT_PRESETS_OUT" = "upstream (default) 272k 372k 1M custom" ] && ok "codex context presets preserve upstream defaults unless explicitly overridden" || { fail "codex context presets preserve upstream defaults unless explicitly overridden"; printf 'actual: %s\n' "$CODEX_CONTEXT_PRESETS_OUT" >&2; }
 
+CODEX_LEGACY_DEFAULT_STATE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
+app.providers = ["codex"]
+app.provider_options = {"codex": {"context": "272k (default)", "context_mgmt": "on (default)"}}
+opts = app.current_provider_options("codex")
+print(opts["context"], "|", opts["context_mgmt"])'
+)"
+[ "$CODEX_LEGACY_DEFAULT_STATE_OUT" = "upstream (default) | upstream (default)" ] && ok "codex stale wrapper default labels migrate to upstream defaults" || { fail "codex stale wrapper default labels migrate to upstream defaults"; printf 'actual: %s\n' "$CODEX_LEGACY_DEFAULT_STATE_OUT" >&2; }
+
 CODEX_CUSTOM_CONTEXT_TYPE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
 app = ai_tui.App.__new__(ai_tui.App)

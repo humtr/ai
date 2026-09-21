@@ -623,10 +623,13 @@ class AppStateMixin:
                 opts[opt_id] = s.get("default")
             elif s.get("type") == "choice":
                 choices = s.get("choices") or []
-                if "custom" in choices:
+                default_val = s.get("default", choices[0] if choices else "default")
+                if is_default_choice(opts[opt_id]) and str(opts[opt_id]) != str(default_val):
+                    opts[opt_id] = default_val
+                elif "custom" in choices:
                     pass
                 elif choices and str(opts[opt_id]) not in choices:
-                    opts[opt_id] = s.get("default")
+                    opts[opt_id] = default_val
         return opts
 
 
