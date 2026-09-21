@@ -1836,13 +1836,14 @@ class AppStateMixin:
             if limit is not None:
                 content = update_toml_top_key(content, "model_context_window", str(limit))
 
-            compact_val = _clean(opts.get("compact", "off"))
-            if compact_val.startswith("default") or compact_val in ("off", "none"):
+            compact_val = _clean(opts.get("compact", "upstream"))
+            if compact_val.startswith("default") or compact_val.startswith("upstream") or compact_val in ("off", "none"):
                 content = remove_toml_top_key(content, "model_auto_compact_token_limit")
                 content = remove_toml_top_key(content, "model_auto_compact_token_limit_scope")
             else:
                 try:
-                    compact_limit = ai_cli.parse_compact_limit(compact_val, limit)
+                    compact_context_limit = limit if limit is not None else ai_cli.parse_context_window(ctx_val)
+                    compact_limit = ai_cli.parse_compact_limit(compact_val, compact_context_limit)
                 except Exception:
                     compact_limit = None
                 if compact_limit is not None:
@@ -4587,7 +4588,7 @@ class AppControllerMixin:
                     is_backspace = ch in (curses.KEY_BACKSPACE, 127, 8)
                     if is_valid_char or is_backspace:
                         opts = self.current_provider_options()
-                        default_val = str(spec.get("default", "upstream (default)" if opt_id == "context" else "off (default)"))
+                        default_val = str(spec.get("default", "upstream (default)"))
                         cur = str(opts.get(opt_id, default_val)).lower()
                         preset_choices = [c.lower() for c in spec.get("choices", []) if c != "custom"]
                         if is_backspace:

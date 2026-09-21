@@ -1200,11 +1200,11 @@ CODEX_LEGACY_DEFAULT_STATE_OUT="$(
 app = ai_tui.App.__new__(ai_tui.App)
 app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
 app.providers = ["codex"]
-app.provider_options = {"codex": {"context": "272k (default)", "context_mgmt": "on (default)"}}
+app.provider_options = {"codex": {"context": "272k (default)", "context_mgmt": "on (default)", "compact": "off (default)"}}
 opts = app.current_provider_options("codex")
-print(opts["context"], "|", opts["context_mgmt"])'
+print(opts["context"], "|", opts["context_mgmt"], "|", opts["compact"])'
 )"
-[ "$CODEX_LEGACY_DEFAULT_STATE_OUT" = "upstream (default) | upstream (default)" ] && ok "codex stale wrapper default labels migrate to upstream defaults" || { fail "codex stale wrapper default labels migrate to upstream defaults"; printf 'actual: %s\n' "$CODEX_LEGACY_DEFAULT_STATE_OUT" >&2; }
+[ "$CODEX_LEGACY_DEFAULT_STATE_OUT" = "upstream (default) | upstream (default) | upstream (default)" ] && ok "codex stale wrapper default labels migrate to upstream defaults" || { fail "codex stale wrapper default labels migrate to upstream defaults"; printf 'actual: %s\n' "$CODEX_LEGACY_DEFAULT_STATE_OUT" >&2; }
 
 CODEX_CUSTOM_CONTEXT_TYPE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
@@ -1347,7 +1347,7 @@ print(saved, "sandbox_mode = \"danger-full-access\"" in content, "approval_polic
 SAVE_GLOBAL_CONFIG_UPSTREAM_DEFAULTS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, pathlib
 app = ai_tui.App.__new__(ai_tui.App)
-app.current_provider_options = lambda p: {"context": "upstream (default)", "context_mgmt": "upstream (default)", "compact": "off (default)"}
+app.current_provider_options = lambda p: {"context": "upstream (default)", "context_mgmt": "upstream (default)", "compact": "upstream (default)"}
 cfg = pathlib.Path("'"$HOME_FIXTURE"'") / ".codex" / "config.toml"
 cfg.write_text("model_context_window = 272000\nmodel_auto_compact_token_limit = 240000\nmodel_auto_compact_token_limit_scope = \"total\"\n\n[features]\ncontext_management = true\nfast_mode = true\n", encoding="utf-8")
 saved, msg = app.save_global_codex_config()

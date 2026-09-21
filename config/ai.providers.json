@@ -99,8 +99,8 @@
           "label": "Compact",
           "flag": "-c",
           "type": "choice",
-          "choices": ["off (default)", "90%", "85%", "-30k", "custom"],
-          "default": "off (default)"
+          "choices": ["upstream (default)", "90%", "85%", "-30k", "custom"],
+          "default": "upstream (default)"
         },
         {
           "id": "search",

@@ -80,7 +80,7 @@ def parse_compact_limit(compact: str | None, context_window: int = 272000) -> in
     if not compact:
         return None
     val = str(compact).strip().lower().replace(" (default)", "").replace("(default)", "").strip()
-    if val.startswith("default") or val in {"off", "none", ""}:
+    if val.startswith("default") or val.startswith("upstream") or val in {"off", "none", ""}:
         return None
     if val.endswith("%"):
         try:
@@ -118,7 +118,7 @@ def resolve_compact_args(provider: str, compact: str, context: str = "272k") -> 
     if provider != "codex":
         return []
     val = compact.strip().lower()
-    if val.startswith("default") or val in {"off", "none", ""}:
+    if val.startswith("default") or val.startswith("upstream") or val in {"off", "none", ""}:
         return []
     ctx_limit = parse_context_window(context)
     limit = parse_compact_limit(val, ctx_limit)
