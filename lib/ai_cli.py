@@ -62,7 +62,7 @@ def parse_context_window(context: str | None) -> int:
     if not context:
         return 272000
     val = str(context).strip().lower().replace(" (default)", "").replace("(default)", "").strip()
-    if val.startswith("default") or val in {"off", "none", ""}:
+    if val.startswith("default") or val.startswith("upstream") or val in {"off", "none", ""}:
         return 272000
     mult = 1
     if val.endswith("k"):
@@ -138,7 +138,7 @@ def resolve_context_args(provider: str, context: str) -> list[str]:
                 mapped = args_map[context]
                 return list(mapped) if isinstance(mapped, list) else [mapped]
     val = context.strip().lower()
-    if val.startswith("default") or val in {"off", "none"}:
+    if val.startswith("default") or val.startswith("upstream") or val in {"off", "none"}:
         return []
     limit = parse_context_window(context)
     return ["-c", f"model_context_window={limit}"]

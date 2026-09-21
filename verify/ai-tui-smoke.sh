@@ -1193,7 +1193,7 @@ EXPECTED_CODEX_REVIEWER_CYCLE_OUT="default= | human=-c approvals_reviewer=\"huma
 CODEX_CONTEXT_PRESETS_OUT="$(
   PYTHONPATH="$ROOT/lib" python3 -c 'import ai_spec; print(" ".join([opt["choices"] for opt in ai_spec.provider_spec("codex")["options"] if opt["id"] == "context"][0]))'
 )"
-[ "$CODEX_CONTEXT_PRESETS_OUT" = "272k (default) 372k 1M custom" ] && ok "codex context presets match actual openai model limits" || { fail "codex context presets match actual openai model limits"; printf 'actual: %s\n' "$CODEX_CONTEXT_PRESETS_OUT" >&2; }
+[ "$CODEX_CONTEXT_PRESETS_OUT" = "upstream (default) 272k 372k 1M custom" ] && ok "codex context presets preserve upstream defaults unless explicitly overridden" || { fail "codex context presets preserve upstream defaults unless explicitly overridden"; printf 'actual: %s\n' "$CODEX_CONTEXT_PRESETS_OUT" >&2; }
 
 CODEX_CUSTOM_CONTEXT_TYPE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui
@@ -1202,7 +1202,7 @@ app.section = ai_tui.SECTIONS.index("options")
 app.options_expanded = True
 app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
 app.providers = ["codex"]
-app.provider_options = {"codex": {"context": "272k (default)"}}
+app.provider_options = {"codex": {"context": "upstream (default)"}}
 specs = app.provider_options_specs("codex")
 app.options_sub_index = [s["id"] for s in specs].index("context")
 for ch in [ord("3"), ord("5"), ord("0"), ord("k")]:
@@ -1263,12 +1263,14 @@ app.providers = ["codex"]
 app.provider_options = {}
 res = ["default=" + " ".join(app.native_args_for_provider("codex"))]
 app.cycle_option_value("codex", "context_mgmt", 1)
+res.append("on=" + " ".join(app.native_args_for_provider("codex")))
+app.cycle_option_value("codex", "context_mgmt", 1)
 res.append("off=" + " ".join(app.native_args_for_provider("codex")))
 app.cycle_option_value("codex", "context_mgmt", 1)
 res.append("back-to-default=" + " ".join(app.native_args_for_provider("codex")))
 print(" | ".join(res))'
 )"
-EXPECTED_CODEX_CTX_MGMT_CYCLE_OUT="default= | off=--disable context_management | back-to-default="
+EXPECTED_CODEX_CTX_MGMT_CYCLE_OUT="default= | on=--enable context_management | off=--disable context_management | back-to-default="
 [ "$CODEX_CTX_MGMT_CYCLE_OUT" = "$EXPECTED_CODEX_CTX_MGMT_CYCLE_OUT" ] && ok "codex context_mgmt option cycles on and off" || { fail "codex context_mgmt option cycles on and off"; printf 'actual: %s\n' "$CODEX_CTX_MGMT_CYCLE_OUT" >&2; }
 
 CELL_TEXT_SANITIZE_OUT="$(
@@ -1330,6 +1332,18 @@ content = cfg.read_text(encoding="utf-8")
 print(saved, "sandbox_mode = \"danger-full-access\"" in content, "approval_policy = \"never\"" in content, "approvals_reviewer = \"human\"" in content, "model_context_window = 372000" in content, "model_auto_compact_token_limit = 334800" in content, "context_management = true" in content, "# Initial config" in content)'
 )"
 [ "$SAVE_GLOBAL_CONFIG_OUT" = "True True True True True True True True" ] && ok "save_global_codex_config preserves comments and writes accurate toml settings" || { fail "save_global_codex_config preserves comments and writes accurate toml settings"; printf 'actual: %s\n' "$SAVE_GLOBAL_CONFIG_OUT" >&2; }
+
+SAVE_GLOBAL_CONFIG_UPSTREAM_DEFAULTS_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, pathlib
+app = ai_tui.App.__new__(ai_tui.App)
+app.current_provider_options = lambda p: {"context": "upstream (default)", "context_mgmt": "upstream (default)", "compact": "off (default)"}
+cfg = pathlib.Path("'"$HOME_FIXTURE"'") / ".codex" / "config.toml"
+cfg.write_text("model_context_window = 272000\nmodel_auto_compact_token_limit = 240000\nmodel_auto_compact_token_limit_scope = \"total\"\n\n[features]\ncontext_management = true\nfast_mode = true\n", encoding="utf-8")
+saved, msg = app.save_global_codex_config()
+content = cfg.read_text(encoding="utf-8")
+print(saved, "model_context_window" not in content, "model_auto_compact_token_limit" not in content, "context_management" not in content, "fast_mode = true" in content)'
+)"
+[ "$SAVE_GLOBAL_CONFIG_UPSTREAM_DEFAULTS_OUT" = "True True True True True" ] && ok "save_global_codex_config removes wrapper-owned context defaults and preserves unrelated features" || { fail "save_global_codex_config removes wrapper-owned context defaults and preserves unrelated features"; printf 'actual: %s\n' "$SAVE_GLOBAL_CONFIG_UPSTREAM_DEFAULTS_OUT" >&2; }
 
 SAVE_GLOBAL_CONFIG_OFF_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, pathlib

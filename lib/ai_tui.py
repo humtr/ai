@@ -153,6 +153,20 @@ def update_toml_section_key(text: str, section: str, key: str, val_str: str) -> 
     return "".join(new_lines)
 
 
+def remove_toml_section_key(text: str, section: str, key: str) -> str:
+    lines = text.splitlines(keepends=True)
+    new_lines: list[str] = []
+    in_target_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_target_section = stripped == f"[{section}]"
+        if in_target_section and (stripped.startswith(f"{key} ") or stripped.startswith(f"{key}=")):
+            continue
+        new_lines.append(line)
+    return "".join(new_lines)
+
+
 def short(path: str) -> str:
     home = str(HOME)
     if path == home:
@@ -1801,8 +1815,11 @@ class AppStateMixin:
             elif reviewer_val == "human":
                 content = update_toml_top_key(content, "approvals_reviewer", '"human"')
 
-            ctx_val = _clean(opts.get("context", "272k"))
-            if ctx_val in ("272k", "default"):
+            ctx_val = _clean(opts.get("context", "upstream"))
+            limit = None
+            if ctx_val in ("", "default", "upstream") or ctx_val.startswith("upstream"):
+                content = remove_toml_top_key(content, "model_context_window")
+            elif ctx_val == "272k":
                 limit = 272000
             elif ctx_val == "372k":
                 limit = 372000
@@ -1812,11 +1829,9 @@ class AppStateMixin:
                 try:
                     limit = ai_cli.parse_context_window(ctx_val)
                 except Exception:
-                    limit = 272000
-            else:
-                limit = 272000
-
-            content = update_toml_top_key(content, "model_context_window", str(limit))
+                    limit = None
+            if limit is not None:
+                content = update_toml_top_key(content, "model_context_window", str(limit))
 
             compact_val = _clean(opts.get("compact", "off"))
             if compact_val.startswith("default") or compact_val in ("off", "none"):
@@ -1831,8 +1846,10 @@ class AppStateMixin:
                     content = update_toml_top_key(content, "model_auto_compact_token_limit", str(compact_limit))
                     content = update_toml_top_key(content, "model_auto_compact_token_limit_scope", '"total"')
 
-            ctx_mgmt_val = _clean(opts.get("context_mgmt", "on"))
-            if ctx_mgmt_val in ("on", "default"):
+            ctx_mgmt_val = _clean(opts.get("context_mgmt", "upstream"))
+            if ctx_mgmt_val in ("", "default", "upstream") or ctx_mgmt_val.startswith("upstream"):
+                content = remove_toml_section_key(content, "features", "context_management")
+            elif ctx_mgmt_val == "on":
                 content = update_toml_section_key(content, "features", "context_management", "true")
                 content = update_toml_top_key(content, "suppress_unstable_features_warning", "true")
             elif ctx_mgmt_val == "off":
@@ -4567,7 +4584,7 @@ class AppControllerMixin:
                     is_backspace = ch in (curses.KEY_BACKSPACE, 127, 8)
                     if is_valid_char or is_backspace:
                         opts = self.current_provider_options()
-                        default_val = str(spec.get("default", "272k (default)" if opt_id == "context" else "off (default)"))
+                        default_val = str(spec.get("default", "upstream (default)" if opt_id == "context" else "off (default)"))
                         cur = str(opts.get(opt_id, default_val)).lower()
                         preset_choices = [c.lower() for c in spec.get("choices", []) if c != "custom"]
                         if is_backspace:
