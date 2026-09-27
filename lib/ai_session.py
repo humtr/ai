@@ -457,16 +457,44 @@ def source_is_symlink(row:dict[str,Any]) -> bool:
     except OSError:
         return False
 
+def logical_session_identity(row:dict[str,Any]) -> str:
+    provider=str(row.get("provider") or "")
+    native_ref=str(row.get("native_session_ref") or row.get("session_id") or "")
+    if provider and native_ref:
+        return f"native:{provider}:{native_ref}"
+    source=source_identity(row)
+    if source:
+        return f"source:{source}"
+    return str(row.get("stable_session_key") or row.get("stable_key") or "")
+
+def _session_row_rank(row:dict[str,Any]) -> tuple[float,int,int,int,int,str]:
+    try:
+        mtime=float(row.get("mtime") or 0)
+    except (TypeError, ValueError):
+        mtime=0.0
+    try:
+        turns=int(row.get("turns") or 0)
+    except (TypeError, ValueError):
+        turns=0
+    try:
+        size=int(row.get("size") or 0)
+    except (TypeError, ValueError):
+        size=0
+    regular=0 if source_is_symlink(row) else 1
+    default_profile=1 if str(row.get("profile") or "default")=="default" else 0
+    source=str(row.get("source_path") or row.get("path") or "")
+    return (mtime,turns,size,regular,default_profile,source)
+
 def dedupe_session_rows(rows:list[dict[str,Any]]) -> list[dict[str,Any]]:
-    by_source:dict[str,dict[str,Any]]={}
+    by_identity:dict[str,dict[str,Any]]={}
     for row in rows:
-        key=source_identity(row)
+        key=logical_session_identity(row)
         if not key:
-            key=str(row.get("stable_session_key") or row.get("stable_key") or id(row))
-        previous=by_source.get(key)
-        if previous is None or (source_is_symlink(previous) and not source_is_symlink(row)):
-            by_source[key]=row
-    return list(by_source.values())
+            key=f"row:{id(row)}"
+        previous=by_identity.get(key)
+        if previous is None or _session_row_rank(row) > _session_row_rank(previous):
+            by_identity[key]=row
+    return list(by_identity.values())
 
 def recent_sessions(provider:str|None=None, profile:str|None=None, workdir:str|None=None, limit:int=20, ranking:str="strict") -> list[dict[str,Any]]:
     data=fresh_session_index(); rows=[finalize(dict(x)) for x in data.get("sessions",[]) if x.get("last_prompt_summary") or x.get("last_response_summary") or x.get("title")]
