@@ -82,7 +82,12 @@ bash verify/ai-tui-smoke.sh
 when already inside tmux). The TUI tmux toggle defaults off and is stored with
 launcher options; it is never passed upstream. Profiles, CWD and native arguments
 are preserved. Codex's native terminal title gains `thread-id` first, retaining
-other title items; no CLI config override is added.
+other title items; no CLI config override is added. New panes inherit the current
+caller's color preferences, including absence of `NO_COLOR`, rather than stale
+server values. Explicit color settings are preserved; tmux owns `TERM`. An already
+running application keeps its startup environment until it is relaunched.
+The AI-managed session hides tmux's bottom status row; launches inside an existing
+unmanaged session preserve its status setting and global tmux configuration.
 
 `codex termux notify set --focus tmux` lets a notification select the existing
 managed pane for its live conversation. Closed, ambiguous or unidentifiable

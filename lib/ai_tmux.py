@@ -13,6 +13,7 @@ import tomllib
 from pathlib import Path
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+COLOR_ENVIRONMENT = ("NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "COLORTERM", "COLORFGBG")
 TITLE_ID = re.compile(r"^(?:● )?(?:\[ [!.] \] Action Required \| )?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{5})\.\.\.(?![0-9a-f])")
 
 
@@ -120,10 +121,13 @@ def launch(plan, provider: str) -> int:
     if provider == "codex":
         prepare_title(Path(plan.env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")))
     # tmux executes one shell command; quote every argv/environment field.
-    environment = {key: os.environ[key] for key in ("HOME", "PATH", "CODEX_HOME", "AI_CONFIG_DIR", "AI_LIB_DIR") if key in os.environ}
+    environment = {key: os.environ[key] for key in ("HOME", "PATH", "CODEX_HOME", "AI_CONFIG_DIR", "AI_LIB_DIR", *COLOR_ENVIRONMENT) if key in os.environ}
     environment.update(plan.env)
     assignments = [f"{key}={value}" for key, value in environment.items()]
-    command = "exec " + shlex.join(["env", *(["-u", "CODEX_HOME"] if "CODEX_HOME" not in environment else []), *assignments, *plan.argv])
+    # A reused server may retain NO_COLOR from a prior noninteractive client.
+    # Explicit absence is part of the caller preference; TERM stays tmux-owned.
+    unset = [argument for key in ("CODEX_HOME", *COLOR_ENVIRONMENT) if key not in environment for argument in ("-u", key)]
+    command = "exec " + shlex.join(["env", *unset, *assignments, *plan.argv])
     inside = bool(os.environ.get("TMUX"))
     if inside:
         socket = _tmux(None, "display-message", "-p", "#{socket_path}")
@@ -139,6 +143,8 @@ def launch(plan, provider: str) -> int:
                 raise ValueError("humtr-ai session is not managed by AI")
             pane = _tmux(None, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=humtr-ai", "-n", "ai-" + provider, "-c", plan.cwd, command)
         socket = _tmux(None, "display-message", "-p", "-t", pane, "#{socket_path}")
+    if _tmux(socket, "display-message", "-p", "-t", pane, "#{@humtr_ai_session}") == "1":
+        _tmux(socket, "set-option", "-t", pane, "status", "off")
     _tmux(socket, "set-option", "-p", "-t", pane, "@humtr_ai_provider", provider)
     register(socket)
     _tmux(socket, "select-window", "-t", pane)

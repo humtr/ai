@@ -59,6 +59,7 @@ def test_native_tmux_launch_focus():
         def tm(*args):
             return subprocess.check_output(['tmux','-S',socket,*args], text=True).strip()
         tm('-f','/dev/null','new-session','-d','-s','isolated','sleep 90')
+        foreign_status = tm('show-options', '-v', '-t', 'isolated', 'status')
         marker=root/'argv.json'
         provider=root/'provider'
         provider.write_text('#!'+sys.executable+'\nimport json,os,sys,time\njson.dump([sys.argv[1:],os.getcwd(),os.environ.get("CODEX_HOME")],open('+repr(str(marker))+',"w"))\nprint("\\x1b]0;01a0fc82-dc8f-7d13-bb78-7e120... | native\\x07",flush=True)\ntime.sleep(90)\n')
@@ -75,6 +76,7 @@ def test_native_tmux_launch_focus():
                 deadline=time.monotonic()+3
                 while not marker.exists() and time.monotonic()<deadline: time.sleep(.05)
                 assert json.loads(marker.read_text()) == [plan.argv[1:],str(root),str(root/'.profile')]
+                assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
                 command=tm('display-message','-p','#{pane_start_command}')
                 assert 'AUTH_TEST_SECRET' not in command
                 target=tm('display-message','-p','#{pane_id}')
@@ -125,9 +127,50 @@ def test_native_tmux_launch_focus():
                     except Attached: pass
                     else: raise AssertionError('outside launch must attach')
                 assert tm('show-options','-v','-t','humtr-ai','@humtr_ai_session') == '1'
+                assert tm('show-options', '-v', '-t', 'humtr-ai', 'status') == 'off'
+                assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
                 assert tm('has-session','-t','=isolated') == ''
         finally:
             subprocess.run(['tmux','-S',socket,'kill-server'],capture_output=True)
+
+
+def test_native_tmux_color_environment():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        socket = str(root / 'tmux.sock')
+        def tm(*args):
+            return subprocess.check_output(['tmux', '-S', socket, *args], text=True).strip()
+        tm('-f', '/dev/null', 'new-session', '-d', '-s', 'isolated', 'sleep 90')
+        provider = root / 'color-provider'
+        provider.write_text('#!' + sys.executable + '\nimport json,os,sys,time\nkeys=' + repr((*ai_tmux.COLOR_ENVIRONMENT, 'TERM', 'TERM_PROGRAM')) + '\njson.dump({k:os.environ.get(k) for k in keys},open(sys.argv[1],"w"))\nprint("plain" if os.environ.get("NO_COLOR") else "\\x1b[1;38;2;12;200;90mcolored\\x1b[0m",flush=True)\ntime.sleep(90)\n')
+        provider.chmod(0o700)
+        try:
+            for key in ai_tmux.COLOR_ENVIRONMENT:
+                tm('set-environment', '-g', key, 'stale')
+            caller = {k:v for k,v in os.environ.items() if k not in ai_tmux.COLOR_ENVIRONMENT}
+            caller.update(HOME=str(root), TMUX=socket+',1,0', TERM='xterm-256color')
+            for index, preferences in enumerate(({'COLORTERM':'truecolor'}, {'NO_COLOR':'1'}, {'FORCE_COLOR':'1','COLORFGBG':'15;0'})):
+                marker = root / f'color-{index}.json'
+                plan = ai_plan.ExecutionPlan(argv=[str(provider), str(marker)], env={}, cwd=str(root), display='')
+                with patch.dict(os.environ, {**caller, **preferences}, clear=True):
+                    assert ai_tmux.launch(plan, 'example') == 0
+                deadline = time.monotonic() + 3
+                while not marker.exists() and time.monotonic() < deadline: time.sleep(.05)
+                values = json.loads(marker.read_text())
+                for key in ai_tmux.COLOR_ENVIRONMENT: assert values[key] == preferences.get(key), (key, values)
+                assert values['TERM'].startswith(('screen', 'tmux')) and values['TERM'] != caller['TERM']
+                assert values['TERM_PROGRAM'] == 'tmux'
+                deadline = time.monotonic() + 3
+                pane = tm('display-message', '-p', '#{pane_id}')
+                while time.monotonic() < deadline:
+                    capture = tm('capture-pane', '-p', '-e', '-t', pane)
+                    if ('plain' if index == 1 else 'colored') in capture: break
+                    time.sleep(.05)
+                assert ('plain' if index == 1 else 'colored') in capture
+                if index != 1: assert '\x1b[' in capture
+                tm('kill-pane', '-t', pane)
+        finally:
+            subprocess.run(['tmux', '-S', socket, 'kill-server'], capture_output=True)
 
 
 def test_bounded_install():
@@ -146,6 +189,6 @@ def test_bounded_install():
 
 
 if __name__=='__main__':
-    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_bounded_install):
+    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_tmux_color_environment,test_bounded_install):
         test()
         print('PASS',test.__name__)
