@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import shutil
 import sys
 import tempfile
 import time
@@ -88,7 +89,17 @@ def test_native_tmux_launch_focus():
         session.write_text(json.dumps({'type':'session_meta','payload':{'id':sid}})+'\n')
         plan=ai_plan.ExecutionPlan(argv=[str(provider), 'space argument', "apostrophe'", '$(false)'],env={'CODEX_HOME':str(root/'.profile')},cwd=str(root),display='')
         try:
-            with patch.dict(os.environ, {'HOME':str(root),'TMUX':socket+',1,0','AUTH_TEST_SECRET':'never-serialize'}, clear=False):
+            requests=[]
+            native_run=subprocess.run
+            native_which=shutil.which
+            def which(name):
+                return '/test/am' if name == 'am' else native_which(name)
+            def run(args, **kwargs):
+                if Path(args[0]).name == 'am':
+                    requests.append(args)
+                    return subprocess.CompletedProcess(args, 0, '', '')
+                return native_run(args, **kwargs)
+            with patch.dict(os.environ, {'HOME':str(root),'TMUX':socket+',1,0','AUTH_TEST_SECRET':'never-serialize'}, clear=False), patch.object(subprocess, 'run', side_effect=run), patch.object(shutil, 'which', side_effect=which):
                 assert ai_tmux.launch(dataclasses.replace(plan, tmux_status=True),'codex') == 0
                 deadline=time.monotonic()+3
                 while not marker.exists() and time.monotonic()<deadline: time.sleep(.05)
@@ -107,16 +118,31 @@ def test_native_tmux_launch_focus():
                     assert ai_tmux.focus(sid) == 0
                     assert tm('display-message','-p','#{pane_id}') == target
                     assert before == tm('list-panes','-a','-F','#{pane_id}:#{pane_pid}')
+                    request=requests[-1]
+                    assert request[1:9] == ['startservice','--user','0','-n','com.termux/.app.RunCommandService','-a','com.termux.RUN_COMMAND','--es']
+                    assert request[request.index('com.termux.RUN_COMMAND_PATH')+1] == native_which('tmux')
+                    session_id=tm('display-message','-p','-t',target,'#{session_id}')
+                    assert request[request.index('com.termux.RUN_COMMAND_ARGUMENTS')+1] == '-S,'+socket+',attach-session,-t,'+session_id
+                    assert request[-3:] == ['--es','com.termux.RUN_COMMAND_SESSION_ACTION','0']
+                    assert ai_tmux.focus(sid) == 0 and len(requests) == 2
+                    assert before == tm('list-panes','-a','-F','#{pane_id}:#{pane_pid}')
+                    duplicate=tm('new-window','-d','-P','-F','#{pane_id}','sleep 90')
+                    tm('set-option','-p','-t',duplicate,'@humtr_ai_provider','codex')
+                    tm('select-pane','-t',duplicate,'-T',sid[:29]+'... | duplicate')
+                    assert ai_tmux.focus(sid) == 1 and len(requests) == 2
+                    tm('kill-pane','-t',duplicate)
                     # full-ID collision refuses prefix guesses.
                     collision=sessions/('rollout-test-'+sid[:-1]+'4.jsonl')
                     collision.write_text(json.dumps({'type':'session_meta','payload':{'id':sid[:-1]+'4'}})+'\n')
                     tm('select-window','-t','isolated:0')
                     assert ai_tmux.focus(sid) == 1
+                    assert len(requests) == 2
                     assert tm('display-message','-p','#{pane_id}') != target
                     collision.unlink()
                     # Native title content is never evaluated as shell/format code.
                     tm('select-pane','-t',target,'-T',sid[:29]+'... | #(touch '+str(root/'injected')+')')
                     assert ai_tmux.focus(sid) == 0
+                    assert len(requests) == 3
                     assert not (root/'injected').exists()
                     tm('select-window','-t','isolated:0')
                     original=ai_tmux._tmux
@@ -125,12 +151,15 @@ def test_native_tmux_launch_focus():
                             tm('select-pane','-t',target,'-T','different thread')
                         return original(sock,*args)
                     with patch.object(ai_tmux,'_tmux',side_effect=race):
-                        assert ai_tmux.focus(sid) == 0
+                        assert ai_tmux.focus(sid) == 1
+                    assert len(requests) == 3
                     assert tm('display-message','-p','#{pane_id}') != target
                     tm('select-pane','-t',target,'-T','foreign | '+sid[:29]+'...')
                     assert ai_tmux.focus(sid) == 1
+                    assert len(requests) == 3
                     tm('kill-pane','-t',target)
                     assert ai_tmux.focus(sid) == 1
+                    assert len(requests) == 3
                 assert ai_tmux.focus('$(false)') == 1
                 assert not ai_tmux._runtime('1','/dev/null')
                 # Outside tmux: a native managed session and one attach, no other session mutation.
@@ -157,6 +186,69 @@ def test_native_tmux_launch_focus():
                 assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
                 assert tm('show-options', '-v', '-t', 'isolated', 'mouse') == foreign_mouse
                 assert tm('has-session','-t','=isolated') == ''
+        finally:
+            subprocess.run(['tmux','-S',socket,'kill-server'],capture_output=True)
+
+
+def test_focus_service_guards():
+    sid='01a0fc82-dc8f-7d13-bb78-7e120f1fa9b3'
+    with tempfile.TemporaryDirectory() as temporary:
+        root=Path(temporary)
+        root.chmod(0o700)
+        record=root/'server.json'
+        def data(socket='socket'):
+            record.write_text(json.dumps({'socket':socket,'identity':[1,2]}))
+            record.chmod(0o600)
+        data()
+        row='%3\t123\t/dev/pts/7\t0\tcodex\t'+sid[:29]+'...'
+        def tmux(socket,*args):
+            return row if args[0] == 'list-panes' else '$4'
+        def which(name): return '/installed/'+name
+        with patch.object(ai_tmux,'_registry',return_value=root), patch.object(ai_tmux,'_socket_identity',return_value=(1,2)), patch.object(ai_tmux,'_local_id',return_value=sid), patch.object(ai_tmux,'_runtime',return_value=True), patch.object(ai_tmux,'_tmux',side_effect=tmux), patch.object(ai_tmux.shutil,'which',side_effect=which), patch.object(ai_tmux.subprocess,'run') as service:
+            service.return_value=subprocess.CompletedProcess([],0,'','')
+            assert ai_tmux.focus(sid) == 0 and service.call_count == 1
+            for missing in ('am','tmux'):
+                with patch.object(ai_tmux.shutil,'which',side_effect=lambda name: None if name == missing else which(name)):
+                    assert ai_tmux.focus(sid) == 1
+            for socket in ('comma,socket','back\\slash'):
+                data(socket)
+                assert ai_tmux.focus(sid) == 1
+            data()
+            with patch.object(ai_tmux,'_socket_identity',side_effect=[(1,2),(1,3)]):
+                assert ai_tmux.focus(sid) == 1
+            for reply in ('', '$4\n$5', 'unsafe;target'):
+                with patch.object(ai_tmux,'_tmux',side_effect=lambda socket,*args: row if args[0] == 'list-panes' else reply):
+                    assert ai_tmux.focus(sid) == 1
+            with patch.object(ai_tmux.time,'monotonic',side_effect=[0,0,0,3]):
+                assert ai_tmux.focus(sid) == 1
+            assert service.call_count == 1
+            service.return_value=subprocess.CompletedProcess([],1,'','')
+            assert ai_tmux.focus(sid) == 1
+            for error in (OSError('unavailable'),subprocess.TimeoutExpired('am',1)):
+                service.side_effect=error
+                assert ai_tmux.focus(sid) == 1
+            service.side_effect=None
+            assert service.call_count == 4
+
+
+def test_attach_disappearing_session():
+    with tempfile.TemporaryDirectory() as temporary:
+        socket=str(Path(temporary)/'socket')
+        def tm(*args):
+            return subprocess.check_output(['tmux','-S',socket,*args],text=True).strip()
+        tm('-f','/dev/null','new-session','-d','-s','survivor','sleep 90')
+        try:
+            target=tm('new-session','-d','-P','-F','#{session_id}','-s','gone','sleep 90')
+            tm('kill-session','-t',target)
+            before=tm('list-panes','-a','-F','#{session_id}:#{pane_id}:#{pane_pid}')
+            master,slave=pty.openpty()
+            try:
+                process=subprocess.Popen(['tmux','-S',socket,'attach-session','-t',target],stdin=slave,stdout=slave,stderr=slave,env=dict(os.environ,TERM='xterm-256color',TMUX=''))
+                assert process.wait(timeout=3) != 0
+                assert tm('list-panes','-a','-F','#{session_id}:#{pane_id}:#{pane_pid}') == before
+            finally:
+                os.close(master)
+                os.close(slave)
         finally:
             subprocess.run(['tmux','-S',socket,'kill-server'],capture_output=True)
 
@@ -254,6 +346,6 @@ def test_bounded_install():
 
 
 if __name__=='__main__':
-    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_tmux_color_environment,test_native_status_mouse_switch,test_bounded_install):
+    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_focus_service_guards,test_attach_disappearing_session,test_native_tmux_color_environment,test_native_status_mouse_switch,test_bounded_install):
         test()
         print('PASS',test.__name__)

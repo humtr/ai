@@ -190,7 +190,7 @@ def _runtime(pid: str, tty: str) -> bool:
 
 
 def focus(session_id: str) -> int:
-    """No output, no process launch except bounded tmux commands, no guessing."""
+    """Select one qualified pane and open a native terminal attached to it."""
     if not UUID.fullmatch(session_id):
         return 1
     deadline = time.monotonic() + 2
@@ -219,14 +219,31 @@ def focus(session_id: str) -> int:
                 if dead != "0" or provider != "codex" or len(matches) != 1 or matches[0] != session_id[:29]:
                     continue
                 if _local_id(matches[0]) == session_id and _runtime(pid, tty):
-                    targets.append((socket, pane, pid))
+                    targets.append((socket, pane, pid, data["identity"]))
         if len(targets) != 1 or time.monotonic() > deadline:
             return 1
-        socket, pane, pid = targets[0]
+        socket, pane, pid, identity = targets[0]
+        # Android am string-array arguments cannot represent these socket paths.
+        if any(c in socket for c in (",", "\\")) or list(_socket_identity(socket)) != identity:
+            return 1
         # Recheck current identity at the actual native UI command boundary.
         predicate = "#{&&:#{==:#{pane_pid}," + pid + "},#{&&:#{==:#{pane_dead},0},#{&&:#{==:#{@humtr_ai_provider},codex},#{m/r:^(● )?(\\[ [!.] \\] Action Required \\| )?" + session_id[:29] + "\\.\\.\\.,#{pane_title}}}}}"
-        _tmux(socket, "if-shell", "-F", "-t", pane, predicate,
-              "select-window -t " + pane + " ; select-pane -t " + pane)
-        return 0
+        target = _tmux(socket, "if-shell", "-F", "-t", pane, predicate,
+              "select-window -t " + pane + " ; select-pane -t " + pane
+              + " ; display-message -p -t " + pane + " '#{session_id}'")
+        if not re.fullmatch(r"\$[0-9]+", target) or time.monotonic() >= deadline:
+            return 1
+        am = shutil.which("am")
+        tmux = shutil.which("tmux")
+        if not am or not tmux:
+            return 1
+        result = subprocess.run([
+            am, "startservice", "--user", "0", "-n", "com.termux/.app.RunCommandService",
+            "-a", "com.termux.RUN_COMMAND", "--es", "com.termux.RUN_COMMAND_PATH", tmux,
+            "--esa", "com.termux.RUN_COMMAND_ARGUMENTS", "-S," + socket + ",attach-session,-t," + target,
+            "--ez", "com.termux.RUN_COMMAND_BACKGROUND", "false",
+            "--es", "com.termux.RUN_COMMAND_SESSION_ACTION", "0",
+        ], capture_output=True, text=True, timeout=max(.001, deadline - time.monotonic()))
+        return 0 if result.returncode == 0 else 1
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired):
         return 1
