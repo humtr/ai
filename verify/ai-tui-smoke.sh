@@ -1450,9 +1450,35 @@ assert "--tmux" in app.common_args()
 assert "--tmux" not in app.native_args_for_provider()
 app.session_launch_profile=lambda item: "default"
 assert "--tmux" in app.session_args({"provider":"codex","native_session_ref":"uuid"})
+assert app.current_provider_options()["tmux"] == "on-hidden"
+app.current_provider_options()["tmux"] = "on-status"
+assert "--tmux=status" in app.common_args()
+assert "--tmux=status" in app.session_args({"provider":"codex","native_session_ref":"uuid"})
+assert "--tmux=status" not in app.native_args_for_provider()
+app.current_provider_options()["tmux"] = False
+assert "--tmux" not in app.common_args()
+assert app.current_provider_options()["tmux"] == "off"
+app.current_provider_options()["tmux"] = "invalid"
+assert "--tmux" not in app.common_args()
+assert app.current_provider_options()["tmux"] == "off"
+spec = next(s for s in app.provider_options_specs() if s["id"] == "tmux")
+assert spec["type"] == "choice" and spec["choices"] == ["off", "on-hidden", "on-status"]
+app.current_provider_options()["tmux"] = "on-status"
+app.active_section=lambda: "options"
+app.options_expanded=True
+app.options_sub_index=0
+app.add_line=lambda *a, **k: None
+app.add_text=lambda *a, **k: None
+app.section_label_attr=lambda *a: 0
+app.selection_attr=lambda *a: 0
+app.subdued_attr=lambda *a: 0
+rendered=[]
+app.draw_sub_choice_items=lambda y,x,w,choices,index,active: rendered.append((choices,index))
+app.draw_options_row(0,100)
+assert (["off", "on-hidden", "on-status"],2) in rendered
 print("ok")'
 )"
-[ "$TMUX_OPTION_OUT" = "ok" ] && ok "tmux toggle routes launch and resume without native overrides" || fail "tmux toggle routes launch and resume without native overrides"
+[ "$TMUX_OPTION_OUT" = "ok" ] && ok "tmux three-way choice routes launch and resume without native overrides" || fail "tmux three-way choice routes launch and resume without native overrides"
 
 printf '\nPASS=%s FAIL=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

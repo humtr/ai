@@ -144,7 +144,9 @@ def launch(plan, provider: str) -> int:
             pane = _tmux(None, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=humtr-ai", "-n", "ai-" + provider, "-c", plan.cwd, command)
         socket = _tmux(None, "display-message", "-p", "-t", pane, "#{socket_path}")
     if _tmux(socket, "display-message", "-p", "-t", pane, "#{@humtr_ai_session}") == "1":
-        _tmux(socket, "set-option", "-t", pane, "status", "off")
+        _tmux(socket, "set-option", "-t", pane, "status", "on" if plan.tmux_status else "off")
+        if plan.tmux_status:
+            _tmux(socket, "set-option", "-t", pane, "mouse", "on")
     _tmux(socket, "set-option", "-p", "-t", pane, "@humtr_ai_provider", provider)
     register(socket)
     _tmux(socket, "select-window", "-t", pane)

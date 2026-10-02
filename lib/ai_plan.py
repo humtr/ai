@@ -16,7 +16,7 @@ class LaunchSpec:
     native_args: list[str] = field(default_factory=list)
     here: bool = False
     all_sessions: bool = False
-    tmux: bool = False
+    tmux: bool | str = False
 @dataclass(frozen=True)
 class ExecutionPlan:
     argv: list[str]
@@ -26,6 +26,7 @@ class ExecutionPlan:
     warnings: list[str]=field(default_factory=list)
     session: dict[str,Any]|None=None
     tmux_provider: str | None = None
+    tmux_status: bool = False
     def as_dict(self): return asdict(self)
 
 def _display(argv:list[str], cwd:str, env:dict[str,str]) -> str:
@@ -69,6 +70,8 @@ def session_provider_warning(source_provider: str | None, target_provider: str |
 
 
 def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
+    if spec.tmux not in (False, True, "hidden", "status"):
+        raise SystemExit("ERROR: invalid tmux mode")
     cmdspec=ai_spec.command_spec(spec.command); typ=cmdspec.get("type")
     provider=spec.provider or ""
     if provider not in ai_spec.provider_names(): raise SystemExit(f"ERROR: unknown provider: {provider}")
@@ -187,7 +190,7 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
         else: argv=[binary,*profile_args,prompt]
     else:
         raise SystemExit(f"ERROR: unsupported command type: {typ}")
-    return ExecutionPlan(argv=argv, env=env, cwd=cwd, display=_display(argv,cwd,env), warnings=warnings, session=session_row, tmux_provider=provider if spec.tmux else None)
+    return ExecutionPlan(argv=argv, env=env, cwd=cwd, display=_display(argv,cwd,env), warnings=warnings, session=session_row, tmux_provider=provider if spec.tmux else None, tmux_status=spec.tmux == "status")
 
 def execute_plan(plan: ExecutionPlan) -> int:
     env=os.environ.copy(); env.update(plan.env)

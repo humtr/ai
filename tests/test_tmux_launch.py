@@ -6,6 +6,11 @@ import sys
 import tempfile
 import time
 import tomllib
+import dataclasses
+import pty
+import fcntl
+import struct
+import termios
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
@@ -48,6 +53,17 @@ def test_cli_boundary():
         assert calls[-1].argv[-2:] == ['--enable','abc']
         assert ai_cli.run_command('run', ['codex','--','--tmux']) == 0
         assert calls[-1].tmux_provider is None and calls[-1].argv[-1] == '--tmux'
+        assert ai_cli.run_command('run', ['codex','--tmux=status','--','--tmux=off']) == 0
+        assert calls[-1].tmux_status and calls[-1].argv[-1] == '--tmux=off'
+        assert ai_cli.run_command('run', ['codex','--tmux=hidden']) == 0
+        assert not calls[-1].tmux_status and calls[-1].tmux_provider == 'codex'
+        assert ai_cli.run_command('run', ['codex','--tmux=off']) == 0
+        assert calls[-1].tmux_provider is None
+        assert ai_cli.run_command('run', ['codex','--tmux=wrong']) == 2
+        assert ai_cli.run_command('run', ['codex','--tmux=off','--tmux']) == 2
+        try: ai_plan.build_execution_plan(ai_plan.LaunchSpec(command='run',provider='codex',tmux='wrong'))
+        except SystemExit: pass
+        else: raise AssertionError('invalid mode accepted')
         assert ai_cli.run_command('run', ['codex','--tmux','--tmux']) == 2
         assert ai_cli.run_command('ask', ['codex','--tmux','--','hello']) == 2
 
@@ -60,6 +76,7 @@ def test_native_tmux_launch_focus():
             return subprocess.check_output(['tmux','-S',socket,*args], text=True).strip()
         tm('-f','/dev/null','new-session','-d','-s','isolated','sleep 90')
         foreign_status = tm('show-options', '-v', '-t', 'isolated', 'status')
+        foreign_mouse = tm('show-options', '-v', '-t', 'isolated', 'mouse')
         marker=root/'argv.json'
         provider=root/'provider'
         provider.write_text('#!'+sys.executable+'\nimport json,os,sys,time\njson.dump([sys.argv[1:],os.getcwd(),os.environ.get("CODEX_HOME")],open('+repr(str(marker))+',"w"))\nprint("\\x1b]0;01a0fc82-dc8f-7d13-bb78-7e120... | native\\x07",flush=True)\ntime.sleep(90)\n')
@@ -72,11 +89,12 @@ def test_native_tmux_launch_focus():
         plan=ai_plan.ExecutionPlan(argv=[str(provider), 'space argument', "apostrophe'", '$(false)'],env={'CODEX_HOME':str(root/'.profile')},cwd=str(root),display='')
         try:
             with patch.dict(os.environ, {'HOME':str(root),'TMUX':socket+',1,0','AUTH_TEST_SECRET':'never-serialize'}, clear=False):
-                assert ai_tmux.launch(plan,'codex') == 0
+                assert ai_tmux.launch(dataclasses.replace(plan, tmux_status=True),'codex') == 0
                 deadline=time.monotonic()+3
                 while not marker.exists() and time.monotonic()<deadline: time.sleep(.05)
                 assert json.loads(marker.read_text()) == [plan.argv[1:],str(root),str(root/'.profile')]
                 assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
+                assert tm('show-options', '-v', '-t', 'isolated', 'mouse') == foreign_mouse
                 command=tm('display-message','-p','#{pane_start_command}')
                 assert 'AUTH_TEST_SECRET' not in command
                 target=tm('display-message','-p','#{pane_id}')
@@ -129,6 +147,15 @@ def test_native_tmux_launch_focus():
                 assert tm('show-options','-v','-t','humtr-ai','@humtr_ai_session') == '1'
                 assert tm('show-options', '-v', '-t', 'humtr-ai', 'status') == 'off'
                 assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
+                visible = dataclasses.replace(plan, tmux_status=True)
+                with patch.dict(os.environ, {'TMUX':''}), patch.object(ai_tmux,'_tmux',side_effect=routed), patch.object(os,'execvp',side_effect=attach):
+                    try: ai_tmux.launch(visible,'codex')
+                    except Attached: pass
+                    else: raise AssertionError('visible launch must attach')
+                assert tm('show-options', '-v', '-t', 'humtr-ai', 'status') == 'on'
+                assert tm('show-options', '-v', '-t', 'humtr-ai', 'mouse') == 'on'
+                assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
+                assert tm('show-options', '-v', '-t', 'isolated', 'mouse') == foreign_mouse
                 assert tm('has-session','-t','=isolated') == ''
         finally:
             subprocess.run(['tmux','-S',socket,'kill-server'],capture_output=True)
@@ -173,6 +200,44 @@ def test_native_tmux_color_environment():
             subprocess.run(['tmux', '-S', socket, 'kill-server'], capture_output=True)
 
 
+def test_native_status_mouse_switch():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        socket = str(root / 'tmux.sock')
+        def tm(*args):
+            return subprocess.check_output(['tmux', '-S', socket, *args], text=True).strip()
+        tm('-f', '/dev/null', 'new-session', '-d', '-s', 'humtr-ai', '-n', 'first', 'sleep 90')
+        tm('set-option', '-t', 'humtr-ai', '@humtr_ai_session', '1')
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+        client = None
+        try:
+            plan = ai_plan.ExecutionPlan(argv=['sleep', '90'], env={}, cwd=str(root), display='', tmux_status=True)
+            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': socket+',1,0'}):
+                assert ai_tmux.launch(plan, 'example') == 0
+            second = tm('display-message', '-p', '#{window_id}')
+            tm('set-option', '-t', 'humtr-ai', 'status-left', '')
+            tm('set-option', '-t', 'humtr-ai', 'status-right', '')
+            tm('set-option', '-t', 'humtr-ai', 'status-justify', 'left')
+            tm('set-window-option', '-g', 'window-status-format', '#I:#W')
+            tm('set-window-option', '-g', 'window-status-current-format', '#I:#W')
+            tm('select-window', '-t', 'humtr-ai:0')
+            client = subprocess.Popen(['tmux', '-S', socket, 'attach-session', '-t', 'humtr-ai'], stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env={**os.environ, 'TERM':'xterm-256color', 'TMUX':''})
+            deadline = time.monotonic()+3
+            while not tm('list-clients') and time.monotonic()<deadline: time.sleep(.05)
+            assert tm('list-clients'), 'attached native client required'
+            # SGR mouse press/release at second window label in the native status row.
+            os.write(master, b'\x1b[<0;12;24M\x1b[<0;12;24m')
+            deadline = time.monotonic()+3
+            while tm('display-message', '-p', '#{window_id}') != second and time.monotonic()<deadline: time.sleep(.05)
+            assert tm('display-message', '-p', '#{window_id}') == second
+        finally:
+            subprocess.run(['tmux', '-S', socket, 'kill-server'], capture_output=True)
+            if client: client.wait(timeout=3)
+            os.close(master)
+            os.close(slave)
+
+
 def test_bounded_install():
     with tempfile.TemporaryDirectory() as temporary:
         root=Path(temporary)
@@ -189,6 +254,6 @@ def test_bounded_install():
 
 
 if __name__=='__main__':
-    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_tmux_color_environment,test_bounded_install):
+    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_tmux_color_environment,test_native_status_mouse_switch,test_bounded_install):
         test()
         print('PASS',test.__name__)

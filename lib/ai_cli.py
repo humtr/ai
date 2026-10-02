@@ -14,7 +14,7 @@ Common command model:
   Profile names "default" and "native" are reserved and rejected.
 
 Core:
-  ai run <provider> [-p PROFILE] [--cwd DIRECTORY] [-s SESSION] [--tmux]
+  ai run <provider> [-p PROFILE] [--cwd DIRECTORY] [-s SESSION] [--tmux[=hidden|status|off]]
   ai ask <provider> [-p PROFILE] -- "prompt"
   ai chat <provider> [-p PROFILE] -- "prompt"
   ai raw <provider> [-p PROFILE] -- <native args>
@@ -147,6 +147,7 @@ def run_command(command:str, argv:list[str]) -> int:
     if not argv: print(f"Usage: ai {command} <provider> ...", file=sys.stderr); return 2
     provider=argv[0]
     tmux = False
+    tmux_seen = False
     clean = [provider]
     index = 1
     value_options = {"-p", "--profile", "-s", "--session", "-d", "--directory", "--cwd", "--cd", "-C", "--context", "--compact"}
@@ -155,11 +156,13 @@ def run_command(command:str, argv:list[str]) -> int:
         if argument == "--":
             clean.extend(argv[index:])
             break
-        if argument == "--tmux":
-            if tmux or command != "run":
+        if argument == "--tmux" or argument.startswith("--tmux="):
+            mode = argument.partition("=")[2] if "=" in argument else "hidden"
+            if tmux_seen or command != "run" or mode not in {"hidden", "status", "off"}:
                 print("ERROR: --tmux is supported once for ai run", file=sys.stderr)
                 return 2
-            tmux = True
+            tmux = False if mode == "off" else mode
+            tmux_seen = True
             index += 1
             continue
         clean.append(argument)

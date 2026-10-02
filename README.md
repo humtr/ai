@@ -79,15 +79,21 @@ bash verify/ai-tui-smoke.sh
 ### Optional tmux launch
 
 `ai run codex --tmux` opens a managed tmux window (reuses the current server
-when already inside tmux). The TUI tmux toggle defaults off and is stored with
+when already inside tmux). `--tmux=hidden` is equivalent; `--tmux=status` shows
+a clickable window bar and `--tmux=off` uses an ordinary terminal. The TUI offers
+`off / on-hidden / on-status`, defaults off and is stored with
 launcher options; it is never passed upstream. Profiles, CWD and native arguments
 are preserved. Codex's native terminal title gains `thread-id` first, retaining
 other title items; no CLI config override is added. New panes inherit the current
 caller's color preferences, including absence of `NO_COLOR`, rather than stale
 server values. Explicit color settings are preserved; tmux owns `TERM`. An already
 running application keeps its startup environment until it is relaunched.
-The AI-managed session hides tmux's bottom status row; launches inside an existing
-unmanaged session preserve its status setting and global tmux configuration.
+Hidden mode hides the AI-managed session's bottom status row. Status mode shows
+one row and enables mouse support; tap a window name to select it. The latest
+launch choice applies to the managed session. Existing unmanaged sessions retain
+their status/mouse settings; global tmux configuration is preserved. Old stored
+true/false preferences become on-hidden/off. This bar switches tmux windows;
+Android Termux terminal selection remains a separate capability.
 
 `codex termux notify set --focus tmux` lets a notification select the existing
 managed pane for its live conversation. Closed, ambiguous or unidentifiable
