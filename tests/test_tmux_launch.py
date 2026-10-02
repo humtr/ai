@@ -154,6 +154,14 @@ def test_native_tmux_launch_focus():
                         assert ai_tmux.focus(sid) == 1
                     assert len(requests) == 3
                     assert tm('display-message','-p','#{pane_id}') != target
+                    tm('select-pane','-t',target,'-T',sid[:29]+'... | native')
+                    def boundary_race(sock,*args):
+                        if args[0] == 'if-shell':
+                            tm('select-pane','-t',target,'-T',sid[:29]+'...f')
+                        return original(sock,*args)
+                    with patch.object(ai_tmux,'_tmux',side_effect=boundary_race):
+                        assert ai_tmux.focus(sid) == 1
+                    assert len(requests) == 3
                     tm('select-pane','-t',target,'-T','foreign | '+sid[:29]+'...')
                     assert ai_tmux.focus(sid) == 1
                     assert len(requests) == 3

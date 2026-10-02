@@ -227,7 +227,7 @@ def focus(session_id: str) -> int:
         if any(c in socket for c in (",", "\\")) or list(_socket_identity(socket)) != identity:
             return 1
         # Recheck current identity at the actual native UI command boundary.
-        predicate = "#{&&:#{==:#{pane_pid}," + pid + "},#{&&:#{==:#{pane_dead},0},#{&&:#{==:#{@humtr_ai_provider},codex},#{m/r:^(● )?(\\[ [!.] \\] Action Required \\| )?" + session_id[:29] + "\\.\\.\\.,#{pane_title}}}}}"
+        predicate = "#{&&:#{==:#{pane_pid}," + pid + "},#{&&:#{==:#{pane_dead},0},#{&&:#{==:#{@humtr_ai_provider},codex},#{m/r:^(● )?(\\[ [!.] \\] Action Required \\| )?" + session_id[:29] + "\\.\\.\\.([^0-9a-f]|$),#{pane_title}}}}}"
         target = _tmux(socket, "if-shell", "-F", "-t", pane, predicate,
               "select-window -t " + pane + " ; select-pane -t " + pane
               + " ; display-message -p -t " + pane + " '#{session_id}'")
