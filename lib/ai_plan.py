@@ -16,6 +16,7 @@ class LaunchSpec:
     native_args: list[str] = field(default_factory=list)
     here: bool = False
     all_sessions: bool = False
+    tmux: bool = False
 @dataclass(frozen=True)
 class ExecutionPlan:
     argv: list[str]
@@ -24,6 +25,7 @@ class ExecutionPlan:
     display: str
     warnings: list[str]=field(default_factory=list)
     session: dict[str,Any]|None=None
+    tmux_provider: str | None = None
     def as_dict(self): return asdict(self)
 
 def _display(argv:list[str], cwd:str, env:dict[str,str]) -> str:
@@ -185,12 +187,18 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
         else: argv=[binary,*profile_args,prompt]
     else:
         raise SystemExit(f"ERROR: unsupported command type: {typ}")
-    return ExecutionPlan(argv=argv, env=env, cwd=cwd, display=_display(argv,cwd,env), warnings=warnings, session=session_row)
+    return ExecutionPlan(argv=argv, env=env, cwd=cwd, display=_display(argv,cwd,env), warnings=warnings, session=session_row, tmux_provider=provider if spec.tmux else None)
 
 def execute_plan(plan: ExecutionPlan) -> int:
     env=os.environ.copy(); env.update(plan.env)
     if os.environ.get("AI_DRY_RUN"):
         import json; print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2)); return 0
+    if plan.tmux_provider:
+        import ai_tmux
+        try:
+            return ai_tmux.launch(plan, plan.tmux_provider)
+        except (OSError, ValueError, RuntimeError) as error:
+            raise SystemExit("ERROR: tmux launch failed") from error
     try:
         os.chdir(plan.cwd)
     except OSError as e:

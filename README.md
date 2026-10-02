@@ -75,3 +75,20 @@ bash verify/ai-tui-smoke.sh
 ```bash
 ./scripts/install-termux.sh
 ```
+
+### Optional tmux launch
+
+`ai run codex --tmux` opens a managed tmux window (reuses the current server
+when already inside tmux). The TUI tmux toggle defaults off and is stored with
+launcher options; it is never passed upstream. Profiles, CWD and native arguments
+are preserved. Codex's native terminal title gains `thread-id` first, retaining
+other title items; no CLI config override is added.
+
+`codex termux notify set --focus tmux` lets a notification select the existing
+managed pane for its live conversation. Closed, ambiguous or unidentifiable
+targets are left alone. The Termux terminal must display that tmux server; Android
+foregrounding still selects the last Termux terminal. Taps never start another
+Codex process or terminal. `--focus termux` restores ordinary foregrounding.
+
+`bash scripts/install-termux.sh --ai-only` updates only the AI launcher/modules
+atomically per file, without backups or changes to config, profiles, clip or AGY.

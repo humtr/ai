@@ -1435,6 +1435,25 @@ print(getattr(app, "_active_bkgd_pair"), len(app.stdscr.bkgd_calls), app.stdscr.
 EXPECTED_POPUP_BKGD_RESTORE_OUT="0 2 0"
 [ "$POPUP_BKGD_RESTORE_OUT" = "$EXPECTED_POPUP_BKGD_RESTORE_OUT" ] && ok "popup cancel restores default background color" || { fail "popup cancel restores default background color"; printf 'actual: %s\n' "$POPUP_BKGD_RESTORE_OUT" >&2; }
 
+TMUX_OPTION_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib" python3 -c 'import ai_tui
+app=ai_tui.App.__new__(ai_tui.App)
+app.providers=["codex"]
+app.indices={"provider":0,"profile":0}
+app.provider_options={}
+app.current_profile_arg=lambda: None
+app.effective_workdir_path=lambda: "/work"
+app.directory_args=lambda path, display: ["--cwd", path]
+assert "--tmux" not in app.common_args()
+app.current_provider_options()["tmux"]=True
+assert "--tmux" in app.common_args()
+assert "--tmux" not in app.native_args_for_provider()
+app.session_launch_profile=lambda item: "default"
+assert "--tmux" in app.session_args({"provider":"codex","native_session_ref":"uuid"})
+print("ok")'
+)"
+[ "$TMUX_OPTION_OUT" = "ok" ] && ok "tmux toggle routes launch and resume without native overrides" || fail "tmux toggle routes launch and resume without native overrides"
+
 printf '\nPASS=%s FAIL=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
 

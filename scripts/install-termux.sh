@@ -7,6 +7,33 @@ DEST_LIB="${AI_LIB_DEST:-$HOME/.config/ai/lib}"
 DEST_CONFIG="${AI_CONFIG_DEST:-$HOME/.config/ai/config}"
 DEST_AGY="${AI_AGY_DEST:-$HOME/bin/agy}"
 
+# Bounded AI-only runtime update: no backups, provider state, or clip/AGY writes.
+if [ "${1:-}" = "--ai-only" ]; then
+  [ "$#" -eq 1 ] || { printf 'invalid installer arguments\n' >&2; exit 2; }
+  python3 - "$ROOT" "$DEST_BIN" "$DEST_LIB" <<'PY_INSTALL'
+import os, pathlib, shutil, sys, tempfile
+root, binary, library = map(pathlib.Path, sys.argv[1:])
+files = [(root / "bin/ai", binary)] + [(p, library / p.name) for p in (root / "lib").glob("ai_*.py")]
+for source, target in files:
+    compile(source.read_text(), str(source), "exec") if source.suffix == ".py" else None
+    if target.is_symlink() or target.parent.is_symlink():
+        raise SystemExit("unsafe AI installation path")
+for source, target in files:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".ai-install-", dir=target.parent)
+    os.close(fd)
+    try:
+        shutil.copyfile(source, temporary)
+        os.chmod(temporary, source.stat().st_mode & 0o777)
+        os.replace(temporary, target)
+    finally:
+        pathlib.Path(temporary).unlink(missing_ok=True)
+print("AI runtime installed; configuration and provider state preserved.")
+PY_INSTALL
+  exit 0
+fi
+[ "$#" -eq 0 ] || { printf 'invalid installer arguments\n' >&2; exit 2; }
+
 # Rebranded CLI Proxy Suite destinations
 DEST_CLIP="${AI_CLIP_DEST:-$HOME/bin/clip}"
 DEST_CLIP_LIB="${AI_CLIP_LIB_DEST:-$HOME/.config/clip/lib}"

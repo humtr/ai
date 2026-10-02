@@ -176,6 +176,14 @@ else
   ok "no stuck ai process"
 fi
 
+
+if python3 "$ROOT/tests/test_tmux_launch.py"; then
+  ok "optional tmux launch and native focus"
+else
+  fail "optional tmux launch and native focus"
+  exit 1
+fi
+
 section "SUMMARY"
 
 echo "pass=$PASS"

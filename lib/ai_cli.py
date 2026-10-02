@@ -14,7 +14,7 @@ Common command model:
   Profile names "default" and "native" are reserved and rejected.
 
 Core:
-  ai run <provider> [-p PROFILE] [--cwd DIRECTORY] [-s SESSION]
+  ai run <provider> [-p PROFILE] [--cwd DIRECTORY] [-s SESSION] [--tmux]
   ai ask <provider> [-p PROFILE] -- "prompt"
   ai chat <provider> [-p PROFILE] -- "prompt"
   ai raw <provider> [-p PROFILE] -- <native args>
@@ -146,6 +146,28 @@ def resolve_context_args(provider: str, context: str) -> list[str]:
 def run_command(command:str, argv:list[str]) -> int:
     if not argv: print(f"Usage: ai {command} <provider> ...", file=sys.stderr); return 2
     provider=argv[0]
+    tmux = False
+    clean = [provider]
+    index = 1
+    value_options = {"-p", "--profile", "-s", "--session", "-d", "--directory", "--cwd", "--cd", "-C", "--context", "--compact"}
+    while index < len(argv):
+        argument = argv[index]
+        if argument == "--":
+            clean.extend(argv[index:])
+            break
+        if argument == "--tmux":
+            if tmux or command != "run":
+                print("ERROR: --tmux is supported once for ai run", file=sys.stderr)
+                return 2
+            tmux = True
+            index += 1
+            continue
+        clean.append(argument)
+        index += 1
+        if argument in value_options and index < len(argv):
+            clean.append(argv[index])
+            index += 1
+    argv = clean
     if not ai_spec.is_provider(provider): print(f"ERROR: unknown provider: {provider}", file=sys.stderr); return 2
     try:
         profile,directory,session,here,all_sessions,context,compact,rest=parse_common(argv[1:])
@@ -163,7 +185,7 @@ def run_command(command:str, argv:list[str]) -> int:
     elif typ=="native_passthrough" or cspec.get("accepts_native_args"): native_args.extend(rest)
     elif rest: print(f"ERROR: unexpected arguments for {command}: {' '.join(rest)}", file=sys.stderr); return 2
     try:
-        spec=ai_plan.LaunchSpec(command=command, provider=provider, profile=profile, directory=directory, session_ref=session, prompt=prompt, native_args=native_args, here=here, all_sessions=all_sessions)
+        spec=ai_plan.LaunchSpec(command=command, provider=provider, profile=profile, directory=directory, session_ref=session, prompt=prompt, native_args=native_args, here=here, all_sessions=all_sessions, tmux=tmux)
         plan=ai_plan.build_execution_plan(spec)
         return ai_plan.execute_plan(plan)
     except SystemExit as e:
@@ -211,6 +233,10 @@ def main(argv:list[str]|None=None) -> int:
         usage(); return 0
     cmd=argv.pop(0)
     if cmd in {"-h","--help","help"}: usage(); return 0
+    if cmd=="__tmux_focus":
+        import ai_tmux, signal
+        signal.alarm(3)
+        return ai_tmux.focus(argv[0]) if len(argv) == 1 else 2
     if cmd=="__json": return json_cmd(argv)
     if ai_spec.is_provider(cmd): print(f"ERROR: provider-first syntax is not supported: ai {cmd}\nUse: ai run {cmd} ...", file=sys.stderr); return 2
     if cmd in {"run","ask","chat","raw"}: return run_command(cmd, argv)

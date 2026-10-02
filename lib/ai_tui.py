@@ -604,7 +604,7 @@ class AppStateMixin:
     def provider_options_specs(self, provider: str | None = None) -> list[dict[str, Any]]:
         provider = provider or self.current_provider()
         try:
-            return list(ai_spec.provider_spec(provider).get("options", []))
+            return list(ai_spec.provider_spec(provider).get("options", [])) + [{"id": "tmux", "label": "tmux", "type": "toggle", "default": False, "scope": "launcher", "flag": "--tmux"}]
         except Exception:
             return []
 
@@ -639,6 +639,8 @@ class AppStateMixin:
         opts = self.current_provider_options(provider)
         args: list[str] = []
         for s in specs:
+            if s.get("scope") == "launcher":
+                continue
             opt_id = s.get("id")
             flag = s.get("flag")
             val = opts.get(opt_id)
@@ -1884,6 +1886,8 @@ class AppStateMixin:
         if profile:
             args.extend(["-p", profile])
         args.extend(self.directory_args(self.effective_workdir_path(), display))
+        if self.current_provider_options().get("tmux"):
+            args.append("--tmux")
         native_args = self.native_args_for_provider()
         if native_args:
             args.extend(["--", *native_args])
@@ -1912,6 +1916,8 @@ class AppStateMixin:
             args.extend(self.directory_args(workdir, display))
         if ref:
             args.extend(["-s", ref])
+        if self.current_provider_options(provider).get("tmux"):
+            args.append("--tmux")
         native_args = self.native_args_for_provider(provider)
         if native_args:
             args.extend(["--", *native_args])
