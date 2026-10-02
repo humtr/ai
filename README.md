@@ -86,7 +86,7 @@ other title items; no CLI config override is added.
 
 `codex termux notify set --focus tmux` lets a notification select the existing
 managed pane for its live conversation. Closed, ambiguous or unidentifiable
-targets are left alone. The Termux terminal must display that tmux server; Android
+targets are left alone. The Termux terminal must display the originating tmux session; Android
 foregrounding still selects the last Termux terminal. Taps never start another
 Codex process or terminal. `--focus termux` restores ordinary foregrounding.
 
