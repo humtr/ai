@@ -97,10 +97,12 @@ Android Termux terminal selection remains a separate capability.
 
 `codex termux notify set --focus tmux` lets a notification select the existing
 managed pane for its live conversation. Closed, ambiguous or unidentifiable
-targets are left alone. Each successful tap opens and selects a new Android
-Termux terminal attached to that existing tmux session and pane. Repeated taps
-may add terminals/clients; they never start another Codex process or tmux
-workload. This uses Termux's RunCommandService and requires
+targets are left alone. A successful tap selects a named Android Termux terminal
+attached to that existing tmux session and pane, creating it only if absent.
+Repeated taps, including notifications from different windows of the same tmux
+session, reuse that terminal/client. Closing it permits one replacement. Different
+live tmux sessions have separate notification terminals. Taps never start another
+Codex process or tmux workload. This uses Termux's RunCommandService and requires
 `allow-external-apps = true`. `--focus termux` restores ordinary foregrounding.
 Service failures retain ordinary Termux foregrounding. The attach change is
 separate and can be reverted and installed again with `--ai-only`.

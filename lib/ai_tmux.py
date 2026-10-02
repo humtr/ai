@@ -1,6 +1,7 @@
 """Optional native tmux launch and bounded focus of existing Codex panes."""
 from __future__ import annotations
 import json
+import hashlib
 import os
 import re
 import shlex
@@ -103,7 +104,6 @@ def register(socket: str) -> None:
                 record.unlink()
         except (OSError, ValueError, KeyError, TypeError):
             record.unlink(missing_ok=True)
-    import hashlib
     destination = root / (hashlib.sha256(socket.encode()).hexdigest() + ".json")
     fd, temporary = tempfile.mkstemp(prefix=".server-", dir=root)
     try:
@@ -190,7 +190,7 @@ def _runtime(pid: str, tty: str) -> bool:
 
 
 def focus(session_id: str) -> int:
-    """Select one qualified pane and open a native terminal attached to it."""
+    """Select one qualified pane and reuse its named native tmux terminal."""
     if not UUID.fullmatch(session_id):
         return 1
     deadline = time.monotonic() + 2
@@ -237,11 +237,16 @@ def focus(session_id: str) -> int:
         tmux = shutil.which("tmux")
         if not am or not tmux:
             return 1
+        terminal = "ai-tmux-" + hashlib.sha256(
+            json.dumps([socket, identity, target], separators=(",", ":")).encode()
+        ).hexdigest()
         result = subprocess.run([
             am, "startservice", "--user", "0", "-n", "com.termux/.app.RunCommandService",
             "-a", "com.termux.RUN_COMMAND", "--es", "com.termux.RUN_COMMAND_PATH", tmux,
             "--esa", "com.termux.RUN_COMMAND_ARGUMENTS", "-S," + socket + ",attach-session,-t," + target,
             "--ez", "com.termux.RUN_COMMAND_BACKGROUND", "false",
+            "--es", "com.termux.RUN_COMMAND_SHELL_NAME", terminal,
+            "--es", "com.termux.RUN_COMMAND_SHELL_CREATE_MODE", "no-shell-with-name",
             "--es", "com.termux.RUN_COMMAND_SESSION_ACTION", "0",
         ], capture_output=True, text=True, timeout=max(.001, deadline - time.monotonic()))
         return 0 if result.returncode == 0 else 1
