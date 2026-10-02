@@ -78,6 +78,9 @@ def test_native_tmux_launch_focus():
                 command=tm('display-message','-p','#{pane_start_command}')
                 assert 'AUTH_TEST_SECRET' not in command
                 target=tm('display-message','-p','#{pane_id}')
+                dead=ai_tmux._registry()/'000-dead.json'
+                dead.write_text(json.dumps({'socket':str(root/'missing.sock'),'identity':[0,0]}))
+                dead.chmod(0o600)
                 tm('select-window','-t','isolated:0')
                 before=tm('list-panes','-a','-F','#{pane_id}:#{pane_pid}')
                 with patch.object(ai_tmux,'_runtime',return_value=True):

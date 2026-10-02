@@ -194,11 +194,14 @@ def focus(session_id: str) -> int:
         for record in root.glob("*.json"):
             if time.monotonic() > deadline or record.is_symlink() or stat.S_IMODE(record.stat().st_mode) != 0o600:
                 continue
-            data = json.loads(record.read_text())
-            socket = data["socket"]
-            if list(_socket_identity(socket)) != data["identity"]:
+            try:
+                data = json.loads(record.read_text())
+                socket = data["socket"]
+                if list(_socket_identity(socket)) != data["identity"]:
+                    continue
+                rows = _tmux(socket, "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_dead}\t#{@humtr_ai_provider}\t#{pane_title}")
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired):
                 continue
-            rows = _tmux(socket, "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_dead}\t#{@humtr_ai_provider}\t#{pane_title}")
             for row in rows.splitlines():
                 fields = row.split("\t", 5)
                 if len(fields) != 6:
