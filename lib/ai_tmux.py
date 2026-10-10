@@ -252,6 +252,21 @@ def _activity_manager() -> str | None:
     return shutil.which("am")
 
 
+def terminal_name(socket: str, session: str) -> str:
+    """Stable presentation identity; live socket/runtime checks remain separate."""
+    binding = _tmux(socket, "show-options", "-qv", "-t", session, "@humtr_ai_terminal_name")
+    if binding:
+        if not re.fullmatch(r"ai-tmux-(?:[0-9a-f]{16}|[0-9a-f]{64})", binding):
+            raise ValueError("invalid native terminal binding")
+        return binding
+    name = _tmux(socket, "display-message", "-p", "-t", session, "#{session_name}")
+    if not name:
+        raise ValueError("missing native session name")
+    return "ai-tmux-" + hashlib.sha256(
+        json.dumps([socket, name], separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+
+
 def focus(session_id: str) -> int:
     """Select one qualified pane and reuse its named native tmux terminal."""
     if not UUID.fullmatch(session_id):
@@ -300,9 +315,7 @@ def focus(session_id: str) -> int:
         tmux = shutil.which("tmux")
         if not am or not tmux:
             return 1
-        terminal = "ai-tmux-" + hashlib.sha256(
-            json.dumps([socket, identity, target], separators=(",", ":")).encode()
-        ).hexdigest()
+        terminal = terminal_name(socket, target)
         result = subprocess.run([
             am, "startservice", "--user", "0", "-n", "com.termux/.app.RunCommandService",
             "-a", "com.termux.RUN_COMMAND", "--es", "com.termux.RUN_COMMAND_PATH", tmux,

@@ -241,12 +241,44 @@ def test_native_terminal_reuse_identity():
                 assert names[0]==names[1] and names[2]!=names[0]
                 assert all(sid not in names[0] for sid in ids)
                 assert before==tm('list-panes','-a','-F','#{pane_id}:#{pane_pid}')
-                # Replaced server socket identity must not reuse a stale native terminal.
+                # Stable names do not weaken live socket-identity rejection.
                 record=next(ai_tmux._registry().glob('*.json'))
                 data=json.loads(record.read_text());data['identity'][1]+=1;record.write_text(json.dumps(data))
+                assert ai_tmux.focus(ids[0])==1
                 with patch.object(ai_tmux,'_socket_identity',return_value=tuple(data['identity'])):
                     assert ai_tmux.focus(ids[0])==0
-                assert requests[-1][requests[-1].index('com.termux.RUN_COMMAND_SHELL_NAME')+1]!=names[0]
+                assert requests[-1][requests[-1].index('com.termux.RUN_COMMAND_SHELL_NAME')+1]==names[0]
+        finally:
+            subprocess.run(['tmux','-S',socket,'kill-server'],capture_output=True)
+
+
+def test_stable_terminal_name():
+    with tempfile.TemporaryDirectory() as temporary:
+        socket = str(Path(temporary)/'socket')
+        def tm(*args):
+            return subprocess.check_output(['tmux','-S',socket,*args], text=True).strip()
+        first = tm('-f','/dev/null','new-session','-d','-P','-F','#{session_id}','-s','shared','sleep 90')
+        try:
+            name = ai_tmux.terminal_name(socket, first)
+            assert len(name) == 24 and name.startswith('ai-tmux-')
+            other = tm('new-session','-d','-P','-F','#{session_id}','-s','other','sleep 90')
+            assert ai_tmux.terminal_name(socket, other) != name
+            explicit = 'ai-tmux-'+'a'*64
+            tm('set-option','-t',first,'@humtr_ai_terminal_name',explicit)
+            assert ai_tmux.terminal_name(socket, first) == explicit
+            tm('set-option','-t',first,'@humtr_ai_terminal_name','unsafe;name')
+            try: ai_tmux.terminal_name(socket, first)
+            except ValueError: pass
+            else: raise AssertionError('invalid terminal binding accepted')
+            tm('kill-server')
+            tm('-f','/dev/null','new-session','-d','-s','first','sleep 90')
+            restarted = tm('new-session','-d','-P','-F','#{session_id}','-s','shared','sleep 90')
+            assert restarted != first
+            assert ai_tmux.terminal_name(socket, restarted) == name
+            with patch.object(ai_tmux,'_tmux',return_value='shared') as command:
+                # No override for this server; a different socket path must isolate.
+                command.side_effect = ['', 'shared']
+                assert ai_tmux.terminal_name(socket+'-other', restarted) != name
         finally:
             subprocess.run(['tmux','-S',socket,'kill-server'],capture_output=True)
 
@@ -263,11 +295,18 @@ def test_focus_service_guards():
         data()
         row='%3\t123\t/dev/pts/7\t0\tcodex\t'+sid[:29]+'...'
         def tmux(socket,*args):
-            return row if args[0] == 'list-panes' else '$4'
+            if args[0] == 'list-panes': return row
+            if args[0] == 'show-options': return ''
+            if args[0] == 'display-message': return 'shared'
+            return '$4'
         def which(name): return None if name == 'termux-am' else '/installed/'+name
         with patch.object(ai_tmux,'_registry',return_value=root), patch.object(ai_tmux,'_socket_identity',return_value=(1,2)), patch.object(ai_tmux,'_local_id',return_value=sid), patch.object(ai_tmux,'_runtime',return_value=True), patch.object(ai_tmux,'_tmux',side_effect=tmux), patch.object(ai_tmux.shutil,'which',side_effect=which), patch.object(ai_tmux.subprocess,'run') as service:
             service.return_value=subprocess.CompletedProcess([],0,'','')
             assert ai_tmux.focus(sid) == 0 and service.call_count == 1
+            def invalid_binding(sock,*args):
+                return 'unsafe;name' if args[0]=='show-options' else tmux(sock,*args)
+            with patch.object(ai_tmux,'_tmux',side_effect=invalid_binding):
+                assert ai_tmux.focus(sid)==1 and service.call_count==1
             for missing in ('am','tmux'):
                 with patch.object(ai_tmux.shutil,'which',side_effect=lambda name: None if name == missing else which(name)):
                     assert ai_tmux.focus(sid) == 1
@@ -443,6 +482,6 @@ def test_bounded_install():
 
 
 if __name__=='__main__':
-    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_terminal_reuse_identity,test_focus_service_guards,test_attach_disappearing_session,test_native_tmux_color_environment,test_native_status_mouse_switch,test_native_title_forwarding,test_bounded_install):
+    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_terminal_reuse_identity,test_stable_terminal_name,test_focus_service_guards,test_attach_disappearing_session,test_native_tmux_color_environment,test_native_status_mouse_switch,test_native_title_forwarding,test_bounded_install):
         test()
         print('PASS',test.__name__)

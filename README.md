@@ -133,3 +133,5 @@ children, changed parents and non-PTY native children refuse focus. No session i
 or started by these checks.
 
 AI-managed tmux sessions forward the selected pane native terminal title to Termux clients. Codex `/title` names follow its upstream title settings; unmanaged sessions and global tmux title options are preserved.
+
+Native terminal return names now bind tmux socket path and session name, remaining stable across server restarts. An explicit session-local @humtr_ai_terminal_name can preserve an already registered terminal during a native UI name transfer. Invalid bindings refuse focus dispatch.
