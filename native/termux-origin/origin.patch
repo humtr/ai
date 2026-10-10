@@ -20,7 +20,7 @@ index 0c9f741..2054cd0 100644
                  TermuxInstaller.setupBootstrapIfNeeded(TermuxActivity.this, () -> {
                      if (mTermuxService == null) return; // Activity might have been destroyed.
 diff --git a/app/src/main/java/com/termux/app/TermuxService.java b/app/src/main/java/com/termux/app/TermuxService.java
-index 8025d0b..3518cdd 100644
+index 8025d0b..5b5967d 100644
 --- a/app/src/main/java/com/termux/app/TermuxService.java
 +++ b/app/src/main/java/com/termux/app/TermuxService.java
 @@ -26,6 +26,7 @@ import com.termux.shared.termux.plugins.TermuxPluginUtils;
@@ -55,7 +55,7 @@ index 8025d0b..3518cdd 100644
 +    void runTerminalControl(Runnable command) { mHandler.post(command); }
 +
 +    boolean isSelectedTerminal(TerminalSession terminal) {
-+        return mTermuxTerminalSessionActivityClient != null
++        return terminal != null && mTermuxTerminalSessionActivityClient != null
 +            && mTermuxTerminalSessionActivityClient.isCurrentSession(terminal);
 +    }
 +
