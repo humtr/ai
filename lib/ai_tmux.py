@@ -190,7 +190,7 @@ def _process_identity(process: Path) -> tuple[int, int]:
 
 def _native_runtime(executable: str) -> bool:
     root = Path.home() / ".local/lib/codex"
-    return bool(re.fullmatch(re.escape(str(root / "core/generations")) + r"/[^/]+/runtime", executable)) or executable == str(root / "profile-tui-preview/direct-selection-v1/native")
+    return bool(re.fullmatch(re.escape(str(root / "core/generations")) + r"/[^/]+/(?:runtime|helpers/2)", executable)) or executable == str(root / "profile-tui-preview/direct-selection-v1/native")
 
 
 def _runtime(pid: str, tty: str, native_binding: tuple[int, int] | None = None) -> bool:

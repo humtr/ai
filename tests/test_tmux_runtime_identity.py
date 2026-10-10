@@ -23,6 +23,10 @@ def test_direct_and_supervised_native_identity():
     assert not ai_tmux._runtime('10',tty,(10,124))
     assert not ai_tmux._runtime('10',tty,(20,123))
     process(10,preview);assert ai_tmux._runtime('10',tty)
+    frontend=str(home/'.local/lib/codex/core/generations/exact/helpers/2')
+    process(10,frontend);assert ai_tmux._runtime('10',tty)
+    for wrong in ['helpers/0','helpers/1','nested/helpers/2','helpers/2/native']:
+     process(10,str(home/'.local/lib/codex/core/generations/exact'/wrong));assert not ai_tmux._runtime('10',tty)
     process(10,native,stdin=childtty);assert not ai_tmux._runtime('10',tty)
     launch=[sys.executable,str(Path(ai_tmux.__file__).with_name('ai_run.py')),json.dumps({'auth_recovery':True,'argv':['codex','resume','example']})]
     process(10,str(Path(sys.executable).resolve()),argv=launch)
@@ -31,6 +35,7 @@ def test_direct_and_supervised_native_identity():
     assert not ai_tmux._runtime('10',tty,(20,124))
     assert not ai_tmux._runtime('10',tty,(10,123))
     process(20,preview,parent=10,stdin=childtty);assert ai_tmux._runtime('10',tty)
+    process(20,frontend,parent=10,stdin=childtty);assert ai_tmux._runtime('10',tty)
     process(30,native,parent=10,stdin=childtty);assert not ai_tmux._runtime('10',tty)
     import shutil;shutil.rmtree(proc/'30')
     process(20,native,parent=99,stdin=childtty);assert not ai_tmux._runtime('10',tty)
