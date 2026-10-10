@@ -78,6 +78,8 @@ def test_native_tmux_launch_focus():
         tm('-f','/dev/null','new-session','-d','-s','isolated','sleep 90')
         foreign_status = tm('show-options', '-v', '-t', 'isolated', 'status')
         foreign_mouse = tm('show-options', '-v', '-t', 'isolated', 'mouse')
+        foreign_titles = tm('show-options', '-v', '-t', 'isolated', 'set-titles')
+        global_titles = tm('show-options', '-gv', 'set-titles')
         marker=root/'argv.json'
         provider=root/'provider'
         provider.write_text('#!'+sys.executable+'\nimport json,os,sys,time\njson.dump([sys.argv[1:],os.getcwd(),os.environ.get("CODEX_HOME")],open('+repr(str(marker))+',"w"))\nprint("\\x1b]0;01a0fc82-dc8f-7d13-bb78-7e120... | native\\x07",flush=True)\ntime.sleep(90)\n')
@@ -188,6 +190,10 @@ def test_native_tmux_launch_focus():
                     else: raise AssertionError('outside launch must attach')
                 assert tm('show-options','-v','-t','humtr-ai','@humtr_ai_session') == '1'
                 assert tm('show-options', '-v', '-t', 'humtr-ai', 'status') == 'off'
+                assert tm('show-options', '-v', '-t', 'humtr-ai', 'set-titles') == 'on'
+                assert tm('show-options', '-v', '-t', 'humtr-ai', 'set-titles-string') == '#{pane_title}'
+                assert tm('show-options', '-v', '-t', 'isolated', 'set-titles') == foreign_titles
+                assert tm('show-options', '-gv', 'set-titles') == global_titles
                 assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
                 visible = dataclasses.replace(plan, tmux_status=True)
                 with patch.dict(os.environ, {'TMUX':''}), patch.object(ai_tmux,'_tmux',side_effect=routed), patch.object(os,'execvp',side_effect=attach):
@@ -385,6 +391,42 @@ def test_native_status_mouse_switch():
             os.close(slave)
 
 
+def test_native_title_forwarding():
+    import select
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        socket = str(root / 'tmux.sock')
+        def tm(*args):
+            return subprocess.check_output(['tmux', '-S', socket, *args], text=True).strip()
+        tm('-f', '/dev/null', 'new-session', '-d', '-s', 'humtr-ai', 'sleep 90')
+        tm('set-option', '-t', 'humtr-ai', '@humtr_ai_session', '1')
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+        client = None
+        try:
+            plan = ai_plan.ExecutionPlan(argv=['sleep', '90'], env={}, cwd=str(root), display='')
+            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': socket+',1,0'}):
+                ai_tmux.launch(plan, 'example')
+            pane = tm('display-message', '-p', '#{pane_id}')
+            client = subprocess.Popen(['tmux', '-S', socket, 'attach-session', '-t', 'humtr-ai'], stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env={**os.environ, 'TERM':'xterm-256color', 'TMUX':''})
+            for title in ('Native thread title', 'Changed /title #{session_name}'):
+                # select-pane -T interprets formats; escape fixture input, as native OSC does not.
+                tm('select-pane', '-t', pane, '-T', title.replace('#', '##'))
+                data = b''
+                deadline = time.monotonic()+4
+                while time.monotonic() < deadline:
+                    if select.select([master], [], [], .1)[0]:
+                        data += os.read(master, 65536)
+                        if b'\x1b]0;'+title.encode()+b'\x07' in data: break
+                assert b'\x1b]0;'+title.encode()+b'\x07' in data, repr(data)
+                assert tm('display-message', '-p', '-t', pane, '#{pane_title}') == title
+        finally:
+            subprocess.run(['tmux', '-S', socket, 'kill-server'], capture_output=True)
+            if client: client.wait(timeout=3)
+            os.close(master)
+            os.close(slave)
+
+
 def test_bounded_install():
     with tempfile.TemporaryDirectory() as temporary:
         root=Path(temporary)
@@ -401,6 +443,6 @@ def test_bounded_install():
 
 
 if __name__=='__main__':
-    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_terminal_reuse_identity,test_focus_service_guards,test_attach_disappearing_session,test_native_tmux_color_environment,test_native_status_mouse_switch,test_bounded_install):
+    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_terminal_reuse_identity,test_focus_service_guards,test_attach_disappearing_session,test_native_tmux_color_environment,test_native_status_mouse_switch,test_native_title_forwarding,test_bounded_install):
         test()
         print('PASS',test.__name__)

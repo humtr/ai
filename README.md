@@ -131,3 +131,5 @@ direct installed native Codex child with a PTY. The qualified installed direct-s
 preview native is also recognized. Foreign interpreters/scripts/runtimes, ambiguous
 children, changed parents and non-PTY native children refuse focus. No session is resumed
 or started by these checks.
+
+AI-managed tmux sessions forward the selected pane native terminal title to Termux clients. Codex `/title` names follow its upstream title settings; unmanaged sessions and global tmux title options are preserved.
