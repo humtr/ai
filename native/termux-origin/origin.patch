@@ -1,0 +1,109 @@
+diff --git a/app/src/main/java/com/termux/app/TermuxActivity.java b/app/src/main/java/com/termux/app/TermuxActivity.java
+index 0c9f741..2054cd0 100644
+--- a/app/src/main/java/com/termux/app/TermuxActivity.java
++++ b/app/src/main/java/com/termux/app/TermuxActivity.java
+@@ -394,7 +394,15 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
+         final Intent intent = getIntent();
+         setIntent(null);
+ 
+-        if (mTermuxService.isTermuxSessionsEmpty()) {
++        String focusHandle = intent == null ? null : intent.getStringExtra("com.termux.extra.FOCUS_EXISTING_TERMINAL");
++        if (focusHandle != null) {
++            TerminalSession target = mTermuxService.getTerminalSessionForHandle(focusHandle);
++            if (target == null || !target.isRunning()) {
++                finishActivityIfNotFinishing();
++                return;
++            }
++            mTermuxTerminalSessionActivityClient.setCurrentSession(target);
++        } else if (mTermuxService.isTermuxSessionsEmpty()) {
+             if (mIsVisible) {
+                 TermuxInstaller.setupBootstrapIfNeeded(TermuxActivity.this, () -> {
+                     if (mTermuxService == null) return; // Activity might have been destroyed.
+diff --git a/app/src/main/java/com/termux/app/TermuxService.java b/app/src/main/java/com/termux/app/TermuxService.java
+index 8025d0b..90feca7 100644
+--- a/app/src/main/java/com/termux/app/TermuxService.java
++++ b/app/src/main/java/com/termux/app/TermuxService.java
+@@ -26,6 +26,7 @@ import com.termux.shared.termux.plugins.TermuxPluginUtils;
+ import com.termux.shared.data.IntentUtils;
+ import com.termux.shared.net.uri.UriUtils;
+ import com.termux.shared.errors.Errno;
++import com.termux.shared.shell.am.AmSocketServer;
+ import com.termux.shared.shell.ShellUtils;
+ import com.termux.shared.shell.command.runner.app.AppShell;
+ import com.termux.shared.termux.settings.properties.TermuxAppSharedProperties;
+@@ -118,6 +119,8 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
+         mShellManager = TermuxShellManager.getShellManager();
+ 
+         runStartForeground();
++        TermuxTerminalControl terminalControl = new TermuxTerminalControl(this);
++        AmSocketServer.setTerminalCommandHandler(terminalControl::execute);
+ 
+         SystemEventReceiver.registerPackageUpdateEvents(this);
+     }
+@@ -168,6 +171,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
+     @Override
+     public void onDestroy() {
+         Logger.logVerbose(LOG_TAG, "onDestroy");
++        AmSocketServer.setTerminalCommandHandler(null);
+ 
+         TermuxShellUtils.clearTermuxTMPDIR(true);
+ 
+@@ -527,6 +531,19 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
+ 
+ 
+ 
++    void runTerminalControl(Runnable command) { mHandler.post(command); }
++
++    void focusExistingTerminal(TerminalSession terminal) {
++        if (!terminal.isRunning() || getTerminalSessionForHandle(terminal.mHandle) != terminal)
++            throw new IllegalStateException("origin unavailable");
++        setCurrentStoredTerminalSession(terminal);
++        if (mTermuxTerminalSessionActivityClient != null)
++            mTermuxTerminalSessionActivityClient.setCurrentSession(terminal);
++        Intent intent = TermuxActivity.newInstance(this);
++        intent.putExtra("com.termux.extra.FOCUS_EXISTING_TERMINAL", terminal.mHandle);
++        startActivity(intent);
++    }
++
+     /** Execute a shell command in a foreground {@link TermuxSession}. */
+     private void executeTermuxSessionCommand(ExecutionCommand executionCommand) {
+         if (executionCommand == null) return;
+diff --git a/termux-shared/src/main/java/com/termux/shared/shell/am/AmSocketServer.java b/termux-shared/src/main/java/com/termux/shared/shell/am/AmSocketServer.java
+index e316ec0..c7581b2 100644
+--- a/termux-shared/src/main/java/com/termux/shared/shell/am/AmSocketServer.java
++++ b/termux-shared/src/main/java/com/termux/shared/shell/am/AmSocketServer.java
+@@ -61,6 +61,15 @@ public class AmSocketServer {
+ 
+     public static final String LOG_TAG = "AmSocketServer";
+ 
++    public interface TerminalCommandHandler {
++        String execute(String[] args, int peerPid, int peerUid) throws Exception;
++    }
++    private static volatile TerminalCommandHandler terminalCommandHandler;
++    public static void setTerminalCommandHandler(TerminalCommandHandler handler) {
++        terminalCommandHandler = handler;
++    }
++
++
+     /**
+      * Create the {@link AmSocketServer} {@link LocalServerSocket} and start listening for new {@link LocalClientSocket}.
+      *
+@@ -105,6 +114,18 @@ public class AmSocketServer {
+         }
+ 
+         String[] amCommandArray = amCommandList.toArray(new String[0]);
++        if (amCommandArray.length > 0 && amCommandArray[0].equals("termux-terminal-v1")) {
++            TerminalCommandHandler handler = terminalCommandHandler;
++            try {
++                if (handler == null) throw new IllegalStateException("terminal control unavailable");
++                String reply = handler.execute(amCommandArray, clientSocket.getPeerCred().pid, clientSocket.getPeerCred().uid);
++                sendResultToClient(localSocketManager, clientSocket, 0, reply, null);
++            } catch (Exception e) {
++                sendResultToClient(localSocketManager, clientSocket, 69, null, "terminal control unavailable\n");
++            }
++            return;
++        }
++
+ 
+         Logger.logDebug(LOG_TAG, "am command received from peer " + clientSocket.getPeerCred().getMinimalString() +
+             "\n" + ExecutionCommand.getArgumentsLogString("am command", amCommandArray));

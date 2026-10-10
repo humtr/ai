@@ -1,0 +1,77 @@
+name: Existing-terminal origin candidate
+on:
+  push:
+    branches: [experiment/origin-terminal]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Fetch exact experiment and installed Termux source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init experiment
+          git -C experiment remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git -C experiment fetch --depth=1 origin "$GITHUB_SHA"
+          git -C experiment checkout --detach FETCH_HEAD
+          git init termux
+          git -C termux remote add origin https://github.com/termux/termux-app.git
+          git -C termux fetch --depth=1 origin 8629e632fcb95da272221be327db653fb24befe9
+          git -C termux checkout --detach FETCH_HEAD
+          test "$(git -C termux rev-parse HEAD)" = 8629e632fcb95da272221be327db653fb24befe9
+      - name: Apply bounded existing-session patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C termux apply --check "$GITHUB_WORKSPACE/experiment/native/termux-origin/origin.patch"
+          git -C termux apply "$GITHUB_WORKSPACE/experiment/native/termux-origin/origin.patch"
+          cp experiment/native/termux-origin/Term*java termux/app/src/main/java/com/termux/app/
+          mv termux/app/src/main/java/com/termux/app/TerminalProcessIdentityTest.java termux/app/src/test/java/com/termux/app/
+          git -C termux diff --check
+          test "$(git -C termux diff --name-only | wc -l)" = 3
+      - name: Compile APK and actual focused native-source tests
+        shell: bash
+        env:
+          TERMUX_APP_VERSION_NAME: 0.118.0+8629e63.origin1
+          TERMUX_APK_VERSION_TAG: origin1
+          TERMUX_PACKAGE_VARIANT: apt-android-7
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          cd termux
+          ./gradlew --no-daemon :app:testDebugUnitTest --tests com.termux.app.TerminalProcessIdentityTest :app:assembleDebug
+          python3 - <<'CHECK'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          reports=list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*TerminalProcessIdentityTest.xml'))
+          assert len(reports)==1
+          report=ET.parse(reports[0]).getroot()
+          assert int(report.attrib['tests'])==3 and int(report.attrib['failures'])==0 and int(report.attrib['errors'])==0
+          CHECK
+      - name: Qualify same-package same-certificate APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find termux/app/build/outputs/apk/debug -name '*arm64-v8a.apk' -type f)
+          test "${#apks[@]}" = 1
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          "$tools/apksigner" verify --verbose --print-certs "${apks[0]}" > certificate.txt
+          grep -Fi 'b6da01480eefd5fbf2cd3771b8d1021ec791304bdd6c4bf41d3faabad48ee5e1' certificate.txt
+          "$tools/aapt" dump badging "${apks[0]}" > package.txt
+          grep -F "package: name='com.termux' versionCode='118'" package.txt
+          mkdir candidate
+          cp "${apks[0]}" candidate/termux-origin-arm64.apk
+          cp certificate.txt package.txt candidate/
+          printf 'experiment=%s\ntermux=8629e632fcb95da272221be327db653fb24befe9\n' "$GITHUB_SHA" > candidate/source.txt
+          (cd candidate; sha256sum termux-origin-arm64.apk > sha256.txt)
+      - name: Retain reviewable candidate without device installation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: termux-origin-candidate
+          path: candidate/
+          retention-days: 14
