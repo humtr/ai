@@ -9,6 +9,7 @@ and 'termux-terminal-v1 validate|focus HANDLE PID START'. Replies use the existi
 AM framing, exit status and bounded JSON schema termux-terminal-origin-v1.
 Origin resolution follows the authenticated socket peer's live same-UID ancestry
 against Termux's session table. References bind native handle plus PID/start.
+Replies include the real selected-view match and terminal count for device proof.
 Validate/focus require the exact live reference; focus sets the existing session
 and Activity's existing-handle guard refuses closed targets instead of creating.
 

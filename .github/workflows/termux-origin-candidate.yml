@@ -2,6 +2,7 @@ name: Existing-terminal origin candidate
 on:
   push:
     branches: [experiment/origin-terminal]
+    paths: [native/termux-origin/**, .github/workflows/termux-origin-candidate.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,7 +33,7 @@ jobs:
           cp experiment/native/termux-origin/Term*java termux/app/src/main/java/com/termux/app/
           mv termux/app/src/main/java/com/termux/app/TerminalProcessIdentityTest.java termux/app/src/test/java/com/termux/app/
           git -C termux diff --check
-          test "$(git -C termux diff --name-only | wc -l)" = 3
+          test "$(git -C termux diff --name-only | wc -l)" = 4
       - name: Compile APK and actual focused native-source tests
         shell: bash
         env:

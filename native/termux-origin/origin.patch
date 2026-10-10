@@ -20,7 +20,7 @@ index 0c9f741..2054cd0 100644
                  TermuxInstaller.setupBootstrapIfNeeded(TermuxActivity.this, () -> {
                      if (mTermuxService == null) return; // Activity might have been destroyed.
 diff --git a/app/src/main/java/com/termux/app/TermuxService.java b/app/src/main/java/com/termux/app/TermuxService.java
-index 8025d0b..90feca7 100644
+index 8025d0b..3518cdd 100644
 --- a/app/src/main/java/com/termux/app/TermuxService.java
 +++ b/app/src/main/java/com/termux/app/TermuxService.java
 @@ -26,6 +26,7 @@ import com.termux.shared.termux.plugins.TermuxPluginUtils;
@@ -48,11 +48,17 @@ index 8025d0b..90feca7 100644
  
          TermuxShellUtils.clearTermuxTMPDIR(true);
  
-@@ -527,6 +531,19 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
+@@ -527,6 +531,25 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
  
  
  
 +    void runTerminalControl(Runnable command) { mHandler.post(command); }
++
++    boolean isSelectedTerminal(TerminalSession terminal) {
++        return mTermuxTerminalSessionActivityClient != null
++            && mTermuxTerminalSessionActivityClient.isCurrentSession(terminal);
++    }
++
 +
 +    void focusExistingTerminal(TerminalSession terminal) {
 +        if (!terminal.isRunning() || getTerminalSessionForHandle(terminal.mHandle) != terminal)
@@ -68,6 +74,21 @@ index 8025d0b..90feca7 100644
      /** Execute a shell command in a foreground {@link TermuxSession}. */
      private void executeTermuxSessionCommand(ExecutionCommand executionCommand) {
          if (executionCommand == null) return;
+diff --git a/app/src/main/java/com/termux/app/terminal/TermuxTerminalSessionActivityClient.java b/app/src/main/java/com/termux/app/terminal/TermuxTerminalSessionActivityClient.java
+index bd78914..55d230d 100644
+--- a/app/src/main/java/com/termux/app/terminal/TermuxTerminalSessionActivityClient.java
++++ b/app/src/main/java/com/termux/app/terminal/TermuxTerminalSessionActivityClient.java
+@@ -341,6 +341,10 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
+     }
+ 
+     @SuppressLint("InflateParams")
++    public boolean isCurrentSession(TerminalSession session) {
++        return mActivity.getCurrentSession() == session;
++    }
++
+     public void renameSession(final TerminalSession sessionToRename) {
+         if (sessionToRename == null) return;
+ 
 diff --git a/termux-shared/src/main/java/com/termux/shared/shell/am/AmSocketServer.java b/termux-shared/src/main/java/com/termux/shared/shell/am/AmSocketServer.java
 index e316ec0..c7581b2 100644
 --- a/termux-shared/src/main/java/com/termux/shared/shell/am/AmSocketServer.java

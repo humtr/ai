@@ -33,7 +33,10 @@ final class TermuxTerminalControl {
                 if (args.length == 2 && args[1].equals("capabilities")) {
                     result.put("operations", "origin,validate,focus");
                 } else if (args.length == 2 && args[1].equals("origin")) {
-                    result.put("origin", origin(peerPid, peerUid));
+                    JSONObject origin = origin(peerPid, peerUid);
+                    result.put("origin", origin);
+                    TerminalSession target = service.getTerminalSessionForHandle(origin.getString("handle"));
+                    result.put("selected", service.isSelectedTerminal(target));
                 } else if (args.length == 5 && (args[1].equals("validate") || args[1].equals("focus"))) {
                     TerminalSession target = validate(args[2], args[3], args[4]);
                     long start = TerminalProcessIdentity.read(target.getPid()).start;
@@ -45,8 +48,9 @@ final class TermuxTerminalControl {
                         service.focusExistingTerminal(target);
                     }
                     result.put("origin", reference(target, start));
+                    result.put("selected", service.isSelectedTerminal(target));
                 } else throw new IllegalArgumentException("invalid terminal control request");
-                reply.set(result.put("result", "ok").toString() + "\n");
+                reply.set(result.put("terminal_count", service.getTermuxSessionsSize()).put("result", "ok").toString() + "\n");
             } catch (Exception e) { failure.set(e); }
             finally { completed.countDown(); }
         });
