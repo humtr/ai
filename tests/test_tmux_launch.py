@@ -82,7 +82,7 @@ def test_native_tmux_launch_focus():
         global_titles = tm('show-options', '-gv', 'set-titles')
         marker=root/'argv.json'
         provider=root/'provider'
-        provider.write_text('#!'+sys.executable+'\nimport json,os,sys,time\nwith open('+repr(str(marker))+'+".tmp","w") as out: json.dump([sys.argv[1:],os.getcwd(),os.environ.get("CODEX_HOME")],out)\nos.replace('+repr(str(marker))+'+".tmp",'+repr(str(marker))+')\nprint("\\x1b]0;01a0fc82-dc8f-7d13-bb78-7e120... | native\\x07",flush=True)\ntime.sleep(90)\n')
+        provider.write_text('#!'+sys.executable+'\nimport json,os,sys,time\nif sys.argv[1:3]==["termux","__terminal-capabilities-v1"]: sys.exit(1)\nwith open('+repr(str(marker))+'+".tmp","w") as out: json.dump([sys.argv[1:],os.getcwd(),os.environ.get("CODEX_HOME")],out)\nos.replace('+repr(str(marker))+'+".tmp",'+repr(str(marker))+')\nprint("\\x1b]0;01a0fc82-dc8f-7d13-bb78-7e120... | native\\x07",flush=True)\ntime.sleep(90)\n')
         provider.chmod(0o700)
         sid='01a0fc82-dc8f-7d13-bb78-7e120f1fa9b3'
         sessions=root/'.codex/sessions'
@@ -127,7 +127,7 @@ def test_native_tmux_launch_focus():
                     session_id=tm('display-message','-p','-t',target,'#{session_id}')
                     assert request[request.index('com.termux.RUN_COMMAND_ARGUMENTS')+1] == '-S,'+socket+',attach-session,-t,'+session_id
                     terminal_name=request[request.index('com.termux.RUN_COMMAND_SHELL_NAME')+1]
-                    assert terminal_name.startswith('ai-tmux-')
+                    assert terminal_name.startswith('ai-') and len(terminal_name) == 11
                     assert request[request.index('com.termux.RUN_COMMAND_SHELL_CREATE_MODE')+1] == 'no-shell-with-name'
                     assert request[-3:] == ['--es','com.termux.RUN_COMMAND_SESSION_ACTION','0']
                     assert ai_tmux.focus(sid) == 0 and len(requests) == 2
@@ -184,7 +184,7 @@ def test_native_tmux_launch_focus():
                     raise Attached
                 original=ai_tmux._tmux
                 def routed(sock,*args): return original(sock or socket,*args)
-                with patch.dict(os.environ, {'TMUX':''}), patch.object(ai_tmux,'_tmux',side_effect=routed), patch.object(os,'execvp',side_effect=attach):
+                with patch.dict(os.environ, {'TMUX':''}), patch.object(ai_tmux,'_tmux',side_effect=routed), patch.object(os,'execvp',side_effect=attach), patch.object(ai_tmux,'_attach_terminal',return_value=1):
                     try: ai_tmux.launch(plan,'codex')
                     except Attached: pass
                     else: raise AssertionError('outside launch must attach')
@@ -196,7 +196,7 @@ def test_native_tmux_launch_focus():
                 assert tm('show-options', '-gv', 'set-titles') == global_titles
                 assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
                 visible = dataclasses.replace(plan, tmux_status=True)
-                with patch.dict(os.environ, {'TMUX':''}), patch.object(ai_tmux,'_tmux',side_effect=routed), patch.object(os,'execvp',side_effect=attach):
+                with patch.dict(os.environ, {'TMUX':''}), patch.object(ai_tmux,'_tmux',side_effect=routed), patch.object(os,'execvp',side_effect=attach), patch.object(ai_tmux,'_attach_terminal',return_value=1):
                     try: ai_tmux.launch(visible,'codex')
                     except Attached: pass
                     else: raise AssertionError('visible launch must attach')
@@ -260,7 +260,7 @@ def test_stable_terminal_name():
         first = tm('-f','/dev/null','new-session','-d','-P','-F','#{session_id}','-s','shared','sleep 90')
         try:
             name = ai_tmux.terminal_name(socket, first)
-            assert len(name) == 24 and name.startswith('ai-tmux-')
+            assert len(name) == 11 and name.startswith('ai-')
             other = tm('new-session','-d','-P','-F','#{session_id}','-s','other','sleep 90')
             assert ai_tmux.terminal_name(socket, other) != name
             explicit = 'ai-tmux-'+'a'*64

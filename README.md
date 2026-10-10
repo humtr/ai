@@ -83,7 +83,8 @@ when already inside tmux). `--tmux=hidden` is equivalent; `--tmux=status` shows
 a clickable window bar and `--tmux=off` uses an ordinary terminal. The TUI offers
 `off / on-hidden / on-status`, defaults off and is stored with
 launcher options; it is never passed upstream. Profiles, CWD and native arguments
-are preserved. Codex's native terminal title gains `thread-id` first, retaining
+are preserved. The qualified Codex Core/Manager capability keeps native title settings intact;
+historical title-based focus gains `thread-id` first, retaining
 other title items; no CLI config override is added. New panes inherit the current
 caller's color preferences, including absence of `NO_COLOR`, rather than stale
 server values. Explicit color settings are preserved; tmux owns `TERM`. An already
@@ -134,4 +135,4 @@ or started by these checks.
 
 AI-managed tmux sessions forward the selected pane native terminal title to Termux clients. Codex `/title` names follow its upstream title settings; unmanaged sessions and global tmux title options are preserved.
 
-Native terminal return names now bind tmux socket path and session name, remaining stable across server restarts. An explicit session-local @humtr_ai_terminal_name can preserve an already registered terminal during a native UI name transfer. Invalid bindings refuse focus dispatch.
+Native terminal return names use the CLI prefix plus eight hexadecimal digits of the tmux socket/session identity, remaining stable across server restarts and thread/profile changes. Initial explicit tmux launch opens the registered working terminal once; notification taps reuse it. A failed native service request leaves the one existing workload accessible through direct attachment. An explicit session-local @humtr_ai_terminal_name can preserve an already registered terminal during a native UI name transfer. Invalid bindings refuse focus dispatch.

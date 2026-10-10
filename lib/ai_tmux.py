@@ -115,11 +115,28 @@ def register(socket: str) -> None:
             os.unlink(temporary)
 
 
+def _native_identity(plan) -> bool:
+    """Ask the qualified Core/Manager path; never inspect its manifests."""
+    environment = dict(os.environ)
+    for key in getattr(plan, "env_unset", ()):
+        environment.pop(key, None)
+    environment.update(plan.env)
+    try:
+        result = subprocess.run([plan.argv[0], "termux", "__terminal-capabilities-v1", "--", *plan.argv[1:]],
+                                env=environment, cwd=plan.cwd, stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=2)
+        return result.returncode == 0 and result.stdout == b"codex-terminal-capabilities-v1\nidentity=native\n" and not result.stderr
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+
 def launch(plan, provider: str) -> int:
     if not shutil.which("tmux"):
         raise SystemExit("ERROR: tmux is not installed")
     if provider == "codex":
-        prepare_title(Path(plan.env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")))
+        if not _native_identity(plan):
+            prepare_title(Path(plan.env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")))
     # tmux executes one shell command; quote every argv/environment field.
     environment = {key: os.environ[key] for key in ("HOME", "PATH", "CODEX_HOME", "AI_CONFIG_DIR", "AI_LIB_DIR", *COLOR_ENVIRONMENT) if key in os.environ}
     environment.update(plan.env)
@@ -155,6 +172,10 @@ def launch(plan, provider: str) -> int:
     _tmux(socket, "select-pane", "-t", pane)
     if not inside:
         session = _tmux(socket, "display-message", "-p", "-t", pane, "#{session_id}")
+        terminal = terminal_name(socket, session, provider)
+        _tmux(socket, "set-option", "-t", session, "@humtr_ai_terminal_name", terminal)
+        if _attach_terminal(socket, session, terminal) == 0:
+            return 0
         os.execvp("tmux", ["tmux", "-S", socket, "attach-session", "-t", session])
     return 0
 
@@ -284,19 +305,21 @@ def _activity_manager() -> str | None:
     return shutil.which("am")
 
 
-def terminal_name(socket: str, session: str) -> str:
+def terminal_name(socket: str, session: str, provider: str = "ai") -> str:
     """Stable presentation identity; live socket/runtime checks remain separate."""
     binding = _tmux(socket, "show-options", "-qv", "-t", session, "@humtr_ai_terminal_name")
     if binding:
-        if not re.fullmatch(r"ai-tmux-(?:[0-9a-f]{16}|[0-9a-f]{64})", binding):
+        if not re.fullmatch(r"(?:ai-tmux-(?:[0-9a-f]{16}|[0-9a-f]{64})|[a-z][a-z0-9]{0,23}-[0-9a-f]{8})", binding):
             raise ValueError("invalid native terminal binding")
         return binding
     name = _tmux(socket, "display-message", "-p", "-t", session, "#{session_name}")
     if not name:
         raise ValueError("missing native session name")
-    return "ai-tmux-" + hashlib.sha256(
+    if not re.fullmatch(r"[a-z][a-z0-9]{0,23}", provider):
+        raise ValueError("invalid native terminal CLI prefix")
+    return provider + "-" + hashlib.sha256(
         json.dumps([socket, name], separators=(",", ":")).encode()
-    ).hexdigest()[:16]
+    ).hexdigest()[:8]
 
 
 def focus(session_id: str) -> int:
@@ -358,11 +381,20 @@ def focus(session_id: str) -> int:
             return 1
         if binding and _bound_thread(binding, pid, tty) != session_id:
             return 1
-        am = _activity_manager()
-        tmux = shutil.which("tmux")
-        if not am or not tmux:
-            return 1
-        terminal = terminal_name(socket, target)
+        return _attach_terminal(socket, target, terminal_name(socket, target))
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired):
+        return 1
+
+
+def _attach_terminal(socket: str, target: str, terminal: str) -> int:
+    """One bounded service request, shared by initial launch and notification return."""
+    if any(c in socket for c in (",", "\\")) or not re.fullmatch(r"\$[0-9]+", target):
+        return 1
+    am = _activity_manager()
+    tmux = shutil.which("tmux")
+    if not am or not tmux:
+        return 1
+    try:
         result = subprocess.run([
             am, "startservice", "--user", "0", "-n", "com.termux/.app.RunCommandService",
             "-a", "com.termux.RUN_COMMAND", "--es", "com.termux.RUN_COMMAND_PATH", tmux,
@@ -373,5 +405,6 @@ def focus(session_id: str) -> int:
             "--es", "com.termux.RUN_COMMAND_SESSION_ACTION", "0",
         ], capture_output=True, text=True, timeout=15)
         return 0 if result.returncode == 0 else 1
-    except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return 1
+

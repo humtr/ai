@@ -184,6 +184,13 @@ else
   exit 1
 fi
 
+if python3 "$ROOT/tests/test_terminal_registration.py"; then
+  ok "registered initial terminal and qualified native title delegation"
+else
+  fail "registered initial terminal and qualified native title delegation"
+  exit 1
+fi
+
 section "SUMMARY"
 
 echo "pass=$PASS"
