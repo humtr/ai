@@ -79,7 +79,7 @@ bash verify/ai-tui-smoke.sh
 ### Optional tmux launch
 
 `ai run codex --tmux` outside tmux starts a separate managed session with its
-own named Android terminal; it never hides a prior launch in another terminal.
+own originating Android terminal; it never hides a prior launch in another terminal.
 Inside tmux it opens a window in the invoking pane's exact session, preserving
 other sessions' selection even when another client was active more recently.
 `--tmux=hidden` is equivalent; `--tmux=status` shows
@@ -101,12 +101,7 @@ Android Termux terminal selection remains a separate capability.
 
 `codex termux notify set --focus tmux` lets a notification select the existing
 managed pane for its live conversation. Closed, ambiguous or unidentifiable
-targets are left alone. A successful tap selects a named Android Termux terminal
-attached to that existing tmux session and pane, creating it only if absent.
-Repeated taps, including notifications from different windows of the same tmux
-session, reuse that terminal/client. Closing it permits one replacement. Different
-live tmux sessions have separate notification terminals. Taps never start another
-Codex process or tmux workload. This uses Termux's RunCommandService and requires
+targets are left alone. A successful tap selects the already existing originating Android terminal. Repeated taps cannot create windows or attached clients. This uses the optional Termux existing-origin socket protocol; no RunCommandService create-or-reuse path remains.
 `allow-external-apps = true`. `--focus termux` restores ordinary foregrounding.
 Service failures retain ordinary Termux foregrounding. The attach change is
 separate and can be reverted and installed again with `--ai-only`.
@@ -138,4 +133,4 @@ or started by these checks.
 
 AI-managed tmux sessions forward the selected pane native terminal title to Termux clients. Codex `/title` names follow its upstream title settings; unmanaged sessions and global tmux title options are preserved.
 
-Native terminal return names use the CLI prefix plus eight hexadecimal digits of the tmux socket/session identity, remaining stable across server restarts and thread/profile changes. Initial explicit tmux launch opens the registered working terminal once; notification taps reuse it. A failed native service request leaves the one existing workload accessible through direct attachment. An explicit session-local @humtr_ai_terminal_name can preserve an already registered terminal during a native UI name transfer. Invalid bindings refuse focus dispatch.
+Launch attaches directly in the terminal where `ai` was invoked. Native return uses Termux's existing-terminal handle plus live PID/start identity, recorded only in the managed session. Names, titles and tmux IDs cannot address Android windows. The optional existing-origin socket capability is required for exact return; unavailable or closed targets never create a replacement. The native app candidate is under `native/termux-origin` and is not a device qualification result.

@@ -27,167 +27,38 @@ def test_read_only_capability_delegates_exact_plan_and_refuses_invalid_protocol(
             assert not ai_tmux._native_identity(plan)
 
 
-def test_initial_launch_registers_one_workload_with_upstream_title_and_shared_attachment():
-    for service_success in (True,False):
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); socket=str(root/'tmux.sock'); home=root/'home'; home.mkdir()
-            config=home/'profile/config.toml';config.parent.mkdir();before=b'# user title\n[tui]\nterminal_title=["thread-name","activity"]\n';config.write_bytes(before)
-            program=root/'codex'; marker=root/'runs'
-            program.write_text('#!' + sys.executable + '\nimport sys,time\nfrom pathlib import Path\nif sys.argv[1:3]==["termux","__terminal-capabilities-v1"]:\n print("codex-terminal-capabilities-v1\\nidentity=native");sys.exit(0)\np=Path('+repr(str(marker))+');p.write_text(p.read_text()+"run\\n" if p.exists() else "run\\n")\ntime.sleep(90)\n');program.chmod(0o755)
-            plan=ai_plan.ExecutionPlan(argv=[str(program)],env={'CODEX_HOME':str(config.parent)},cwd=tmp,display='')
-            original=ai_tmux._tmux; native_run=subprocess.run; requests=[];direct=[]
-            def tm(sock,*args): return original(sock or socket,*args)
-            def run(args,**kwargs):
-                if args[0]=='/owned/am':
-                    requests.append(args)
-                    return subprocess.CompletedProcess(args,0 if service_success else 1,'','')
-                return native_run(args,**kwargs)
-            native_which=ai_tmux.shutil.which
-            def which(name): return '/owned/tmux' if name=='tmux' else native_which(name)
-            def attach(*args): direct.append(args); raise RuntimeError('owned exec boundary')
-            try:
-                with patch.dict(os.environ, {'HOME':str(home),'TMUX':''}), patch.object(ai_tmux,'_tmux',side_effect=tm),patch.object(ai_tmux,'_activity_manager',return_value='/owned/am'),patch.object(ai_tmux.shutil,'which',side_effect=which),patch.object(ai_tmux.subprocess,'run',side_effect=run),patch.object(ai_tmux.os,'execvp',side_effect=attach):
-                    if service_success: assert ai_tmux.launch(plan,'codex')==0
-                    else:
-                        try: ai_tmux.launch(plan,'codex')
-                        except RuntimeError as e: assert str(e)=='owned exec boundary'
-                        else: raise AssertionError('missing direct attachment fallback')
-                    assert len(requests)==1 and len(direct)==(0 if service_success else 1)
-                    sid=original(socket,'list-panes','-a','-F','#{session_id}')
-                    name=original(socket,'show-options','-qv','-t',sid,'@humtr_ai_terminal_name')
-                    assert name.startswith('codex-') and len(name)==14
-                    assert requests[0][requests[0].index('com.termux.RUN_COMMAND_SHELL_NAME')+1]==name
-                    native_socket=original(socket,'display-message','-p','-t',sid,'#{socket_path}')
-                    assert ai_tmux._socket_identity(native_socket)==ai_tmux._socket_identity(socket)
-                    assert requests[0][requests[0].index('com.termux.RUN_COMMAND_ARGUMENTS')+1]=='-S,'+native_socket+',attach-session,-t,'+sid, (requests[0], native_socket, sid)
-                    assert requests[0][requests[0].index('com.termux.RUN_COMMAND_SHELL_CREATE_MODE')+1]=='no-shell-with-name'
-                    assert ai_tmux.terminal_name(socket,sid,'agy')==name
-                    assert config.read_bytes()==before
-                    assert original(socket,'list-panes','-a','-F','#{pane_id}').count('\n')==0
-                    deadline=time.monotonic()+3
-                    while not marker.exists() and time.monotonic()<deadline: time.sleep(.01)
-                    assert marker.read_text()=='run\n'
-                    # All repeated service calls attach the same existing job/session.
-                    for _ in range(2): ai_tmux._attach_terminal(native_socket,sid,name)
-                    assert len(requests)==3 and all(r==requests[0] for r in requests)
-                    assert marker.read_text()=='run\n' and config.read_bytes()==before
-            finally: native_run(['tmux','-S',socket,'kill-server'],capture_output=True)
 
-
-def test_separate_launches_preserve_existing_session_and_return_identity():
-    for service_success in (True, False):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); socket = str(root/'tmux.sock'); home = root/'home'; home.mkdir()
-            program = root/'provider'; runs = root/'runs'
-            program.write_text('#!' + sys.executable + '\nimport time\nfrom pathlib import Path\np=Path(' + repr(str(runs)) + ');p.open("a").write("run\\n")\ntime.sleep(90)\n'); program.chmod(0o755)
-            plan = ai_plan.ExecutionPlan(argv=[str(program)], env={}, cwd=tmp, display='')
-            original = ai_tmux._tmux; native_run = subprocess.run; requests = []; direct = []
-            def tm(sock, *args): return original(sock or socket, *args)
-            def attach(sock, session, name):
-                requests.append((sock, session, name))
-                return 0 if service_success else 1
-            def direct_attach(binary, argv):
-                direct.append(argv); raise RuntimeError('owned attach')
-            try:
-                old_pane = original(socket, '-f', '/dev/null', 'new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'humtr-ai', 'sleep 90')
-                old_session = original(socket, 'display-message', '-p', '-t', old_pane, '#{session_id}')
-                original(socket, 'set-option', '-t', old_session, '@humtr_ai_session', '1')
-                original(socket, 'set-option', '-t', old_session, '@humtr_ai_terminal_name', 'codex-12345678')
-                def old_state():
-                    return original(socket, 'list-panes', '-t', old_session, '-F', '#{pane_id}:#{pane_pid}:#{window_id}:#{window_active}:#{pane_active}:#{@humtr_ai_terminal_name}')
-                before = old_state()
-                with patch.dict(os.environ, {'HOME':str(home), 'TMUX':'', 'TMUX_PANE':''}), patch.object(ai_tmux, '_tmux', side_effect=tm), patch.object(ai_tmux, '_attach_terminal', side_effect=attach), patch.object(ai_tmux, '_native_identity', return_value=True), patch.object(ai_tmux.os, 'execvp', side_effect=direct_attach):
-                    for _ in range(2):
-                        if service_success: assert ai_tmux.launch(plan, 'codex') == 0
-                        else:
-                            try: ai_tmux.launch(plan, 'codex')
-                            except RuntimeError as e: assert str(e) == 'owned attach'
-                            else: raise AssertionError('missing direct attachment')
-                        assert old_state() == before, 'a fresh launch changed the existing workload/selection'
-                    assert len(requests) == 2 and len(direct) == (0 if service_success else 2)
-                    assert len({r[1] for r in requests}) == 2, 'independent launches reused one tmux session'
-                    assert len({r[2] for r in requests}) == 2, 'independent launches reused one Android terminal'
-                    assert all(r[1] != old_session and r[2] != 'codex-12345678' for r in requests)
-                    assert len(original(socket, 'list-sessions', '-F', '#{session_id}').splitlines()) == 3
-                    for _, session, name in requests:
-                        assert len(original(socket, 'list-panes', '-t', session, '-F', '#{pane_id}').splitlines()) == 1
-                        assert ai_tmux.terminal_name(socket, session) == name
-                    deadline = time.monotonic() + 3
-                    while (not runs.exists() or len(runs.read_text().splitlines()) != 2) and time.monotonic() < deadline: time.sleep(.01)
-                    assert runs.read_text() == 'run\nrun\n', 'a launch was lost or duplicated'
-                    first, second = requests
-                    for _, session, name in (first, second, first, second):
-                        assert ai_tmux._attach_terminal(socket, session, name) == (0 if service_success else 1)
-                    assert requests[2:] == [first, second, first, second]
-                    original(socket, 'kill-session', '-t', first[1])
-                    assert original(socket, 'has-session', '-t', second[1]) == ''
-                    assert old_state() == before
-            finally: native_run(['tmux', '-S', socket, 'kill-server'], capture_output=True)
-
-
-def test_inside_launch_uses_invoking_session_not_other_selected_session():
+def test_direct_launches_do_not_dispatch_android_creation():
+    import pty,shlex,fcntl,termios,struct
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp); socket = str(root/'tmux.sock'); original = ai_tmux._tmux
+        root=Path(tmp);home=root/'home';home.mkdir();(root/'run').mkdir()
+        program=root/'codex';marker=root/'runs'
+        program.write_text('#!'+sys.executable+'\nimport os,sys,time\nfrom pathlib import Path\nif sys.argv[1:3]==["termux","__terminal-capabilities-v1"]:print("codex-terminal-capabilities-v1\\nidentity=native");sys.exit(0)\nPath('+repr(str(marker))+').open("a").write("run\\n")\nprint("OWNED_WORKLOAD",flush=True)\ntime.sleep(90)\n');program.chmod(0o755)
+        clients=[];fds=[];socket=str(root/'run'/('tmux-'+str(os.getuid()))/'default')
+        def tm(*args):return subprocess.check_output(['tmux','-S',socket,*args],text=True).strip()
         try:
-            source = original(socket, '-f', '/dev/null', 'new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'source', 'sleep 90')
-            other = original(socket, 'new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'other', 'sleep 90')
-            before = original(socket, 'list-panes', '-t', 'other', '-F', '#{pane_id}:#{pane_pid}:#{window_id}:#{window_active}')
-            plan = ai_plan.ExecutionPlan(argv=['sleep', '90'], env={}, cwd=tmp, display='')
-            with patch.dict(os.environ, {'HOME':tmp, 'TMUX':socket+',1,0', 'TMUX_PANE':source}), patch.object(ai_tmux, '_attach_terminal') as attach:
-                assert ai_tmux.launch(plan, 'agy') == 0
-                attach.assert_not_called()
-                with patch.dict(os.environ, {'TMUX_PANE':''}):
-                    try: ai_tmux.launch(plan, 'agy')
-                    except ValueError as e: assert str(e) == 'missing invoking tmux pane'
-                    else: raise AssertionError('a missing source pane must not select another session')
-            assert len(original(socket, 'list-panes', '-s', '-t', 'source', '-F', '#{pane_id}').splitlines()) == 2
-            assert original(socket, 'list-panes', '-t', 'other', '-F', '#{pane_id}:#{pane_pid}:#{window_id}:#{window_active}') == before
-        finally: subprocess.run(['tmux', '-S', socket, 'kill-server'], capture_output=True)
-
-
-def test_actual_clients_keep_independent_screens_and_reuse_return_names():
-    import pty
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp); socket = str(root/'tmux.sock'); original = ai_tmux._tmux
-        clients = {}; handles = []; processes = []
-        def tm(sock, *args): return original(sock or socket, *args)
-        def attach(sock, session, name):
-            if name not in clients:
-                master, slave = pty.openpty(); handles.extend([master, slave])
-                process = subprocess.Popen(['tmux', '-S', sock, 'attach-session', '-t', session], stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env={**os.environ, 'TERM':'xterm-256color', 'TMUX':''})
-                clients[name] = (session, os.ttyname(slave)); processes.append(process)
-                deadline = time.monotonic() + 3
-                while clients[name][1] not in original(sock, 'list-clients', '-F', '#{client_tty}') and time.monotonic() < deadline: time.sleep(.01)
-                assert process.poll() is None
-            else: assert clients[name][0] == session
-            return 0
-        try:
-            with patch.dict(os.environ, {'HOME':tmp, 'TMUX':'', 'TMUX_PANE':''}), patch.object(ai_tmux, '_tmux', side_effect=tm), patch.object(ai_tmux, '_attach_terminal', side_effect=attach), patch.object(ai_tmux, '_native_identity', return_value=True):
-                for text in ('FIRST_INDEPENDENT_WORK', 'SECOND_INDEPENDENT_WORK'):
-                    plan = ai_plan.ExecutionPlan(argv=[sys.executable, '-u', '-c', 'import time; print('+repr(text)+'); time.sleep(90)'], env={}, cwd=tmp, display='')
-                    assert ai_tmux.launch(plan, 'codex') == 0
-                assert len(clients) == 2
-                entries = list(clients.items())
-                for (name, (session, tty)), text in zip(entries, ('FIRST_INDEPENDENT_WORK', 'SECOND_INDEPENDENT_WORK')):
-                    assert dict(row.split('\t') for row in original(socket, 'list-clients', '-F', '#{client_tty}\t#{session_id}').splitlines())[tty] == session
-                    deadline = time.monotonic() + 3
-                    while text not in original(socket, 'capture-pane', '-p', '-t', session) and time.monotonic() < deadline: time.sleep(.01)
-                    assert text in original(socket, 'capture-pane', '-p', '-t', session)
-                    for _ in range(2): assert ai_tmux._attach_terminal(socket, session, name) == 0
-                assert len(clients) == 2 and len(original(socket, 'list-clients', '-F', '#{client_tty}').splitlines()) == 2
-                first_name, (first_session, first_tty) = entries[0]
-                _, (second_session, _) = entries[1]
-                original(socket, 'kill-session', '-t', second_session)
-                assert dict(row.split('\t') for row in original(socket, 'list-clients', '-F', '#{client_tty}\t#{session_id}').splitlines())[first_tty] == first_session
-                assert 'FIRST_INDEPENDENT_WORK' in original(socket, 'capture-pane', '-p', '-t', first_session)
+            for _ in range(2):
+                master,slave=pty.openpty();fds.extend([master,slave]);fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',12,80,0,0))
+                code='import sys;sys.path.insert(0,'+repr(str(Path(ai_tmux.__file__).parent))+');import ai_tmux,ai_plan;ai_tmux.ai_terminal.resolve=lambda:None;ai_tmux.launch(ai_plan.ExecutionPlan(argv=['+repr(str(program))+'],env={},cwd='+repr(tmp)+',display=""),"codex")'
+                process=subprocess.Popen([sys.executable,'-c',code],stdin=slave,stdout=slave,stderr=slave,start_new_session=True,env={**os.environ,'HOME':str(home),'TMUX':'','TMUX_PANE':'','TMUX_TMPDIR':str(root/'run'),'TERM':'xterm-256color','PYTHONDONTWRITEBYTECODE':'1'});clients.append((process,os.ttyname(slave)))
+                deadline=time.monotonic()+4
+                while (not marker.exists() or len(marker.read_text().splitlines())!=len(clients)) and time.monotonic()<deadline:time.sleep(.01)
+                assert process.poll() is None and marker.read_text()=='run\n'*len(clients)
+                deadline=time.monotonic()+4
+                while not os.readlink('/proc/'+str(process.pid)+'/exe').endswith('/tmux') and time.monotonic()<deadline:time.sleep(.01)
+                assert os.readlink('/proc/'+str(process.pid)+'/exe').endswith('/tmux'),'launcher did not exec attachment in its caller terminal'
+            rows=dict(row.split('\t') for row in tm('list-clients','-F','#{client_tty}\t#{session_id}').splitlines())
+            assert len(rows)==2 and rows[clients[0][1]]!=rows[clients[1][1]]
+            sessions=tm('list-sessions','-F','#{session_id}').splitlines();assert len(sessions)==2
+            tm('kill-session','-t',rows[clients[1][1]])
+            assert clients[0][0].poll() is None and tm('has-session','-t',rows[clients[0][1]])==''
         finally:
-            subprocess.run(['tmux', '-S', socket, 'kill-server'], capture_output=True)
-            for process in processes:
-                try: process.wait(timeout=3)
-                except subprocess.TimeoutExpired: process.kill(); process.wait()
-            for fd in handles: os.close(fd)
-
+            subprocess.run(['tmux','-S',socket,'kill-server'],capture_output=True)
+            for process,_ in clients:
+                try:process.wait(timeout=3)
+                except subprocess.TimeoutExpired:process.kill();process.wait()
+            for fd in fds:os.close(fd)
 
 if __name__=='__main__':
-    for test in (test_read_only_capability_delegates_exact_plan_and_refuses_invalid_protocol,test_initial_launch_registers_one_workload_with_upstream_title_and_shared_attachment,test_separate_launches_preserve_existing_session_and_return_identity,test_inside_launch_uses_invoking_session_not_other_selected_session,test_actual_clients_keep_independent_screens_and_reuse_return_names):
-        test();print('PASS',test.__name__)
+ for test in (test_read_only_capability_delegates_exact_plan_and_refuses_invalid_protocol,test_direct_launches_do_not_dispatch_android_creation):
+  test();print('PASS',test.__name__)
