@@ -78,8 +78,11 @@ bash verify/ai-tui-smoke.sh
 
 ### Optional tmux launch
 
-`ai run codex --tmux` opens a managed tmux window (reuses the current server
-when already inside tmux). `--tmux=hidden` is equivalent; `--tmux=status` shows
+`ai run codex --tmux` outside tmux starts a separate managed session with its
+own named Android terminal; it never hides a prior launch in another terminal.
+Inside tmux it opens a window in the invoking pane's exact session, preserving
+other sessions' selection even when another client was active more recently.
+`--tmux=hidden` is equivalent; `--tmux=status` shows
 a clickable window bar and `--tmux=off` uses an ordinary terminal. The TUI offers
 `off / on-hidden / on-status`, defaults off and is stored with
 launcher options; it is never passed upstream. Profiles, CWD and native arguments

@@ -102,7 +102,7 @@ def test_native_tmux_launch_focus():
                     requests.append(args)
                     return subprocess.CompletedProcess(args, 0, '', '')
                 return native_run(args, **kwargs)
-            with patch.dict(os.environ, {'HOME':str(root),'TMUX':socket+',1,0','AUTH_TEST_SECRET':'never-serialize'}, clear=False), patch.object(subprocess, 'run', side_effect=run), patch.object(shutil, 'which', side_effect=which):
+            with patch.dict(os.environ, {'HOME':str(root),'TMUX':socket+',1,0','TMUX_PANE':'%0','AUTH_TEST_SECRET':'never-serialize'}, clear=False), patch.object(subprocess, 'run', side_effect=run), patch.object(shutil, 'which', side_effect=which):
                 assert ai_tmux.launch(dataclasses.replace(plan, tmux_status=True),'codex') == 0
                 deadline=time.monotonic()+3
                 while not marker.exists() and time.monotonic()<deadline: time.sleep(.05)
@@ -179,8 +179,10 @@ def test_native_tmux_launch_focus():
                 assert not ai_tmux._runtime('1','/dev/null')
                 # Outside tmux: a native managed session and one attach, no other session mutation.
                 class Attached(Exception): pass
+                attached_sessions = []
                 def attach(binary,argv):
                     assert binary == 'tmux' and argv[:4] == ['tmux','-S',socket,'attach-session']
+                    attached_sessions.append(argv[-1])
                     raise Attached
                 original=ai_tmux._tmux
                 def routed(sock,*args): return original(sock or socket,*args)
@@ -188,10 +190,10 @@ def test_native_tmux_launch_focus():
                     try: ai_tmux.launch(plan,'codex')
                     except Attached: pass
                     else: raise AssertionError('outside launch must attach')
-                assert tm('show-options','-v','-t','humtr-ai','@humtr_ai_session') == '1'
-                assert tm('show-options', '-v', '-t', 'humtr-ai', 'status') == 'off'
-                assert tm('show-options', '-v', '-t', 'humtr-ai', 'set-titles') == 'on'
-                assert tm('show-options', '-v', '-t', 'humtr-ai', 'set-titles-string') == '#{pane_title}'
+                assert tm('show-options','-v','-t',attached_sessions[0],'@humtr_ai_session') == '1'
+                assert tm('show-options', '-v', '-t', attached_sessions[0], 'status') == 'off'
+                assert tm('show-options', '-v', '-t', attached_sessions[0], 'set-titles') == 'on'
+                assert tm('show-options', '-v', '-t', attached_sessions[0], 'set-titles-string') == '#{pane_title}'
                 assert tm('show-options', '-v', '-t', 'isolated', 'set-titles') == foreign_titles
                 assert tm('show-options', '-gv', 'set-titles') == global_titles
                 assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
@@ -200,8 +202,10 @@ def test_native_tmux_launch_focus():
                     try: ai_tmux.launch(visible,'codex')
                     except Attached: pass
                     else: raise AssertionError('visible launch must attach')
-                assert tm('show-options', '-v', '-t', 'humtr-ai', 'status') == 'on'
-                assert tm('show-options', '-v', '-t', 'humtr-ai', 'mouse') == 'on'
+                assert tm('show-options', '-v', '-t', attached_sessions[1], 'status') == 'on'
+                assert tm('show-options', '-v', '-t', attached_sessions[1], 'mouse') == 'on'
+                assert attached_sessions[0] != attached_sessions[1]
+                assert tm('show-options', '-v', '-t', attached_sessions[0], 'status') == 'off'
                 assert tm('show-options', '-v', '-t', 'isolated', 'status') == foreign_status
                 assert tm('show-options', '-v', '-t', 'isolated', 'mouse') == foreign_mouse
                 assert tm('has-session','-t','=isolated') == ''
@@ -367,7 +371,7 @@ def test_native_tmux_color_environment():
             for key in ai_tmux.COLOR_ENVIRONMENT:
                 tm('set-environment', '-g', key, 'stale')
             caller = {k:v for k,v in os.environ.items() if k not in ai_tmux.COLOR_ENVIRONMENT}
-            caller.update(HOME=str(root), TMUX=socket+',1,0', TERM='xterm-256color')
+            caller.update(HOME=str(root), TMUX=socket+',1,0', TMUX_PANE='%0', TERM='xterm-256color')
             for index, preferences in enumerate(({'COLORTERM':'truecolor'}, {'NO_COLOR':'1'}, {'FORCE_COLOR':'1','COLORFGBG':'15;0'})):
                 marker = root / f'color-{index}.json'
                 plan = ai_plan.ExecutionPlan(argv=[str(provider), str(marker)], env={}, cwd=str(root), display='')

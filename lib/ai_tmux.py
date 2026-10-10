@@ -146,18 +146,17 @@ def launch(plan, provider: str) -> int:
     command = "exec " + shlex.join(["env", *unset, *assignments, *plan.argv])
     inside = bool(os.environ.get("TMUX"))
     if inside:
-        socket = _tmux(None, "display-message", "-p", "#{socket_path}")
-        pane = _tmux(socket, "new-window", "-d", "-P", "-F", "#{pane_id}", "-n", "ai-" + provider, "-c", plan.cwd, command)
+        source_pane = os.environ.get("TMUX_PANE")
+        if not source_pane:
+            raise ValueError("missing invoking tmux pane")
+        socket = _tmux(None, "display-message", "-p", "-t", source_pane, "#{socket_path}")
+        session = _tmux(socket, "display-message", "-p", "-t", source_pane, "#{session_id}")
+        pane = _tmux(socket, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", session, "-n", "ai-" + provider, "-c", plan.cwd, command)
     else:
-        try:
-            _tmux(None, "has-session", "-t", "=humtr-ai")
-        except RuntimeError:
-            pane = _tmux(None, "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", "humtr-ai", "-n", "ai-" + provider, "-c", plan.cwd, command)
-            _tmux(None, "set-option", "-t", pane, "@humtr_ai_session", "1")
-        else:
-            if _tmux(None, "show-options", "-v", "-t", "humtr-ai", "@humtr_ai_session") != "1":
-                raise ValueError("humtr-ai session is not managed by AI")
-            pane = _tmux(None, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=humtr-ai", "-n", "ai-" + provider, "-c", plan.cwd, command)
+        # tmux assigns a fresh session name atomically, including concurrent starts.
+        # A shared session would also share its selected window and Android client.
+        pane = _tmux(None, "new-session", "-d", "-P", "-F", "#{pane_id}", "-n", "ai-" + provider, "-c", plan.cwd, command)
+        _tmux(None, "set-option", "-t", pane, "@humtr_ai_session", "1")
         socket = _tmux(None, "display-message", "-p", "-t", pane, "#{socket_path}")
     if _tmux(socket, "display-message", "-p", "-t", pane, "#{@humtr_ai_session}") == "1":
         _tmux(socket, "set-option", "-t", pane, "set-titles", "on")
