@@ -19,7 +19,7 @@ TITLE_ID = re.compile(r"^(?:● )?(?:\[ [!.] \] Action Required \| )?([0-9a-f]{8
 
 
 def _tmux(socket: str | None, *args: str) -> str:
-    command = ["tmux"] + (["-S", socket] if socket else []) + list(args)
+    command = ["tmux", "-u"] + (["-S", socket] if socket else []) + list(args)
     result = subprocess.run(command, capture_output=True, text=True, timeout=1)
     if result.returncode:
         raise RuntimeError("tmux command failed")

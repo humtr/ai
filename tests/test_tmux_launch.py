@@ -528,7 +528,7 @@ def test_title_independent_native_binding():
                     requests.append(args)
                     return subprocess.CompletedProcess(args,0,'','')
                 return real_run(args,**kwargs)
-            with patch.dict(os.environ,{'HOME':str(root)}), patch.object(ai_tmux,'_activity_manager',return_value='/fixture/am'), patch.object(subprocess,'run',side_effect=run):
+            with patch.dict(os.environ,{'HOME':str(root), 'LANG':'', 'LC_ALL':'', 'LC_CTYPE':''}), patch.object(ai_tmux,'_activity_manager',return_value='/fixture/am'), patch.object(subprocess,'run',side_effect=run):
                 ai_tmux.register(socket)
                 with patch.object(ai_tmux,'_local_id',side_effect=AssertionError('binding must not consult title/history')):
                     assert ai_tmux.focus(sid) == 0 and len(requests) == 1
