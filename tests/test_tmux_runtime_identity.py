@@ -34,6 +34,15 @@ def test_direct_and_supervised_native_identity():
     foreign=[*launch];foreign[1]='/untrusted/ai_run.py';process(10,str(Path(sys.executable).resolve()),argv=foreign);assert not ai_tmux._runtime('10',tty)
     foreign=[*launch];foreign[2]=json.dumps({'auth_recovery':True,'argv':['untrusted']});process(10,str(Path(sys.executable).resolve()),argv=foreign);assert not ai_tmux._runtime('10',tty)
     process(10,'/untrusted/python',argv=launch);assert not ai_tmux._runtime('10',tty)
+    process(10,str(Path(sys.executable).resolve()),argv=launch)
+    original=ai_tmux._process_identity
+    for changed_pid in ['10','20']:
+     calls={}
+     def changed(p):
+      value=original(p);calls[p.name]=calls.get(p.name,0)+1
+      cutoff=2 if changed_pid=='10' else 3
+      return (value[0],value[1]+1) if p.name==changed_pid and calls[p.name]>=cutoff else value
+     with patch.object(ai_tmux,'_process_identity',side_effect=changed):assert not ai_tmux._runtime('10',tty)
     assert not ai_tmux._runtime('not-a-pid',tty)
   finally:
    for fd in [a,b,c,d]:os.close(fd)

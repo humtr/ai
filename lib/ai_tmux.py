@@ -227,10 +227,10 @@ def _runtime(pid: str, tty: str) -> bool:
                 if not re.fullmatch(r"/dev/pts/[0-9]+", os.readlink(child / "fd/0")):
                     continue
                 if child_identity == _process_identity(child):
-                    candidates.append(child)
+                    candidates.append((child, child_identity))
             except (OSError, ValueError, IndexError):
                 continue
-        return len(candidates) == 1 and identity == _process_identity(process) and _process_identity(candidates[0])[0] == int(pid)
+        return len(candidates) == 1 and identity == _process_identity(process) and _process_identity(candidates[0][0]) == candidates[0][1]
     except (OSError, ValueError, IndexError, TypeError, AttributeError):
         return False
 
