@@ -123,3 +123,11 @@ transport. Development sources are never substituted for installed provider runt
 
 Android focus validates tmux identity within two seconds, then permits fifteen seconds
 for the single service reply. It never replays a possibly executed service request.
+
+Tmux focus recognizes the direct installed Codex runtime or the installed ai_run.py
+PTY supervisor of a Codex launch. Supervisor recognition binds its exact interpreter,
+script, Codex launch plan, pane TTY, UID and stable process identity to exactly one
+direct installed native Codex child with a PTY. The qualified installed direct-selection
+preview native is also recognized. Foreign interpreters/scripts/runtimes, ambiguous
+children, changed parents and non-PTY native children refuse focus. No session is resumed
+or started by these checks.

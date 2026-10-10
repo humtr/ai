@@ -178,14 +178,60 @@ def _local_id(prefix: str) -> str | None:
     return next(iter(ids)) if len(ids) == 1 else None
 
 
+PROC = Path("/proc")
+
+
+def _process_identity(process: Path) -> tuple[int, int]:
+    fields = (process / "stat").read_text().rpartition(")")[2].split()
+    return int(fields[1]), int(fields[19])  # PPid and kernel start time.
+
+
+def _native_runtime(executable: str) -> bool:
+    root = Path.home() / ".local/lib/codex"
+    return bool(re.fullmatch(re.escape(str(root / "core/generations")) + r"/[^/]+/runtime", executable)) or executable == str(root / "profile-tui-preview/direct-selection-v1/native")
+
+
 def _runtime(pid: str, tty: str) -> bool:
     if not pid.isdecimal():
         return False
     try:
-        process = Path("/proc") / pid
+        import sys
+        process = PROC / pid
+        identity = _process_identity(process)
+        if process.stat().st_uid != os.getuid() or os.stat(process / "fd/0").st_rdev != os.stat(tty).st_rdev:
+            return False
         executable = os.readlink(process / "exe")
-        return bool(re.fullmatch(re.escape(str(Path.home() / ".local/lib/codex/core/generations")) + r"/[^/]+/runtime", executable)) and os.stat(process / "fd/0").st_rdev == os.stat(tty).st_rdev
-    except OSError:
+        if _native_runtime(executable):
+            return identity == _process_identity(process)
+        # The auth-recovery launcher bridges the pane to a child PTY. Its PID
+        # is tmux's pane_pid; the native frontend is its direct child.
+        if executable != str(Path(sys.executable).resolve()):
+            return False
+        argv = (process / "cmdline").read_bytes()
+        if len(argv) > 65536:
+            return False
+        argv = argv.rstrip(b"\0").split(b"\0")
+        if len(argv) != 3 or Path(os.fsdecode(argv[1])).resolve() != Path(__file__).with_name("ai_run.py").resolve():
+            return False
+        plan = json.loads(argv[2])
+        prefix = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
+        if plan.get("auth_recovery") is not True or not isinstance(plan.get("argv"), list) or not plan['argv'] or plan['argv'][0] not in {"codex", str(Path(prefix) / "bin/codex")}:
+            return False
+        candidates = []
+        # Android may expose empty task/children; PPid is the actual parent proof.
+        for child in PROC.glob("[0-9]*"):
+            try:
+                child_identity = _process_identity(child)
+                if child.stat().st_uid != os.getuid() or child_identity[0] != int(pid) or not _native_runtime(os.readlink(child / "exe")):
+                    continue
+                if not re.fullmatch(r"/dev/pts/[0-9]+", os.readlink(child / "fd/0")):
+                    continue
+                if child_identity == _process_identity(child):
+                    candidates.append(child)
+            except (OSError, ValueError, IndexError):
+                continue
+        return len(candidates) == 1 and identity == _process_identity(process) and _process_identity(candidates[0])[0] == int(pid)
+    except (OSError, ValueError, IndexError, TypeError, AttributeError):
         return False
 
 
