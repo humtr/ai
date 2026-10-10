@@ -93,7 +93,7 @@ def test_native_tmux_launch_focus():
             native_run=subprocess.run
             native_which=shutil.which
             def which(name):
-                return '/test/am' if name == 'am' else native_which(name)
+                return '/test/am' if name == 'am' else None if name == 'termux-am' else native_which(name)
             def run(args, **kwargs):
                 if Path(args[0]).name == 'am':
                     requests.append(args)
@@ -224,7 +224,7 @@ def test_native_terminal_reuse_identity():
                     requests.append(args)
                     return subprocess.CompletedProcess(args,0,'','')
                 return native_run(args,**kwargs)
-            with patch.dict(os.environ,HOME=str(root)), patch.object(ai_tmux,'_runtime',return_value=True), patch.object(shutil,'which',side_effect=lambda name: '/test/am' if name=='am' else native_which(name)), patch.object(subprocess,'run',side_effect=run):
+            with patch.dict(os.environ,HOME=str(root)), patch.object(ai_tmux,'_runtime',return_value=True), patch.object(shutil,'which',side_effect=lambda name: None if name=='termux-am' else ('/test/am' if name=='am' else native_which(name))), patch.object(subprocess,'run',side_effect=run):
                 ai_tmux.register(socket)
                 before=tm('list-panes','-a','-F','#{pane_id}:#{pane_pid}')
                 for sid,pane in zip(ids,(first,second,third)):
@@ -257,7 +257,7 @@ def test_focus_service_guards():
         row='%3\t123\t/dev/pts/7\t0\tcodex\t'+sid[:29]+'...'
         def tmux(socket,*args):
             return row if args[0] == 'list-panes' else '$4'
-        def which(name): return '/installed/'+name
+        def which(name): return None if name == 'termux-am' else '/installed/'+name
         with patch.object(ai_tmux,'_registry',return_value=root), patch.object(ai_tmux,'_socket_identity',return_value=(1,2)), patch.object(ai_tmux,'_local_id',return_value=sid), patch.object(ai_tmux,'_runtime',return_value=True), patch.object(ai_tmux,'_tmux',side_effect=tmux), patch.object(ai_tmux.shutil,'which',side_effect=which), patch.object(ai_tmux.subprocess,'run') as service:
             service.return_value=subprocess.CompletedProcess([],0,'','')
             assert ai_tmux.focus(sid) == 0 and service.call_count == 1

@@ -109,3 +109,14 @@ separate and can be reverted and installed again with `--ai-only`.
 
 `bash scripts/install-termux.sh --ai-only` updates only the AI launcher/modules
 atomically per file, without backups or changes to config, profiles, clip or AGY.
+
+
+### Android notification navigation after GitHub Termux restoration
+
+Codex Manager uses the AM socket first for ordinary Activity return. This needs no tmux
+and never creates a Codex conversation or resumes one. The installed Termux APK does not
+expose exact arbitrary bare-terminal selection; return therefore preserves Termux's current
+selection. Opted-in tmux focus retains validated existing pane/session reuse and named-window
+deduplication. AI chooses the socket client before an attach request only when the owned
+socket exists; it does not retry an ambiguous execution-service request through another
+transport. Development sources are never substituted for installed provider runtimes.

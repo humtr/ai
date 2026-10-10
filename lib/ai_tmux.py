@@ -189,6 +189,21 @@ def _runtime(pid: str, tty: str) -> bool:
         return False
 
 
+def _activity_manager() -> str | None:
+    """Choose transport before dispatch; never replay an execution-service request."""
+    prefix = Path(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"))
+    socket = prefix.parent / "apps/com.termux/termux-am/am.sock"
+    try:
+        info = socket.lstat()
+        if stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid():
+            client = shutil.which("termux-am")
+            if client:
+                return client
+    except OSError:
+        pass
+    return shutil.which("am")
+
+
 def focus(session_id: str) -> int:
     """Select one qualified pane and reuse its named native tmux terminal."""
     if not UUID.fullmatch(session_id):
@@ -233,7 +248,7 @@ def focus(session_id: str) -> int:
               + " ; display-message -p -t " + pane + " '#{session_id}'")
         if not re.fullmatch(r"\$[0-9]+", target) or time.monotonic() >= deadline:
             return 1
-        am = shutil.which("am")
+        am = _activity_manager()
         tmux = shutil.which("tmux")
         if not am or not tmux:
             return 1
