@@ -23,7 +23,7 @@ def _tmux(socket: str | None, *args: str) -> str:
     result = subprocess.run(command, capture_output=True, text=True, timeout=1)
     if result.returncode:
         raise RuntimeError("tmux command failed")
-    return result.stdout.strip()
+    return result.stdout.rstrip("\n")
 
 
 def prepare_title(home: Path) -> None:
@@ -193,7 +193,7 @@ def _native_runtime(executable: str) -> bool:
     return bool(re.fullmatch(re.escape(str(root / "core/generations")) + r"/[^/]+/runtime", executable)) or executable == str(root / "profile-tui-preview/direct-selection-v1/native")
 
 
-def _runtime(pid: str, tty: str) -> bool:
+def _runtime(pid: str, tty: str, native_binding: tuple[int, int] | None = None) -> bool:
     if not pid.isdecimal():
         return False
     try:
@@ -204,7 +204,7 @@ def _runtime(pid: str, tty: str) -> bool:
             return False
         executable = os.readlink(process / "exe")
         if _native_runtime(executable):
-            return identity == _process_identity(process)
+            return identity == _process_identity(process) and (native_binding is None or native_binding == (int(pid), identity[1]))
         # The auth-recovery launcher bridges the pane to a child PTY. Its PID
         # is tmux's pane_pid; the native frontend is its direct child.
         if executable != str(Path(sys.executable).resolve()):
@@ -232,9 +232,41 @@ def _runtime(pid: str, tty: str) -> bool:
                     candidates.append((child, child_identity))
             except (OSError, ValueError, IndexError):
                 continue
-        return len(candidates) == 1 and identity == _process_identity(process) and _process_identity(candidates[0][0]) == candidates[0][1]
+        return len(candidates) == 1 and identity == _process_identity(process) and _process_identity(candidates[0][0]) == candidates[0][1] and (native_binding is None or native_binding == (int(candidates[0][0].name), candidates[0][1][1]))
     except (OSError, ValueError, IndexError, TypeError, AttributeError):
         return False
+
+
+def _bound_thread(binding: str, pid: str, tty: str) -> str | None:
+    """Read current foreground identity from a qualified native identity slot."""
+    try:
+        parts = binding.split(":")
+        if len(parts) != 5 or not all(x.isdecimal() for x in parts):
+            return None
+        native_pid, native_start, root_pid, root_start, descriptor = map(int, parts)
+        if str(root_pid) != pid or descriptor > 1048576 or _process_identity(PROC / pid)[1] != root_start:
+            return None
+        if not _runtime(pid, tty, (native_pid, native_start)):
+            return None
+        slot = PROC / str(native_pid) / 'fd' / str(descriptor)
+        name = Path(os.readlink(slot)).name
+        prefix = f'.codex-terminal-thread-v1-{native_pid}-'
+        if not name.startswith(prefix) or not name.endswith(' (deleted)'):
+            return None
+        nonce = name[len(prefix):-len(' (deleted)')]
+        if not nonce or not re.fullmatch(r'[A-Za-z0-9-]+', nonce):
+            return None
+        metadata = slot.stat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_size > 36:
+            return None
+        with slot.open('rb') as stream:
+            content = stream.read(37).decode('ascii')
+        if _process_identity(PROC / str(native_pid))[1] != native_start or _process_identity(PROC / pid)[1] != root_start:
+            return None
+        return content if UUID.fullmatch(content) else None
+    except (OSError, ValueError, IndexError):
+        return None
+
 
 
 def _activity_manager() -> str | None:
@@ -285,31 +317,46 @@ def focus(session_id: str) -> int:
                 socket = data["socket"]
                 if list(_socket_identity(socket)) != data["identity"]:
                     continue
-                rows = _tmux(socket, "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_dead}\t#{@humtr_ai_provider}\t#{pane_title}")
+                rows = _tmux(socket, "list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_dead}\t#{@humtr_ai_provider}\t#{@codex_terminal_binding_v1}\t#{pane_title}")
             except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired):
                 continue
             for row in rows.splitlines():
-                fields = row.split("\t", 5)
-                if len(fields) != 6:
+                fields = row.split("\t", 6)
+                if len(fields) != 7:
                     continue
-                pane, pid, tty, dead, provider, title = fields
-                matches = TITLE_ID.findall(title)
-                if dead != "0" or provider != "codex" or len(matches) != 1 or matches[0] != session_id[:29]:
+                pane, pid, tty, dead, provider, binding, title = fields
+                if dead != "0":
                     continue
-                if _local_id(matches[0]) == session_id and _runtime(pid, tty):
-                    targets.append((socket, pane, pid, data["identity"]))
+                if binding:
+                    # Native lifecycle metadata owns identity. A stale binding
+                    # must never downgrade to title matching.
+                    if _bound_thread(binding, pid, tty) != session_id:
+                        continue
+                else:
+                    matches = TITLE_ID.findall(title)
+                    if provider != "codex" or len(matches) != 1 or matches[0] != session_id[:29]:
+                        continue
+                    if _local_id(matches[0]) != session_id or not _runtime(pid, tty):
+                        continue
+                targets.append((socket, pane, pid, tty, binding, data["identity"]))
         if len(targets) != 1 or time.monotonic() > deadline:
             return 1
-        socket, pane, pid, identity = targets[0]
+        socket, pane, pid, tty, binding, identity = targets[0]
         # Android am string-array arguments cannot represent these socket paths.
         if any(c in socket for c in (",", "\\")) or list(_socket_identity(socket)) != identity:
             return 1
         # Recheck current identity at the actual native UI command boundary.
-        predicate = "#{&&:#{==:#{pane_pid}," + pid + "},#{&&:#{==:#{pane_dead},0},#{&&:#{==:#{@humtr_ai_provider},codex},#{m/r:^(● )?(\\[ [!.] \\] Action Required \\| )?" + session_id[:29] + "\\.\\.\\.([^0-9a-f]|$),#{pane_title}}}}}"
+        if binding:
+            identity_test = "#{==:#{@codex_terminal_binding_v1}," + binding + "}"
+        else:
+            identity_test = "#{&&:#{==:#{@humtr_ai_provider},codex},#{m/r:^(● )?(\\[ [!.] \\] Action Required \\| )?" + session_id[:29] + "\\.\\.\\.([^0-9a-f]|$),#{pane_title}}}"
+        predicate = "#{&&:#{==:#{pane_pid}," + pid + "},#{&&:#{==:#{pane_dead},0}," + identity_test + "}}"
         target = _tmux(socket, "if-shell", "-F", "-t", pane, predicate,
               "select-window -t " + pane + " ; select-pane -t " + pane
               + " ; display-message -p -t " + pane + " '#{session_id}'")
         if not re.fullmatch(r"\$[0-9]+", target) or time.monotonic() >= deadline:
+            return 1
+        if binding and _bound_thread(binding, pid, tty) != session_id:
             return 1
         am = _activity_manager()
         tmux = shutil.which("tmux")

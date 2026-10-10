@@ -82,7 +82,7 @@ def test_native_tmux_launch_focus():
         global_titles = tm('show-options', '-gv', 'set-titles')
         marker=root/'argv.json'
         provider=root/'provider'
-        provider.write_text('#!'+sys.executable+'\nimport json,os,sys,time\njson.dump([sys.argv[1:],os.getcwd(),os.environ.get("CODEX_HOME")],open('+repr(str(marker))+',"w"))\nprint("\\x1b]0;01a0fc82-dc8f-7d13-bb78-7e120... | native\\x07",flush=True)\ntime.sleep(90)\n')
+        provider.write_text('#!'+sys.executable+'\nimport json,os,sys,time\nwith open('+repr(str(marker))+'+".tmp","w") as out: json.dump([sys.argv[1:],os.getcwd(),os.environ.get("CODEX_HOME")],out)\nos.replace('+repr(str(marker))+'+".tmp",'+repr(str(marker))+')\nprint("\\x1b]0;01a0fc82-dc8f-7d13-bb78-7e120... | native\\x07",flush=True)\ntime.sleep(90)\n')
         provider.chmod(0o700)
         sid='01a0fc82-dc8f-7d13-bb78-7e120f1fa9b3'
         sessions=root/'.codex/sessions'
@@ -147,7 +147,7 @@ def test_native_tmux_launch_focus():
                     assert tm('display-message','-p','#{pane_id}') != target
                     collision.unlink()
                     # Native title content is never evaluated as shell/format code.
-                    tm('select-pane','-t',target,'-T',sid[:29]+'... | #(touch '+str(root/'injected')+')')
+                    tm('select-pane','-t',target,'-T','● [ . ] Action Required | '+sid[:29]+'... | #(touch '+str(root/'injected')+')')
                     assert ai_tmux.focus(sid) == 0
                     assert len(requests) == 3
                     assert not (root/'injected').exists()
@@ -293,7 +293,7 @@ def test_focus_service_guards():
             record.write_text(json.dumps({'socket':socket,'identity':[1,2]}))
             record.chmod(0o600)
         data()
-        row='%3\t123\t/dev/pts/7\t0\tcodex\t'+sid[:29]+'...'
+        row='%3\t123\t/dev/pts/7\t0\tcodex\t\t'+sid[:29]+'...'
         def tmux(socket,*args):
             if args[0] == 'list-panes': return row
             if args[0] == 'show-options': return ''
@@ -361,7 +361,7 @@ def test_native_tmux_color_environment():
             return subprocess.check_output(['tmux', '-S', socket, *args], text=True).strip()
         tm('-f', '/dev/null', 'new-session', '-d', '-s', 'isolated', 'sleep 90')
         provider = root / 'color-provider'
-        provider.write_text('#!' + sys.executable + '\nimport json,os,sys,time\nkeys=' + repr((*ai_tmux.COLOR_ENVIRONMENT, 'TERM', 'TERM_PROGRAM')) + '\njson.dump({k:os.environ.get(k) for k in keys},open(sys.argv[1],"w"))\nprint("plain" if os.environ.get("NO_COLOR") else "\\x1b[1;38;2;12;200;90mcolored\\x1b[0m",flush=True)\ntime.sleep(90)\n')
+        provider.write_text('#!' + sys.executable + '\nimport json,os,sys,time\nkeys=' + repr((*ai_tmux.COLOR_ENVIRONMENT, 'TERM', 'TERM_PROGRAM')) + '\nwith open(sys.argv[1]+".tmp","w") as out: json.dump({k:os.environ.get(k) for k in keys},out)\nos.replace(sys.argv[1]+".tmp",sys.argv[1])\nprint("plain" if os.environ.get("NO_COLOR") else "\\x1b[1;38;2;12;200;90mcolored\\x1b[0m",flush=True)\ntime.sleep(90)\n')
         provider.chmod(0o700)
         try:
             for key in ai_tmux.COLOR_ENVIRONMENT:
@@ -481,7 +481,110 @@ def test_bounded_install():
         assert not (root/'.config/ai/backups').exists() and not (root/'bin/agy').exists()
 
 
+def test_title_independent_native_binding():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        native = root / '.local/lib/codex/core/generations/owned/runtime'
+        native.parent.mkdir(parents=True)
+        source = root / 'native.c'
+        source.write_text('#include <unistd.h>\n#include <stdlib.h>\n#include <sys/stat.h>\n#include <stdio.h>\n#include <fcntl.h>\nint main(void) { char path[4096]; snprintf(path,sizeof path,"%s/.codex-terminal-thread-v1-%d-XXXXXX",getenv("TMPDIR"),getpid()); int fd=mkstemp(path); unlink(path); fcntl(fd,F_SETFD,FD_CLOEXEC); fchmod(fd,0600); for (;;) { int input=open("'+str(root/'thread')+'",O_RDONLY); if(input>=0) { char buf[128]; int n=read(input,buf,sizeof buf); close(input); ftruncate(fd,0); if(n>0) pwrite(fd,buf,n,0); unlink("'+str(root/'thread')+'"); } usleep(10000); } }\n')
+        subprocess.run(['cc', str(source), '-o', str(native)], check=True, capture_output=True)
+        socket = str(root / 'socket')
+        def tm(*args):
+            return subprocess.check_output(['tmux','-S',socket,*args],text=True,env=dict(os.environ,TMPDIR=str(root))).strip()
+        pane = tm('-f','/dev/null','new-session','-d','-P','-F','#{pane_id}','-s','native',str(native))
+        sid = '01a0fc82-dc8f-7d13-bb78-7e120f1fa9b3'
+        try:
+            pid = tm('display-message','-p','-t',pane,'#{pane_pid}')
+            start = ai_tmux._process_identity(Path('/proc') / pid)[1]
+            descriptor = None
+            deadline = time.monotonic()+3
+            while descriptor is None and time.monotonic()<deadline:
+                for path in (Path('/proc')/pid/'fd').iterdir():
+                    try:
+                        link = os.readlink(path)
+                        if Path(link).name.startswith(f'.codex-terminal-thread-v1-{pid}-') and link.endswith(' (deleted)'):
+                            descriptor = path.name
+                            break
+                    except OSError:
+                        pass
+                if descriptor is None: time.sleep(.01)
+            assert descriptor is not None, 'native identity slot did not become ready'
+            binding = f'{pid}:{start}:{pid}:{start}:{descriptor}'
+            def set_thread(value):
+                request = root / 'thread'
+                request.write_text(value)
+                deadline = time.monotonic()+2
+                while request.exists() and time.monotonic()<deadline: time.sleep(.01)
+                assert not request.exists()
+            set_thread(sid)
+            tm('set-option','-p','-t',pane,'@codex_terminal_binding_v1',binding)
+            # Full native binding does not need a title ID, provider hint or rollout scan.
+            tm('select-pane','-t',pane,'-T','project | custom title without ID')
+            real_run = subprocess.run
+            requests = []
+            def run(args, **kwargs):
+                if args[0] == '/fixture/am':
+                    requests.append(args)
+                    return subprocess.CompletedProcess(args,0,'','')
+                return real_run(args,**kwargs)
+            with patch.dict(os.environ,{'HOME':str(root)}), patch.object(ai_tmux,'_activity_manager',return_value='/fixture/am'), patch.object(subprocess,'run',side_effect=run):
+                ai_tmux.register(socket)
+                with patch.object(ai_tmux,'_local_id',side_effect=AssertionError('binding must not consult title/history')):
+                    assert ai_tmux.focus(sid) == 0 and len(requests) == 1
+                    tm('select-pane','-t',pane,'-T','different ordering')
+                    assert ai_tmux.focus(sid) == 0 and len(requests) == 2
+                    tm('select-pane','-t',pane,'-T','')
+                    assert ai_tmux.focus(sid) == 0 and len(requests) == 3
+                for invalid in ['invalid', f'{pid}:{start+1}:{pid}:{start}:{descriptor}', f'{pid}:{start}:{pid}:{start+1}:{descriptor}', f'1:{start}:{pid}:{start}:{descriptor}', f'{pid}:{start}:{pid}:{start}:999999']:
+                    tm('set-option','-p','-t',pane,'@codex_terminal_binding_v1',invalid)
+                    # A title that would have matched the old path cannot override invalid metadata.
+                    tm('select-pane','-t',pane,'-T',sid[:29]+'...')
+                    assert ai_tmux.focus(sid) == 1 and len(requests) == 3
+                tm('set-option','-p','-t',pane,'@codex_terminal_binding_v1',binding)
+                for value in ['', 'bad', sid[:-1]+'4']:
+                    set_thread(value)
+                    assert ai_tmux.focus(sid) == 1 and len(requests) == 3
+                set_thread(sid)
+                duplicate = tm('new-window','-d','-P','-F','#{pane_id}',str(native))
+                otherpid = tm('display-message','-p','-t',duplicate,'#{pane_pid}')
+                otherstart = ai_tmux._process_identity(Path('/proc') / otherpid)[1]
+                deadline = time.monotonic()+3
+                other_slot = None
+                while other_slot is None and time.monotonic()<deadline:
+                    for path in (Path('/proc')/otherpid/'fd').iterdir():
+                        try:
+                            link = os.readlink(path)
+                            if Path(link).name.startswith(f'.codex-terminal-thread-v1-{otherpid}-') and link.endswith(' (deleted)'):
+                                other_slot = path
+                                break
+                        except OSError: pass
+                    if other_slot is None: time.sleep(.01)
+                assert other_slot is not None
+                other_slot.write_text(sid)
+                tm('set-option','-p','-t',duplicate,'@codex_terminal_binding_v1',f'{otherpid}:{otherstart}:{otherpid}:{otherstart}:{other_slot.name}')
+                assert ai_tmux.focus(sid) == 1 and len(requests) == 3
+                tm('kill-pane','-t',duplicate)
+                original = ai_tmux._tmux
+                def race(sock,*args):
+                    if args[0] == 'if-shell':
+                        tm('set-option','-p','-t',pane,'@codex_terminal_binding_v1','none')
+                    return original(sock,*args)
+                with patch.object(ai_tmux,'_tmux',side_effect=race):
+                    assert ai_tmux.focus(sid) == 1 and len(requests) == 3
+                tm('set-option','-p','-t',pane,'@codex_terminal_binding_v1',binding)
+                with patch.object(ai_tmux,'_bound_thread',side_effect=[sid,None]):
+                    assert ai_tmux.focus(sid) == 1 and len(requests) == 3
+                def thread_race(sock,*args):
+                    if args[0] == 'if-shell': set_thread(sid[:-1]+'4')
+                    return original(sock,*args)
+                with patch.object(ai_tmux,'_tmux',side_effect=thread_race):
+                    assert ai_tmux.focus(sid) == 1 and len(requests) == 3
+        finally:
+            subprocess.run(['tmux','-S',socket,'kill-server'],capture_output=True)
+
+
 if __name__=='__main__':
-    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_terminal_reuse_identity,test_stable_terminal_name,test_focus_service_guards,test_attach_disappearing_session,test_native_tmux_color_environment,test_native_status_mouse_switch,test_native_title_forwarding,test_bounded_install):
+    for test in (test_title_preservation,test_cli_boundary,test_native_tmux_launch_focus,test_native_terminal_reuse_identity,test_stable_terminal_name,test_focus_service_guards,test_attach_disappearing_session,test_native_tmux_color_environment,test_native_status_mouse_switch,test_native_title_forwarding,test_title_independent_native_binding,test_bounded_install):
         test()
         print('PASS',test.__name__)

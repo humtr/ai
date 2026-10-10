@@ -19,11 +19,17 @@ def test_direct_and_supervised_native_identity():
     return p
    with patch.object(ai_tmux,'PROC',proc),patch.dict(os.environ,{'HOME':str(home)}):
     process(10,native);assert ai_tmux._runtime('10',tty)
+    assert ai_tmux._runtime('10',tty,(10,123))
+    assert not ai_tmux._runtime('10',tty,(10,124))
+    assert not ai_tmux._runtime('10',tty,(20,123))
     process(10,preview);assert ai_tmux._runtime('10',tty)
     process(10,native,stdin=childtty);assert not ai_tmux._runtime('10',tty)
     launch=[sys.executable,str(Path(ai_tmux.__file__).with_name('ai_run.py')),json.dumps({'auth_recovery':True,'argv':['codex','resume','example']})]
     process(10,str(Path(sys.executable).resolve()),argv=launch)
     child=process(20,native,parent=10,stdin=childtty);assert ai_tmux._runtime('10',tty)
+    assert ai_tmux._runtime('10',tty,(20,123))
+    assert not ai_tmux._runtime('10',tty,(20,124))
+    assert not ai_tmux._runtime('10',tty,(10,123))
     process(20,preview,parent=10,stdin=childtty);assert ai_tmux._runtime('10',tty)
     process(30,native,parent=10,stdin=childtty);assert not ai_tmux._runtime('10',tty)
     import shutil;shutil.rmtree(proc/'30')
