@@ -238,7 +238,7 @@ def main(argv:list[str]|None=None) -> int:
     if cmd in {"-h","--help","help"}: usage(); return 0
     if cmd=="__tmux_focus":
         import ai_tmux, signal
-        signal.alarm(3)
+        signal.alarm(20)
         return ai_tmux.focus(argv[0]) if len(argv) == 1 else 2
     if cmd=="__json": return json_cmd(argv)
     if ai_spec.is_provider(cmd): print(f"ERROR: provider-first syntax is not supported: ai {cmd}\nUse: ai run {cmd} ...", file=sys.stderr); return 2

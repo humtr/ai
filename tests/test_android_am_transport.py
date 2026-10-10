@@ -29,3 +29,16 @@ def test_socket_preselection_and_unavailable_compatibility_without_dispatch():
 if __name__=='__main__':
     test_socket_preselection_and_unavailable_compatibility_without_dispatch()
     print('android_am_transport: 1 passed')
+
+
+def test_cli_watchdog_allows_android_response_budget():
+    import signal, ai_cli
+    sid='01a0fe94-2d11-79f3-8f5b-9c1958465dc2'
+    with patch.object(signal,'alarm') as alarm, patch.object(ai_tmux,'focus',return_value=0) as focus:
+        assert ai_cli.main(['__tmux_focus',sid])==0
+        alarm.assert_called_once_with(20)
+        focus.assert_called_once_with(sid)
+
+if __name__ == "__main__":
+    test_cli_watchdog_allows_android_response_budget()
+    print("android_focus_watchdog: 1 passed")
