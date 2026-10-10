@@ -130,7 +130,6 @@ def _native_identity(plan) -> bool:
         return False
 
 
-
 def launch(plan, provider: str) -> int:
     if not shutil.which("tmux"):
         raise SystemExit("ERROR: tmux is not installed")
@@ -407,4 +406,3 @@ def _attach_terminal(socket: str, target: str, terminal: str) -> int:
         return 0 if result.returncode == 0 else 1
     except (OSError, subprocess.TimeoutExpired):
         return 1
-
