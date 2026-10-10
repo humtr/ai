@@ -96,6 +96,7 @@ def test_native_tmux_launch_focus():
                 return '/test/am' if name == 'am' else None if name == 'termux-am' else native_which(name)
             def run(args, **kwargs):
                 if Path(args[0]).name == 'am':
+                    assert kwargs['timeout'] == 15, 'Android response budget must be independent of identity search'
                     requests.append(args)
                     return subprocess.CompletedProcess(args, 0, '', '')
                 return native_run(args, **kwargs)

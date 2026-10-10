@@ -263,7 +263,7 @@ def focus(session_id: str) -> int:
             "--es", "com.termux.RUN_COMMAND_SHELL_NAME", terminal,
             "--es", "com.termux.RUN_COMMAND_SHELL_CREATE_MODE", "no-shell-with-name",
             "--es", "com.termux.RUN_COMMAND_SESSION_ACTION", "0",
-        ], capture_output=True, text=True, timeout=max(.001, deadline - time.monotonic()))
+        ], capture_output=True, text=True, timeout=15)
         return 0 if result.returncode == 0 else 1
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired):
         return 1

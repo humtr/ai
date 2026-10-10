@@ -120,3 +120,6 @@ selection. Opted-in tmux focus retains validated existing pane/session reuse and
 deduplication. AI chooses the socket client before an attach request only when the owned
 socket exists; it does not retry an ambiguous execution-service request through another
 transport. Development sources are never substituted for installed provider runtimes.
+
+Android focus validates tmux identity within two seconds, then permits fifteen seconds
+for the single service reply. It never replays a possibly executed service request.
