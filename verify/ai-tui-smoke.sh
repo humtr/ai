@@ -104,6 +104,18 @@ printf 'stub ai %s\n' "$*"
 STUB
 chmod +x "$BIN_FIXTURE/ai"
 
+cat > "$BIN_FIXTURE/codex" <<'STUB'
+#!/data/data/com.termux/files/usr/bin/bash
+if [ "$*" = "termux profile list" ]; then
+  printf '%s\n' default team-alpha very-long-profile-name-for-horizontal-viewport
+else
+  printf 'unexpected codex fixture command: %s\n' "$*" >&2
+  exit 1
+fi
+STUB
+chmod +x "$BIN_FIXTURE/codex"
+export PATH="$BIN_FIXTURE:$PATH"
+
 cat > "$HOME_FIXTURE/.ai/workdirs.json" <<JSON
 {
   "version": 1,
@@ -292,7 +304,7 @@ plan = ai_plan.build_execution_plan(
 print("{}|{}".format(" ".join(plan.argv), plan.env.get("CODEX_HOME", "")))
 PY
 )"
-[ "$PLAN_DEFAULT_PROFILE_OUT" = "codex resume s-team-alpha|" ] && ok "plan keeps requested default profile when resolving non-default session" || { fail "plan keeps requested default profile when resolving non-default session"; printf 'actual: %s\n' "$PLAN_DEFAULT_PROFILE_OUT" >&2; }
+[ "$PLAN_DEFAULT_PROFILE_OUT" = "codex termux profile use default -- resume s-team-alpha|" ] && ok "plan keeps requested default profile when resolving non-default session" || { fail "plan keeps requested default profile when resolving non-default session"; printf 'actual: %s\n' "$PLAN_DEFAULT_PROFILE_OUT" >&2; }
 
 INTENT_JSON="$TMP_BASE/wkd-intent.json"
 if HOME="$HOME_FIXTURE" AI_HOME="$HOME_FIXTURE/.ai" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 "$WKD_INTENT" --self-test "$INTENT_JSON"; then
@@ -498,7 +510,12 @@ ESC_SESSIONS_OUT="$(
 RIGHT_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("session"); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.profiles=["default"]; app.session_index=0; app.session_scroll=0; app.handle_main_key(curses.KEY_RIGHT); print("{} {} {}".format(app.section, app.indices["session"], app.current_session_scope()))'
 )"
-[ "$RIGHT_OUT" = "3 1 provider" ] && ok "right arrow changes current row value" || { fail "right arrow changes current row value"; printf 'actual: %s\n' "$RIGHT_OUT" >&2; }
+[ "$RIGHT_OUT" = "3 1 cwd" ] && ok "right arrow changes current row value" || { fail "right arrow changes current row value"; printf 'actual: %s\n' "$RIGHT_OUT" >&2; }
+
+SESSIONS_RIGHT_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("sessions"); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.profiles=["default"]; app.session_index=1; app.session_scroll=0; app.current_sessions=lambda:[{"_kind":"new"},{"session_id":"s1"}]; app.handle_main_key(curses.KEY_RIGHT); print("{} {} {}".format(app.section, app.indices["session"], app.current_session_scope()))'
+)"
+[ "$SESSIONS_RIGHT_OUT" = "4 1 cwd" ] && ok "right arrow in sessions cycles scope and stays in sessions" || { fail "right arrow in sessions cycles scope and stays in sessions"; printf 'actual: %s\n' "$SESSIONS_RIGHT_OUT" >&2; }
 
 INTERRUPT_OUT="$TMP_BASE/interrupt.out"
 INTERRUPT_CODE_OUT="$(
@@ -808,11 +825,11 @@ RESUME_PANEL_OUT="$(
 [ "$RESUME_PANEL_OUT" = "4 0" ] && ok "session choice scope opens sessions panel" || { fail "session choice scope opens sessions panel"; printf 'actual: %s\n' "$RESUME_PANEL_OUT" >&2; }
 
 NEW_ENTER_OUT="$(
-  HOME="$HOME_FIXTURE" AI_BIN="$BIN_FIXTURE/ai" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("session"); app.indices={"mode":0,"provider":0,"profile":0,"session":0,"workdir":0}; app.profiles=["default"]; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.session_index=-1; app.session_scroll=0; app.current_sessions=lambda:[{"session_id":"smoke-session-two"}]; app.handle_main_key(10); print(" ".join(getattr(app, "pending_cmd", []) or []))'
+  HOME="$HOME_FIXTURE" AI_BIN="$BIN_FIXTURE/ai" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("sessions"); app.indices={"mode":0,"provider":0,"profile":0,"session":0,"workdir":0}; app.profiles=["default"]; app.custom_workdir="'"$HOME_FIXTURE"'/work/main"; app.session_index=0; app.session_scroll=0; app.current_sessions=lambda:[{"_kind":"new"},{"session_id":"smoke-session-two"}]; app.handle_main_key(10); print(" ".join(getattr(app, "pending_cmd", []) or []))'
 )"
 case "$NEW_ENTER_OUT" in
-  "$BIN_FIXTURE/ai run codex"*) ok "enter on new mode starts new session" ;;
-  *) fail "enter on new mode starts new session"; printf 'actual: %s\n' "$NEW_ENTER_OUT" >&2 ;;
+  "$BIN_FIXTURE/ai run codex"*) ok "enter on new item starts new session" ;;
+  *) fail "enter on new item starts new session"; printf 'actual: %s\n' "$NEW_ENTER_OUT" >&2 ;;
 esac
 
 RESUME_SELECTED_OUT="$(
@@ -883,28 +900,28 @@ CODEX_SANDBOX_CHOICES_OUT="$(
 SESSION_SCOPE_LABELS_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.list_meta={}; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append(text); app.draw_choice_row(0,80,"session","Scope",ai_tui.SESSION_SCOPE_LABELS,0); print(" ".join([text for text in calls if text in set(ai_tui.SESSION_SCOPE_LABELS)]))'
 )"
-[ "$SESSION_SCOPE_LABELS_OUT" = "New Provider Profile All" ] && ok "session choices list new provider profile all" || { fail "session choices list new provider profile all"; printf 'actual: %s\n' "$SESSION_SCOPE_LABELS_OUT" >&2; }
+[ "$SESSION_SCOPE_LABELS_OUT" = "Provider Cwd All" ] && ok "session choices list provider cwd all" || { fail "session choices list provider cwd all"; printf 'actual: %s\n' "$SESSION_SCOPE_LABELS_OUT" >&2; }
 
 SESSION_SCOPE_FILTERS_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, ai_session; app=ai_tui.App.__new__(ai_tui.App); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.current_provider=lambda:"codex"; app.current_profile_label=lambda:"default"; app.effective_workdir_path=lambda:"/work"; out=[]; ai_session.recent_sessions=lambda provider=None, profile=None, workdir=None, limit=20, ranking="strict": out.append((provider, profile, workdir, limit)) or []; app.current_session_scope=lambda:"profile"; app.current_sessions(); app.invalidate_session_cache(); app.current_session_scope=lambda:"provider"; app.current_sessions(); app.invalidate_session_cache(); app.current_session_scope=lambda:"all"; app.current_sessions(); print(" | ".join("provider={};profile={};workdir={};limit={}".format(v[0] or "-", v[1] or "-", v[2] or "-", v[3]) for v in out))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, ai_session; app=ai_tui.App.__new__(ai_tui.App); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.current_provider=lambda:"codex"; app.current_profile_label=lambda:"default"; app.effective_workdir_path=lambda:"/work"; out=[]; ai_session.recent_sessions=lambda provider=None, profile=None, workdir=None, limit=20, ranking="strict": out.append((provider, profile, workdir, limit)) or []; app.current_session_scope=lambda:"provider"; app.current_sessions(); app.invalidate_session_cache(); app.current_session_scope=lambda:"cwd"; app.current_sessions(); app.invalidate_session_cache(); app.current_session_scope=lambda:"all"; app.current_sessions(); print(" | ".join("provider={};profile={};workdir={};limit={}".format(v[0] or "-", v[1] or "-", v[2] or "-", v[3]) for v in out))'
 )"
-EXPECTED_SESSION_SCOPE_FILTERS_OUT="provider=codex;profile=default;workdir=/work;limit=60 | provider=codex;profile=-;workdir=/work;limit=60 | provider=-;profile=-;workdir=-;limit=60"
-[ "$SESSION_SCOPE_FILTERS_OUT" = "$EXPECTED_SESSION_SCOPE_FILTERS_OUT" ] && ok "session scope filters match profile provider all" || { fail "session scope filters match profile provider all"; printf 'actual: %s\n' "$SESSION_SCOPE_FILTERS_OUT" >&2; printf 'expected: %s\n' "$EXPECTED_SESSION_SCOPE_FILTERS_OUT" >&2; }
+EXPECTED_SESSION_SCOPE_FILTERS_OUT="provider=codex;profile=-;workdir=/work;limit=60 | provider=-;profile=-;workdir=/work;limit=60 | provider=-;profile=-;workdir=-;limit=60"
+[ "$SESSION_SCOPE_FILTERS_OUT" = "$EXPECTED_SESSION_SCOPE_FILTERS_OUT" ] && ok "session scope filters match provider cwd all" || { fail "session scope filters match provider cwd all"; printf 'actual: %s\n' "$SESSION_SCOPE_FILTERS_OUT" >&2; printf 'expected: %s\n' "$EXPECTED_SESSION_SCOPE_FILTERS_OUT" >&2; }
 
 SESSION_SCOPE_CONTENT_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, ai_session; app=ai_tui.App.__new__(ai_tui.App); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.current_provider=lambda:"codex"; app.current_profile_label=lambda:"default"; app.effective_workdir_path=lambda:"/work"; data=[{"session_id":"a","provider":"codex","profile":"default"},{"session_id":"b","provider":"codex","profile":"team"},{"session_id":"c","provider":"hermes","profile":"default"}]; ai_session.recent_sessions=lambda provider=None, profile=None, workdir=None, limit=20, ranking="strict": [item for item in data if (provider is None or item["provider"] == provider) and (profile is None or item["profile"] == profile)]; app.current_session_scope=lambda:"profile"; p=[s["session_id"] for s in app.current_sessions()[1:]]; app.invalidate_session_cache(); app.current_session_scope=lambda:"provider"; r=[s["session_id"] for s in app.current_sessions()[1:]]; app.invalidate_session_cache(); app.current_session_scope=lambda:"all"; a=[s["session_id"] for s in app.current_sessions()[1:]]; print("{}|{}|{}".format(",".join(p), ",".join(r), ",".join(a)))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui, ai_session; app=ai_tui.App.__new__(ai_tui.App); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app.current_provider=lambda:"codex"; app.current_profile_label=lambda:"default"; app.effective_workdir_path=lambda:"/work"; data=[{"session_id":"a","provider":"codex","profile":"default","workdir":"/work"},{"session_id":"b","provider":"codex","profile":"team","workdir":"/work"},{"session_id":"c","provider":"hermes","profile":"default","workdir":"/work"},{"session_id":"d","provider":"codex","profile":"default","workdir":"/other"}]; ai_session.recent_sessions=lambda provider=None, profile=None, workdir=None, limit=20, ranking="strict": [item for item in data if (provider is None or item["provider"] == provider) and (workdir is None or item["workdir"] == workdir)]; app.current_session_scope=lambda:"provider"; r=[s["session_id"] for s in app.current_sessions()[1:]]; app.invalidate_session_cache(); app.current_session_scope=lambda:"cwd"; c=[s["session_id"] for s in app.current_sessions()[1:]]; app.invalidate_session_cache(); app.current_session_scope=lambda:"all"; a=[s["session_id"] for s in app.current_sessions()[1:]]; print("{}|{}|{}".format(",".join(r), ",".join(c), ",".join(a)))'
 )"
-[ "$SESSION_SCOPE_CONTENT_OUT" = "a|a,b|a,b,c" ] && ok "session scope content matches profile provider all" || { fail "session scope content matches profile provider all"; printf 'actual: %s\n' "$SESSION_SCOPE_CONTENT_OUT" >&2; }
+[ "$SESSION_SCOPE_CONTENT_OUT" = "a,b|a,b,c|a,b,c,d" ] && ok "session scope content matches provider cwd all" || { fail "session scope content matches provider cwd all"; printf 'actual: %s\n' "$SESSION_SCOPE_CONTENT_OUT" >&2; }
 
 SESSION_SCOPE_TITLES_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.current_session_scope=lambda:"profile"; p=app.current_session_scope(); app.current_session_scope=lambda:"provider"; r=app.current_session_scope(); app.current_session_scope=lambda:"all"; a=app.current_session_scope(); print("{}|{}|{}".format(p, r, a))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.current_session_scope=lambda:"provider"; r=app.current_session_scope(); app.current_session_scope=lambda:"cwd"; c=app.current_session_scope(); app.current_session_scope=lambda:"all"; a=app.current_session_scope(); print("{}|{}|{}".format(r, c, a))'
 )"
-[ "$SESSION_SCOPE_TITLES_OUT" = "profile|provider|all" ] && ok "session scope values match profile provider all" || { fail "session scope values match profile provider all"; printf 'actual: %s\n' "$SESSION_SCOPE_TITLES_OUT" >&2; }
+[ "$SESSION_SCOPE_TITLES_OUT" = "provider|cwd|all" ] && ok "session scope values match provider cwd all" || { fail "session scope values match provider cwd all"; printf 'actual: %s\n' "$SESSION_SCOPE_TITLES_OUT" >&2; }
 
 SESSION_SCOPE_COLUMNS_OUT="$(
-  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.current_session_scope=lambda:"profile"; p=app.session_scope_columns(); app.current_session_scope=lambda:"provider"; r=app.session_scope_columns(); app.current_session_scope=lambda:"all"; a=app.session_scope_columns(); print("{}|{}|{}".format(p, r, a))'
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.current_session_scope=lambda:"provider"; r=app.session_scope_columns(); app.current_session_scope=lambda:"cwd"; c=app.session_scope_columns(); app.current_session_scope=lambda:"all"; a=app.session_scope_columns(); print("{}|{}|{}".format(r, c, a))'
 )"
-[ "$SESSION_SCOPE_COLUMNS_OUT" = "Time | Turns | Latest Prompt|Time | Turns | Profile | Latest Prompt|Time | Turns | Provider | Profile | Workdir | Latest Prompt" ] && ok "session scope columns differ by scope" || { fail "session scope columns differ by scope"; printf 'actual: %s\n' "$SESSION_SCOPE_COLUMNS_OUT" >&2; }
+[ "$SESSION_SCOPE_COLUMNS_OUT" = "Time | Turns | Profile | Latest Prompt|Time | Turns | Provider | Profile | Latest Prompt|Time | Turns | Provider | Profile | Workdir | Latest Prompt" ] && ok "session scope columns differ by scope" || { fail "session scope columns differ by scope"; printf 'actual: %s\n' "$SESSION_SCOPE_COLUMNS_OUT" >&2; }
 
 SESSION_WINDOW_TITLE_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.view="main"; app.section=ai_tui.SECTIONS.index("sessions"); app.indices={"provider":0,"profile":0,"session":0,"workdir":0}; app._terminal_title=None; app.command_line=lambda:"ai run codex"; app.selected_session_command_line=lambda:"ai run codex -s abc123"; out=[]; ai_tui.set_terminal_title=lambda title: out.append(title); app.sync_terminal_title(); print(out[0])'
@@ -939,7 +956,7 @@ def starts(segments):
 
 
 results = []
-for scope in ("profile", "provider", "all"):
+for scope in ("provider", "cwd", "all"):
     specs = app.session_column_specs(scope, [sample], 100)
     headers = starts(app.session_header_segments(scope, [sample], 100))
     rows = starts(app.session_row_segments(sample, 100, False, False, scope, specs))
@@ -964,7 +981,7 @@ sample = {
     "title": "short title",
 }
 out = []
-for scope in ("profile", "provider", "all"):
+for scope in ("provider", "cwd", "all"):
     specs = app.session_column_specs(scope, [sample], 100)
     out.append(",".join(f"{key}:{width}" for key, _label, width in specs))
 print(" | ".join(out))
@@ -1017,7 +1034,7 @@ SESSION_ATTR_OUT="$(
 SESSION_SELECTED_SPACING_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import curses, ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=ai_tui.SECTIONS.index("sessions"); app.session_index=0; app.session_scroll=0; app.list_meta={}; calls=[]; app.current_provider=lambda:"codex"; app.current_session_scope=lambda:"profile"; app.current_sessions=lambda:[{"session_id":"s","updated":"2026-05-05T00:00:00Z","title":"session","last_prompt_summary":"prompt","last_response_summary":"answer"}]; app.add_line=lambda y,x,text,width,attr=0: calls.append((y,text,attr)); app.add_segments=lambda y,x,segments,width: calls.append((y,"".join(text for text,attr in segments),0)); app.draw_sessions(0,100,12); selected=[(y,attr) for y,text,attr in calls if text.strip().endswith("SESSION DETAILS")][0]; has_id=any(text.startswith("ID:") for y,text,attr in calls); has_prompt=any(text.startswith("Prompt:") for y,text,attr in calls); has_answer=any(text.startswith("Answer:") for y,text,attr in calls); print(selected[0], bool(selected[1] & curses.A_BOLD), has_id, has_prompt, has_answer)'
 )"
-[ "$SESSION_SELECTED_SPACING_OUT" = "8 True True True True" ] && ok "session list exposes selected metadata and summaries" || { fail "session list exposes selected metadata and summaries"; printf 'actual: %s\n' "$SESSION_SELECTED_SPACING_OUT" >&2; }
+[ "$SESSION_SELECTED_SPACING_OUT" = "7 True True True True" ] && ok "session list exposes selected metadata and summaries" || { fail "session list exposes selected metadata and summaries"; printf 'actual: %s\n' "$SESSION_SELECTED_SPACING_OUT" >&2; }
 
 CHOICE_SPACING_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 -c 'import ai_tui; app=ai_tui.App.__new__(ai_tui.App); app.section=0; calls=[]; app.add_line=lambda *args, **kwargs: None; app.add_text=lambda y,x,text,width,attr=0: calls.append((x,text,width)); app.draw_choice_row(0,100,"provider","Provider",["Codex","Gemini","Hermes"],0); xs={text:x for x,text,width in calls if text in {"Codex","Gemini","Hermes"}}; print(xs["Gemini"] - xs["Codex"], xs["Hermes"] - xs["Gemini"])'
@@ -1298,19 +1315,24 @@ app.indices = {"provider": 0, "profile": 0, "session": 0, "workdir": 0}
 app.providers = ["codex"]
 app.profiles = ["default"]
 app.custom_workdir = "'"$HOME_FIXTURE"'/work/main"
-app.section = ai_tui.SECTIONS.index("session")
+app.section = ai_tui.SECTIONS.index("sessions")
 app.list_meta = {}
+app.current_sessions = lambda: [app.new_session_row(), {"_kind": "session", "session_id": "real-1"}]
+app.session_index = 0
+app.session_scroll = 0
+app.session_rows = lambda: [app.new_session_row(), {"_kind": "session", "session_id": "real-1"}]
 lines = []
 app.add_line = lambda y, x, text, width, attr=0: lines.append(text)
 app.command_line = lambda: "ai run codex"
 app.effective_workdir_path = lambda: "'"$HOME_FIXTURE"'/work/main"
 app.draw_sessions(0, 80, 20)
-has_new_session = any("NEW SESSION" in line for line in lines)
-has_session_table = any("SESSION" in line and "NEW SESSION" not in line for line in lines)
-has_turns_header = any("TURNS" in line for line in lines)
-print(has_new_session, has_session_table, has_turns_header)'
+has_scope = any("Scope" in line for line in lines)
+has_session_table = any("SESSION" in line for line in lines)
+has_details = any("SESSION DETAILS" in line for line in lines)
+has_new_summary = any("Start new session with current command settings" in line for line in lines)
+print(has_scope, has_session_table, has_details, has_new_summary)'
 )"
-[ "$NEW_SCOPE_RENDER_OUT" = "True False False" ] && ok "new scope renders new session card and omits session list" || { fail "new scope renders new session card and omits session list"; printf 'actual: %s\n' "$NEW_SCOPE_RENDER_OUT" >&2; }
+[ "$NEW_SCOPE_RENDER_OUT" = "True True True True" ] && ok "scope renders at top and new session item shows command details" || { fail "scope renders at top and new session item shows command details"; printf 'actual: %s\n' "$NEW_SCOPE_RENDER_OUT" >&2; }
 
 NEW_SCOPE_JSON_OUT="$(
   HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 "$ROOT/lib/ai_cli.py" __json sessions codex default new
@@ -1480,6 +1502,106 @@ print("ok")'
 )"
 [ "$TMUX_OPTION_OUT" = "ok" ] && ok "tmux three-way choice routes launch and resume without native overrides" || fail "tmux three-way choice routes launch and resume without native overrides"
 
+PROFILE_RENAME_KEY_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 - <<'PY'
+import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.section = ai_tui.SECTIONS.index("profile")
+app.pending_action = None
+calls = []
+app.rename_profile = lambda: calls.append("rename")
+app.refresh_sessions = lambda **kwargs: calls.append("refresh")
+app.handle_main_key(18)
+app.section = ai_tui.SECTIONS.index("sessions")
+app.handle_main_key(18)
+print(",".join(calls))
+PY
+)"
+[ "$PROFILE_RENAME_KEY_OUT" = "rename,refresh" ] && ok "ctrl-r renames profiles and refreshes sessions by focus" || fail "ctrl-r renames profiles and refreshes sessions by focus"
+
+MANAGER_FALLBACK_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 - <<'PY'
+from unittest.mock import patch
+import ai_codex_manager, ai_provider, ai_plan, ai_tui
+ai_codex_manager.create_profile("fallback-account")
+with patch.object(ai_provider, "codex_manager_profiles", side_effect=ValueError("manager unavailable")):
+    app = ai_tui.App.__new__(ai_tui.App)
+    app.providers = ["codex"]
+    app.indices = {"provider": 0, "profile": 1}
+    app.profiles = app.discover_profiles("codex")
+    assert app.profiles == ["default", "fallback-account"]
+    assert app.validate_builder_profile()
+    plan = ai_plan.build_execution_plan(ai_plan.LaunchSpec(command="run", provider="codex", profile="fallback-account"))
+    assert plan.argv == ["codex"]
+    assert plan.env["CODEX_HOME"] == str(ai_provider.profile_path("codex", "fallback-account"))
+    assert "CODEX_SQLITE_HOME" in plan.env_unset
+print("ok")
+PY
+)"
+[ "$MANAGER_FALLBACK_OUT" = "ok" ] && ok "manager fallback keeps TUI account selection and canonical profile home" || fail "manager fallback keeps TUI account selection and canonical profile home"
+
+PROFILE_DELETE_RELOAD_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 - <<'PY'
+from unittest.mock import patch
+import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.providers = ["codex"]
+app.profiles = ["default", "fixture"]
+app.indices = {"provider": 0, "profile": 1}
+app.profile_memory = {"codex": "fixture"}
+app.sync_profiles_for_current_provider = lambda *args: None
+app.confirm_delete = lambda *args: True
+calls = []
+app.reload = lambda: setattr(app, "profiles", ["default"])
+with patch.object(ai_tui.ai_provider, "delete_profile", side_effect=lambda *args: calls.append(args)):
+    app.delete_profile()
+assert calls == [("codex", "fixture")]
+assert app.profiles == ["default"] and app.current_profile_label() == "default"
+assert app.message == "deleted profile: codex/fixture"
+print("ok")
+PY
+)"
+[ "$PROFILE_DELETE_RELOAD_OUT" = "ok" ] && ok "codex delete delegates lifecycle and reloads selection" || fail "codex delete delegates lifecycle and reloads selection"
+
+PROFILE_DRAW_CACHE_OUT="$(
+  HOME="$HOME_FIXTURE" PYTHONPATH="$ROOT/lib:$ROOT/code/ai-lib" python3 - <<'PY'
+from unittest.mock import patch
+import ai_tui
+app = ai_tui.App.__new__(ai_tui.App)
+app.providers = ["codex", "agy"]
+app.indices = {"provider": 0, "profile": 1}
+app.profile_memory = {"codex": "fixture"}
+app.active_section = lambda: "profile"
+app.add_line = lambda *args: None
+app.section_label_attr = lambda *args: 0
+app.panel_title = lambda *args: "builder"
+app.draw_workdir_row = lambda *args: None
+app.draw_choice_row = lambda *args: None
+app.draw_options_row = lambda y, width: y + 1
+with patch.object(ai_tui.ai_provider, "list_profiles", return_value=["default", "fixture"]) as query:
+    app.profiles = app.discover_profiles("codex")
+    for _ in range(20):
+        app.draw_controls(4, 100, 3)
+        app.provider_profiles("codex")
+        app.sync_profiles_for_current_provider("fixture")
+    assert query.call_count == 1, query.call_count
+    assert app.current_profile_label() == "fixture"
+    # Returning to a provider reuses its list; explicit refresh observes changes.
+    app.indices["provider"] = 1
+    app.sync_profiles_for_current_provider()
+    app.indices["provider"] = 0
+    app.sync_profiles_for_current_provider()
+    assert query.call_count == 2
+    query.return_value = ["default", "new-profile"]
+    with patch.object(ai_tui.ai_session, "refresh_session_index", return_value={"sessions": []}):
+        app.refresh_sessions()
+    assert query.call_count == 3
+    assert app.profiles == ["default", "new-profile"]
+    assert app.current_profile_label() == "default"
+print("ok")
+PY
+)"
+[ "$PROFILE_DRAW_CACHE_OUT" = "ok" ] && ok "redraw and navigation reuse profiles; explicit refresh updates them" || fail "redraw and navigation reuse profiles; explicit refresh updates them"
+
 printf '\nPASS=%s FAIL=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
-

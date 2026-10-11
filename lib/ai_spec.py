@@ -4,7 +4,7 @@ import json, os
 from pathlib import Path
 from typing import Any
 COMMAND_TYPES={"launch","inline_prompt","native_passthrough"}
-PROFILE_STRATEGIES={"none","env_home","temp_home_symlink","native_arg","profile_use"}
+PROFILE_STRATEGIES={"codex_manager","none","env_home","temp_home_symlink","native_arg","profile_use"}
 SESSION_STRATEGIES={"none","codex_resume","hermes_resume","agy_resume","opencode_resume"}
 
 def lib_dir() -> Path: return Path(__file__).resolve().parent
@@ -28,7 +28,7 @@ def _load_first(env: str, names: list[str], default: dict[str, Any]) -> dict[str
         if data is not None: return data
     return default
 DEFAULT_COMMANDS={"commands":{"run":{"type":"launch","tui_visible":True},"ask":{"type":"inline_prompt","tui_visible":False},"chat":{"type":"inline_prompt","tui_visible":False},"raw":{"type":"native_passthrough","tui_visible":False}}}
-DEFAULT_PROVIDERS={"providers":{"codex":{"label":"Codex","binary":"codex","profile":{"supported":True,"base_dir":"~/.codex-profiles","strategy":"env_home","env_var":"CODEX_HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"codex_resume","supports_all":True}},"agy":{"label":"Agy","binary":"agy","profile":{"supported":True,"base_dir":"~/.agy-profiles","strategy":"env_home","env_var":"HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"agy_resume","supports_all":False}},"hermes":{"label":"Hermes","binary":"hermes","profile":{"supported":True,"base_dir":"~/.hermes/profiles","strategy":"native_arg","arg":"--profile"},"session":{"supported":True,"strategy":"hermes_resume","supports_all":False}},"opencode":{"label":"OpenCode","binary":"opencode","profile":{"supported":True,"base_dir":"~/.opencode-profiles","strategy":"env_home","env_var":"HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"opencode_resume","supports_all":False}}}}
+DEFAULT_PROVIDERS={"providers":{"codex":{"label":"Codex","binary":"codex","profile":{"supported":True,"base_dir":"~/.local/share/codex/manager/profiles","strategy":"codex_manager","default_uses_native_home":True},"session":{"supported":True,"strategy":"codex_resume","supports_all":True}},"agy":{"label":"Agy","binary":"agy","profile":{"supported":True,"base_dir":"~/.agy-profiles","strategy":"env_home","env_var":"HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"agy_resume","supports_all":False}},"hermes":{"label":"Hermes","binary":"hermes","profile":{"supported":True,"base_dir":"~/.hermes/profiles","strategy":"native_arg","arg":"--profile"},"session":{"supported":True,"strategy":"hermes_resume","supports_all":False}},"opencode":{"label":"OpenCode","binary":"opencode","profile":{"supported":True,"base_dir":"~/.opencode-profiles","strategy":"env_home","env_var":"HOME","default_uses_native_home":True},"session":{"supported":True,"strategy":"opencode_resume","supports_all":False}}}}
 
 def load_command_specs() -> dict[str, Any]:
     data=_load_first("AI_COMMANDS_FILE", ["ai.commands.json"], DEFAULT_COMMANDS)
@@ -57,7 +57,15 @@ def command_spec(name: str) -> dict[str, Any]:
 def provider_spec(name: str) -> dict[str, Any]:
     p=load_provider_specs()
     if name not in p: raise KeyError(name)
-    s=dict(p[name]); s["name"]=name; s["label"]=s.get("label") or name.title(); return s
+    s=dict(p[name]); s["name"]=name; s["label"]=s.get("label") or name.title()
+    if name == "codex":
+        # Older installed AI config still described the legacy home strategy.
+        # Manager topology is part of the wrapper contract, independent of options.
+        profile = dict(s.get("profile") or {})
+        profile.update(supported=True, base_dir="~/.local/share/codex/manager/profiles", strategy="codex_manager")
+        profile.pop("env_var", None)
+        s["profile"] = profile
+    return s
 
 def command_names(tui_visible: bool | None=None) -> list[str]:
     out=[]

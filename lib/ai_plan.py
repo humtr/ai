@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import os, shlex
+import subprocess
+import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -27,10 +29,16 @@ class ExecutionPlan:
     session: dict[str,Any]|None=None
     tmux_provider: str | None = None
     tmux_status: bool = False
+    auth_recovery: bool = False
+    env_unset: list[str] = field(default_factory=list)
     def as_dict(self): return asdict(self)
 
-def _display(argv:list[str], cwd:str, env:dict[str,str]) -> str:
+def _display(argv:list[str], cwd:str, env:dict[str,str], env_unset:list[str]|None=None) -> str:
     env_part=" ".join(f"{k}={shlex.quote(v)}" for k,v in sorted(env.items()))
+    if env_unset:
+        argv = ["env", *[part for key in env_unset for part in ("-u", key)],
+                *[f"{key}={value}" for key,value in sorted(env.items())], *argv]
+        env_part = ""
     cmd=shlex.join(argv)
     prefix=f"cd {shlex.quote(cwd)} && " if cwd else ""
     return prefix + ((env_part + " ") if env_part else "") + cmd
@@ -81,9 +89,7 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
     directory=spec.directory
     warnings=[]
     if typ == "launch" and session_ref:
-        found=ai_session.resolve_session(session_ref, provider=provider, profile=profile)
-        if not found:
-            found=ai_session.resolve_session(session_ref, provider=provider, profile=None)
+        found=ai_session.resolve_session(session_ref, provider=provider, profile=None)
         if not found:
             found=ai_session.resolve_session(session_ref, provider=None, profile=None)
         if found and found.get("ambiguous"):
@@ -96,72 +102,12 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
             provider_warning = session_provider_warning(source_provider, provider)
             if provider_warning:
                 raise SystemExit(provider_warning)
-            session_profile = str(found.get("profile") or "default")
             if not directory and found.get("workdir"):
                 found_workdir=str(found.get("workdir"))
                 if Path(found_workdir).expanduser().is_dir():
                     directory=found_workdir
                 else:
                     warnings.append(f"session workdir is missing; using current directory: {found_workdir}")
-            
-            # Cross-profile session auto-sharing/symlinking
-            if session_profile != profile:
-                try:
-                    src_path = Path(found["path"])
-                    if provider == "codex":
-                        base_A = Path("~/.codex/sessions").expanduser() if session_profile == "default" else Path(f"~/.codex-profiles/{session_profile}/sessions").expanduser()
-                        base_B = Path("~/.codex/sessions").expanduser() if profile == "default" else Path(f"~/.codex-profiles/{profile}/sessions").expanduser()
-                    elif provider == "agy":
-                        base_A = Path("~/.gemini").expanduser() if session_profile == "default" else Path(f"~/.agy-profiles/{session_profile}/.gemini").expanduser()
-                        base_B = Path("~/.gemini").expanduser() if profile == "default" else Path(f"~/.agy-profiles/{profile}/.gemini").expanduser()
-                    elif provider == "hermes":
-                        base_A = Path("~/.hermes/sessions").expanduser() if session_profile == "default" else Path(f"~/.hermes/profiles/{session_profile}/sessions").expanduser()
-                        base_B = Path("~/.hermes/sessions").expanduser() if profile == "default" else Path(f"~/.hermes/profiles/{profile}/sessions").expanduser()
-                    elif provider == "opencode":
-                        base_A = Path("~/.local/share/opencode").expanduser() if session_profile == "default" else Path(f"~/.opencode-profiles/{session_profile}/.local/share/opencode").expanduser()
-                        base_B = Path("~/.local/share/opencode").expanduser() if profile == "default" else Path(f"~/.opencode-profiles/{profile}/.local/share/opencode").expanduser()
-                    else:
-                        base_A = None
-                        base_B = None
-
-                    if base_A and base_B:
-                        if provider == "agy":
-                            conv_id = str(found.get("native_session_ref") or found.get("session_id") or "")
-                            agy_A = base_A / "antigravity-cli"
-                            agy_B = base_B / "antigravity-cli"
-                            if conv_id:
-                                db_A = agy_A / "conversations" / f"{conv_id}.db"
-                                db_B = agy_B / "conversations" / f"{conv_id}.db"
-                                if db_A.exists() and not db_B.exists():
-                                    db_B.parent.mkdir(parents=True, exist_ok=True)
-                                    try:
-                                        db_B.symlink_to(db_A)
-                                    except Exception:
-                                        import shutil
-                                        shutil.copy2(db_A, db_B)
-                                brain_A = agy_A / "brain" / conv_id
-                                brain_B = agy_B / "brain" / conv_id
-                                if brain_A.exists() and not brain_B.exists():
-                                    brain_B.parent.mkdir(parents=True, exist_ok=True)
-                                    try:
-                                        brain_B.symlink_to(brain_A)
-                                    except Exception:
-                                        import shutil
-                                        shutil.copytree(brain_A, brain_B)
-                        try:
-                            rel_path = src_path.relative_to(base_A)
-                        except ValueError:
-                            rel_path = Path(src_path.name)
-                        dst_path = base_B / rel_path
-                        if not dst_path.exists():
-                            dst_path.parent.mkdir(parents=True, exist_ok=True)
-                            try:
-                                dst_path.symlink_to(src_path)
-                            except Exception:
-                                import shutil
-                                shutil.copy2(src_path, dst_path)
-                except Exception as e:
-                    warnings.append(f"failed to share session between profiles: {e}")
 
         elif not directory and not spec.here:
             raise SystemExit("ERROR: session workdir is unknown. Use -d/--directory DIR or --here.")
@@ -190,12 +136,21 @@ def build_execution_plan(spec: LaunchSpec) -> ExecutionPlan:
         else: argv=[binary,*profile_args,prompt]
     else:
         raise SystemExit(f"ERROR: unsupported command type: {typ}")
-    return ExecutionPlan(argv=argv, env=env, cwd=cwd, display=_display(argv,cwd,env), warnings=warnings, session=session_row, tmux_provider=provider if spec.tmux else None, tmux_status=spec.tmux == "status")
+    env_unset = []
+    if provider == "codex" and not profile_args:
+        _, env_unset = ai_provider.ai_codex_manager.launch_profile(profile)
+        warnings.append("using existing legacy Codex profile home" if env.get("CODEX_HOME", "").startswith(str(Path.home() / ".codex-profiles") + "/") else "codex manager unavailable; using its local profile contract")
+    return ExecutionPlan(env_unset=env_unset, argv=argv, env=env, cwd=cwd, display=_display(argv,cwd,env,env_unset), warnings=warnings, session=session_row, tmux_provider=provider if spec.tmux else None, tmux_status=spec.tmux == "status", auth_recovery=provider == "codex" and typ == "launch")
 
 def execute_plan(plan: ExecutionPlan) -> int:
-    env=os.environ.copy(); env.update(plan.env)
+    env=os.environ.copy()
+    for key in plan.env_unset:
+        env.pop(key, None)
+    env.update(plan.env)
     if os.environ.get("AI_DRY_RUN"):
         import json; print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2)); return 0
+    for warning in plan.warnings:
+        print(f"ai: {warning}", file=sys.stderr)
     if plan.tmux_provider:
         import ai_tmux
         try:
@@ -206,4 +161,147 @@ def execute_plan(plan: ExecutionPlan) -> int:
         os.chdir(plan.cwd)
     except OSError as e:
         raise SystemExit(f"ERROR: cannot change directory to {plan.cwd}: {e}")
+    if (plan.auth_recovery or managed_codex_plan(plan)) and sys.stdin.isatty():
+        return execute_codex_with_recovery(plan, env)
+    if managed_codex_plan(plan):
+        return execute_managed_codex(plan, env)
     os.execvpe(plan.argv[0], plan.argv, env)
+
+
+
+def managed_codex_plan(plan: ExecutionPlan) -> bool:
+    return len(plan.argv) >= 6 and plan.argv[1:4] == ["termux", "profile", "use"] and plan.argv[5] == "--"
+
+
+def manager_launch_failed(output: str, status: int) -> bool:
+    import re
+    text = re.sub(r"\x1b\[[0-9;]*m", "", output).lower().replace("\r", "")
+    if text.strip() == "codex termux manager is unavailable.":
+        return True  # Core reports an absent optional Manager with status zero.
+    if status not in {1, 2}:
+        return False
+    return bool(re.search(
+        r"(?m)^codex termux: (?:core handoff is invalid|core launch failed|invalid command|"
+        r"profile is unavailable|manager path is unsafe|home is invalid)\s*$", text,
+    ))
+
+
+def fallback_codex_plan(plan: ExecutionPlan) -> ExecutionPlan:
+    from dataclasses import replace
+    selected = plan.argv[4]
+    profile_env, unset = ai_provider.ai_codex_manager.launch_profile(selected)
+    env = dict(plan.env)
+    for key in unset:
+        env.pop(key, None)
+    env.update(profile_env)
+    argv = [plan.argv[0], *plan.argv[6:]]
+    print(f"ai: codex manager unavailable; using local manager profile {selected}", file=sys.stderr)
+    return replace(plan, argv=argv, env=env, env_unset=list(dict.fromkeys([*plan.env_unset, *unset])),
+                   display=_display(argv, plan.cwd, env, unset))
+
+
+def execute_managed_codex(plan: ExecutionPlan, env: dict[str, str]) -> int:
+    # No terminal in this path. Stream both channels, keeping only a bounded tail.
+    import selectors
+    process = subprocess.Popen(plan.argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    tail = b""
+    with selectors.DefaultSelector() as selector:
+        assert process.stdout is not None and process.stderr is not None
+        selector.register(process.stdout, selectors.EVENT_READ, sys.stdout.buffer)
+        selector.register(process.stderr, selectors.EVENT_READ, sys.stderr.buffer)
+        while selector.get_map():
+            for key, _ in selector.select():
+                chunk = os.read(key.fileobj.fileno(), 4096)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                key.data.write(chunk)
+                key.data.flush()
+                tail = (tail + chunk)[-32768:]
+    status = process.wait()
+    if manager_launch_failed(tail.decode("utf-8", errors="replace"), status):
+        return execute_plan(fallback_codex_plan(plan))
+    return status
+
+def authentication_failed(output: str) -> bool:
+    text = output.lower()
+    return any(marker in text for marker in (
+        "401 unauthorized", "http 401", "status code 401", "status: 401",
+        "refresh_token_expired", "refresh_token_reused", "refresh_token_invalid",
+        "token has expired", "authentication token is expired",
+    ))
+
+
+def execute_codex_with_recovery(plan: ExecutionPlan, env: dict[str, str]) -> int:
+    # A PTY preserves upstream TUI terminal checks and captures errors drawn on
+    # either output stream. pty.spawn restores the caller's terminal on exit.
+    import pty
+    import signal
+    import termios
+
+    def launch() -> tuple[int, str]:
+        tail = b""
+        master_fd: int | None = None
+
+        def resize(*_args) -> None:
+            if master_fd is not None and sys.stdin.isatty():
+                try:
+                    termios.tcsetwinsize(master_fd, termios.tcgetwinsize(sys.stdin.fileno()))
+                except OSError:
+                    pass
+
+        def read_output(fd: int) -> bytes:
+            nonlocal tail, master_fd
+            master_fd = fd
+            resize()
+            chunk = os.read(fd, 4096)
+            tail = (tail + chunk)[-32768:]
+            return chunk
+
+        size = termios.tcgetwinsize(sys.stdin.fileno()) if sys.stdin.isatty() else (24, 80)
+        child_code = (
+            "import os,sys,termios; "
+            "termios.tcsetwinsize(0,(int(sys.argv[1]),int(sys.argv[2]))); "
+            "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
+        )
+        old_values = {key: os.environ.get(key) for key in {*plan.env, *plan.env_unset}}
+        old_resize = signal.signal(signal.SIGWINCH, resize)
+        for key in plan.env_unset:
+            os.environ.pop(key, None)
+        os.environ.update(plan.env)
+        try:
+            status = pty.spawn(
+                [sys.executable, "-c", child_code, str(size[0]), str(size[1]), *plan.argv],
+                master_read=read_output,
+            )
+            return os.waitstatus_to_exitcode(status), tail.decode("utf-8", errors="replace")
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            signal.signal(signal.SIGWINCH, old_resize)
+    status, errors = launch()
+    if managed_codex_plan(plan) and manager_launch_failed(errors, status):
+        return execute_plan(fallback_codex_plan(plan))
+    if not status:
+        return status
+    if not plan.auth_recovery or not authentication_failed(errors) or not sys.stdin.isatty():
+        if "workspace routing discovery timed out" in errors.lower():
+            print("ai: workspace routing discovery timed out; this does not establish token expiry. Check the codex shared server/routing layer.", file=sys.stderr)
+        return status
+    print("ai: 인증을 사용할 수 없습니다. 선택한 계정에서 로그아웃 후 다시 로그인하고 세션을 재개할까요? [y/N] ", end="", file=sys.stderr, flush=True)
+    try:
+        answer = input().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return status
+    if answer not in {"y", "yes", "예"}:
+        return status
+    prefix = plan.argv[:6] if plan.argv[1:4] == ["termux", "profile", "use"] else plan.argv[:1]
+    for action in ("logout", "login"):
+        result = subprocess.run([*prefix, action], env=env)
+        if result.returncode:
+            return result.returncode
+    return launch()[0]

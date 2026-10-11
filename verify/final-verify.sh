@@ -130,29 +130,37 @@ grep_absent "no old accounts references in lib" 'accounts\.json|list_accounts|ge
 grep_absent "no old resume references in lib" 'resume_command|ai resume' "$ROOT/lib"
 
 section "6. Functional execution & dry-run checks"
+AI_VERIFY_HOME="$(mktemp -d "${TMPDIR:-/tmp}/ai-verify-home.XXXXXX")"
+trap 'rm -rf "$AI_VERIFY_HOME"' EXIT
+functional_python() {
+  HOME="$AI_VERIFY_HOME" AI_CONFIG_DIR="$ROOT/config" \
+    AI_PROVIDERS_FILE="$ROOT/config/ai.providers.json" \
+    AI_CACHE_DIR="$AI_VERIFY_HOME/.cache/ai" PYTHONPATH="$ROOT/lib" \
+    python3 "$ROOT/lib/ai_cli.py" "$@"
+}
 
 echo "== ai provider list =="
-PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" provider list
+functional_python provider list
 [ $? -eq 0 ] && ok "ai provider list" || fail "ai provider list"
 
 echo "== ai session list =="
-PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" session list | head -n 5
+functional_python session list | head -n 5
 [ $? -eq 0 ] && ok "ai session list" || fail "ai session list"
 
 echo "== dry run check: codex =="
-OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run codex 2>&1)"
+OUT="$(AI_DRY_RUN=1 functional_python run codex 2>&1)"
 echo "$OUT" | grep -q 'codex' && ok "ai dry run codex" || fail "ai dry run codex"
 
 echo "== dry run check: agy =="
-OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run agy 2>&1)"
+OUT="$(AI_DRY_RUN=1 functional_python run agy 2>&1)"
 echo "$OUT" | grep -q 'agy' && ok "ai dry run agy" || fail "ai dry run agy"
 
 echo "== dry run check: hermes =="
-OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run hermes 2>&1)"
+OUT="$(AI_DRY_RUN=1 functional_python run hermes 2>&1)"
 echo "$OUT" | grep -q 'hermes' && ok "ai dry run hermes" || fail "ai dry run hermes"
 
 echo "== dry run check: opencode =="
-OUT="$(AI_DRY_RUN=1 PYTHONPATH="$ROOT/lib" python3 "$ROOT/lib/ai_cli.py" run opencode 2>&1)"
+OUT="$(AI_DRY_RUN=1 functional_python run opencode 2>&1)"
 echo "$OUT" | grep -q 'opencode' && ok "ai dry run opencode" || fail "ai dry run opencode"
 
 section "7. TUI smoke checks"
@@ -165,31 +173,22 @@ fi
 
 section "8. Process check"
 
-ps -A -o pid,ppid,etime,cmd 2>/dev/null \
-  | grep -E '(/bin/ai|/usr/bin/codex|/usr/bin/hermes|/usr/bin/agy)' \
-  | grep -vE 'grep'
-
-RC=$?
-if [ "$RC" -eq 0 ]; then
+# Inspect command names only: active argv may contain private launch plans.
+if ps -A -o comm 2>/dev/null | grep -Eq '^(ai|hermes|agy)$'; then
   warn "some ai-related processes are currently active"
 else
   ok "no stuck ai process"
 fi
 
-
-if python3 "$ROOT/tests/test_tmux_launch.py"; then
-  ok "optional tmux launch and native focus"
-else
-  fail "optional tmux launch and native focus"
-  exit 1
-fi
-
-if python3 "$ROOT/tests/test_terminal_registration.py"; then
-  ok "registered initial terminal and qualified native title delegation"
-else
-  fail "registered initial terminal and qualified native title delegation"
-  exit 1
-fi
+section "9. Regression suite"
+for test in "$ROOT"/tests/test_*.py; do
+  if python3 "$test"; then
+    ok "$(basename "$test")"
+  else
+    fail "$(basename "$test")"
+    exit 1
+  fi
+done
 
 section "SUMMARY"
 

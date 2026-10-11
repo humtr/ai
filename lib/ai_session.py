@@ -142,6 +142,14 @@ def discover_session_files(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
             if s.is_dir():
                 for p in s.rglob("*.jsonl"): add_codex_session_record(records,ph.name,p)
 
+    manager_profiles = HOME / ".local/share/codex/manager/profiles"
+    if manager_profiles.is_dir():
+        for entry in sorted(manager_profiles.iterdir()):
+            sessions = entry / "home/sessions"
+            if sessions.is_dir():
+                for path in sessions.rglob("*.jsonl"):
+                    add_codex_session_record(records, "default", path.resolve())
+
     def scan_agy_tree(root: Path, profile: str):
         antigravity_dir = root / ".gemini" / "antigravity-cli"
         if not antigravity_dir.is_dir():
@@ -337,7 +345,12 @@ def scan_opencode_sessions(limit:int=SESSION_SCAN_LIMIT) -> list[dict[str,Any]]:
             if db.is_file():
                 roots.append((ph.name, db))
     entries = []
+    seen_databases: set[Path] = set()
     for profile, db_path in roots:
+        resolved = db_path.resolve()
+        if resolved in seen_databases:
+            continue
+        seen_databases.add(resolved)
         if not db_path.is_file(): continue
         try:
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)

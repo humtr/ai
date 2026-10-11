@@ -29,14 +29,15 @@ os.environ.setdefault("ESCDELAY", "50")
 
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 AI_BIN = os.environ.get("AI_BIN", str(HOME / "bin" / "ai"))
-SESSION_SCOPES = ["new", "provider", "profile", "all"]
-SESSION_SCOPE_LABELS = ["New", "Provider", "Profile", "All"]
+SESSION_SCOPES = ["provider", "cwd", "all"]
+SESSION_SCOPE_LABELS = ["Provider", "Cwd", "All"]
 SESSION_SCOPE_FIELDS = {
-    "new": {"workdir", "provider", "profile"},
     "provider": {"workdir", "provider"},
-    "profile": {"workdir", "provider", "profile"},
+    "cwd": {"workdir"},
     "all": set(),
+    "profile": {"workdir", "provider"},
     "workdir": {"workdir"},
+    "new": {"workdir", "provider", "profile"},
 }
 COMMAND_SECTIONS = ["provider", "profile", "options"]
 BUILDER_SECTIONS = ["workdir", "provider", "profile", "options"]
@@ -398,6 +399,7 @@ class AppStateMixin:
     """State management for providers, profiles, workdirs, sessions, and CLI options."""
 
     def reload(self) -> None:
+        self._profile_cache: dict[str, list[str]] = {}
         ai_store.ensure_store()
         ai_session._SESSION_INDEX_CACHE = None
         self.invalidate_session_cache(reset=True)
@@ -511,10 +513,20 @@ class AppStateMixin:
 
 
     def discover_profiles(self, provider: str) -> list[str]:
+        cache = getattr(self, "_profile_cache", None)
+        if cache is None:
+            cache = self._profile_cache = {}
+        if provider in cache:
+            return list(cache[provider])
         try:
             profiles = ai_provider.list_profiles(provider)
-        except Exception:
+        except Exception as error:
+            self.profile_discovery_error = (provider, str(error))
+            self.message = str(error)
             profiles = ["default"]
+        else:
+            if getattr(self, "profile_discovery_error", (None,))[0] == provider:
+                self.profile_discovery_error = (None, "")
         names = list(profiles or ["default"])
         if "default" in names:
             names = ["default", *[name for name in names if name != "default"]]
@@ -522,15 +534,12 @@ class AppStateMixin:
             names.insert(0, "default")
         else:
             names = ["default"]
+        cache[provider] = names
         return names
 
 
     def provider_profiles(self, provider: str) -> list[str]:
-        try:
-            profiles = ai_provider.list_profiles(provider)
-        except Exception:
-            profiles = ["default"]
-        return profiles or ["default"]
+        return self.discover_profiles(provider)
 
 
     def sync_profiles_for_current_provider(self, preferred: str | None = None) -> None:
@@ -559,6 +568,10 @@ class AppStateMixin:
 
 
     def validate_builder_profile(self) -> bool:
+        failure = getattr(self, "profile_discovery_error", (None, ""))
+        if failure[0] == self.current_provider():
+            self.message = failure[1]
+            return False
         if self.current_profile_valid_for_provider():
             return True
         self.message = (
@@ -1266,7 +1279,8 @@ class AppStateMixin:
     def promote_session_scope(self, field: str) -> None:
         if not hasattr(self, "session_extra_fields"):
             self.session_extra_fields = set()
-        self.session_extra_fields.add(field)
+        if field != "profile":
+            self.session_extra_fields.add(field)
 
 
     def session_list_title(self) -> str:
@@ -1406,6 +1420,10 @@ class AppStateMixin:
                     self.session_index = idx
                     self.session_scroll = 0
                     return
+        if remembered == "__new__":
+            self.session_index = 0
+            self.session_scroll = 0
+            return
         self.session_index = self.first_selectable_session_index(sessions)
         self.session_scroll = 0
 
@@ -1425,6 +1443,8 @@ class AppStateMixin:
 
     def refresh_sessions(self, silent: bool = False) -> None:
         try:
+            self._profile_cache = {}
+            self.sync_profiles_for_current_provider(self.current_profile_label())
             ai_session._SESSION_INDEX_CACHE = None
             data = ai_session.refresh_session_index()
             self.invalidate_session_cache(reset=True)
@@ -1530,7 +1550,10 @@ class AppStateMixin:
             return
 
         try:
-            ai_provider.validate_profile_name(name)
+            if provider == "codex":
+                ai_provider.ai_codex_manager.validate_id(name, custom=True)
+            else:
+                ai_provider.validate_profile_name(name)
         except ValueError as e:
             self.set_status_message(str(e), f"오류: {e}")
             return
@@ -1542,13 +1565,32 @@ class AppStateMixin:
 
         path = base / name
         try:
-            path.mkdir(parents=True, exist_ok=True)
+            ai_provider.create_profile(provider, name)
             self.set_status_message(f"profile created: {provider}/{name}", "프로필을 만들었다.")
             self.reload()
             if name in self.profiles:
                 self.indices["profile"] = self.profiles.index(name)
         except Exception as e:
             self.set_status_message(f"failed to create profile: {e}", f"프로필 생성 실패: {e}")
+
+
+    def rename_profile(self) -> None:
+        provider = self.current_provider()
+        profile = self.current_profile_label()
+        if profile == "default":
+            self.set_status_message("cannot rename default profile", "프로필 이름을 변경할 수 없다.")
+            return
+        name = self.prompt("Rename profile to", bg_color_pair=2)
+        if not name:
+            return
+        try:
+            ai_provider.rename_profile(provider, profile, name)
+            self.reload()
+            self.indices["profile"] = self.profiles.index(name)
+            self.profile_memory[provider] = name
+            self.set_status_message(f"profile renamed: {profile} -> {name}", "프로필 이름을 변경했다.")
+        except (ValueError, OSError) as error:
+            self.show_profile_error("Rename failed", str(error))
 
 
     def delete_profile(self) -> None:
@@ -1568,22 +1610,26 @@ class AppStateMixin:
             self.set_status_message("delete profile cancelled", "삭제를 취소했다.")
             return
 
-        base = ai_provider.profile_base_dir(provider)
-        if not base:
-            self.set_status_message(f"provider {provider} has no profile base directory", "프로필 디렉터리가 없다.")
-            return
-
-        path = base / profile
         try:
-            if path.is_dir():
-                shutil.rmtree(path)
-                self.set_status_message(f"deleted profile: {provider}/{profile}", "프로필을 삭제했다.")
-            else:
-                self.set_status_message(f"profile not found on disk: {provider}/{profile}", "프로필을 찾을 수 없다.")
+            ai_provider.delete_profile(provider, profile)
             self.reload()
             self.indices["profile"] = 0
-        except Exception as e:
-            self.set_status_message(f"failed to delete profile: {e}", f"삭제 실패: {e}")
+            self.profile_memory[provider] = "default"
+            self.set_status_message(f"deleted profile: {provider}/{profile}", "프로필을 삭제했다.")
+        except Exception as error:
+            self.show_profile_error("Delete failed", str(error))
+
+
+    def show_profile_error(self, title: str, detail: str) -> None:
+        self.message = f"{title}: {detail}"
+        screen = getattr(self, "stdscr", None)
+        if screen is None:
+            return
+        h, w = screen.getmaxyx()
+        lines = wrap_cell_text(detail, max(1, w - 12))[:max(1, h - 8)]
+        self.draw_popup_window(title=title, lines=[*lines, "", "Press any key to close"], accent_color_pair=6)
+        screen.getch()
+        self.needs_erase = True
 
 
     def delete_session(self) -> None:
@@ -2686,7 +2732,6 @@ class AppRendererMixin:
 
 
     def draw_controls(self, y: int, width: int, rows: int) -> int:
-        self.sync_profiles_for_current_provider(self.current_profile_label())
         child_rows = max(0, rows)
         active = self.active_section()
         
@@ -2820,47 +2865,14 @@ class AppRendererMixin:
         sessions = self.session_rows()
         session_idx = getattr(self, "indices", {}).get("session", 0)
         self.add_line(y, 0, "", width - 1)
-        scope_y = y + 1
+        panel_y = y + 1
+        sessions_active = self.active_section() in {"session", "sessions"}
+        self.add_line(panel_y, 0, self.panel_title(self.session_list_title(), sessions_active), width - 1, self.section_label_attr(sessions_active))
+        scope_y = panel_y + 1
         self.draw_choice_row(scope_y, width, "session", "Scope", SESSION_SCOPE_LABELS, session_idx)
+        list_y = scope_y + 1
 
-        show_gap = rows >= 10
-        panel_y = scope_y + (2 if show_gap else 1)
-        if show_gap:
-            self.add_line(scope_y + 1, 0, "", width - 1)
-        scope = self.current_session_scope()
-        if scope == "new":
-            active = self.active_section() in {"session", "sessions"}
-            self.list_meta["sessions"] = {
-                "y": panel_y,
-                "x": 0,
-                "w": width,
-                "rows": 0,
-                "start": 0,
-                "count": 0,
-                "top": panel_y,
-                "height": 0,
-            }
-            if panel_y < y + rows:
-                self.add_line(panel_y, 0, self.panel_title("NEW SESSION", active), width - 1, self.section_label_attr(active))
-            preview_text_attr = self.subdued_attr(active)
-            meta_line = f"Provider: {self.current_provider().title()}  │  Profile: {self.current_profile()}  │  Workdir: {short(self.effective_workdir_path())}"
-            if panel_y + 1 < y + rows:
-                self.add_line(panel_y + 1, 2, meta_line, width - 3, preview_text_attr)
-            if panel_y + 2 < y + rows:
-                self.add_line(panel_y + 2, 2, f"Command: {self.command_line()}", width - 3, preview_text_attr)
-            if panel_y + 3 < y + rows:
-                self.add_line(panel_y + 3, 2, "Start new session with current command settings (Enter to run)", width - 3, preview_text_attr)
-            for r in range(panel_y + 4, y + rows):
-                self.add_line(r, 0, "", width - 1)
-            return
-
-        sessions_active = self.active_section() == "sessions"
-        self.add_line(panel_y, 0, self.panel_title("SESSION", sessions_active), width - 1, self.section_label_attr(sessions_active))
-        list_y = panel_y + 1
-
-        real_sessions = [s for s in sessions if s.get("_kind") != "new"]
-
-        if not real_sessions:
+        if not sessions:
             self.list_meta["sessions"] = {
                 "y": list_y,
                 "x": 0,
@@ -2883,7 +2895,7 @@ class AppRendererMixin:
             list_rows = 2
             preview_space = max(2, rows - list_rows - 5)
         else:
-            list_rows = max(3, min(10, rows - 10))
+            list_rows = max(3, min(10, rows - 9))
             preview_space = max(2, rows - list_rows - 5)
 
         scope = self.current_session_scope()
@@ -2893,27 +2905,21 @@ class AppRendererMixin:
             "w": width,
             "rows": list_rows,
             "start": self.session_scroll,
-            "count": len(real_sessions),
+            "count": len(sessions),
             "top": panel_y,
             "height": list_rows + 2,
         }
         self.session_scroll = max(
             0,
-            min(self.session_scroll, max(0, len(real_sessions) - list_rows)),
+            min(self.session_scroll, max(0, len(sessions) - list_rows)),
         )
 
-        real_selected_idx = -1
-        if 0 <= self.session_index < len(sessions):
-            target = sessions[self.session_index]
-            if target in real_sessions:
-                real_selected_idx = real_sessions.index(target)
-
-        if real_selected_idx >= 0 and real_selected_idx < self.session_scroll:
-            self.session_scroll = real_selected_idx
-        if real_selected_idx >= 0 and real_selected_idx >= self.session_scroll + list_rows:
-            self.session_scroll = real_selected_idx - list_rows + 1
+        if self.session_index >= 0 and self.session_index < self.session_scroll:
+            self.session_scroll = self.session_index
+        if self.session_index >= 0 and self.session_index >= self.session_scroll + list_rows:
+            self.session_scroll = self.session_index - list_rows + 1
         self.list_meta["sessions"]["start"] = self.session_scroll
-        visible_sessions = real_sessions[self.session_scroll : self.session_scroll + list_rows]
+        visible_sessions = sessions[self.session_scroll : self.session_scroll + list_rows]
         specs = self.session_column_specs(scope, visible_sessions, width)
 
         if hasattr(self, "stdscr"):
@@ -2924,12 +2930,12 @@ class AppRendererMixin:
 
         for n in range(list_rows):
             item_idx = self.session_scroll + n
-            if item_idx >= len(real_sessions):
+            if item_idx >= len(sessions):
                 self.add_line(list_y + n, 0, "", width - 1)
                 continue
-            item = real_sessions[item_idx]
+            item = sessions[item_idx]
             table_focused = (self.active_section() == "sessions")
-            selected_row = (real_selected_idx >= 0 and item_idx == real_selected_idx)
+            selected_row = (self.session_index >= 0 and item_idx == self.session_index)
             if hasattr(self, "stdscr"):
                 segments = self.session_row_segments(item, width, selected_row, table_focused, scope, specs)
                 self.add_segments(list_y + n, 0, segments, width - 1)
@@ -2943,13 +2949,26 @@ class AppRendererMixin:
             return
 
         active = self.active_section() in {"session", "sessions"}
-        if self.session_index < 0:
+        if self.session_index < 0 or self.session_index >= len(sessions):
             return
-        if real_selected_idx >= 0:
-            selected = real_sessions[real_selected_idx]
-        elif 0 <= self.session_index < len(sessions):
-            selected = sessions[self.session_index]
-        else:
+        selected = sessions[self.session_index]
+
+        preview_attr = self.section_label_attr(active)
+        preview_text_attr = self.subdued_attr(active)
+        self.add_line(preview_y, 0, self.panel_title("SESSION DETAILS", active), width - 1, preview_attr)
+
+        if selected.get("_kind") == "new":
+            meta_line = f"Provider: {self.current_provider().title()}  │  Profile: {self.current_profile_label()}  │  Workdir: {short(self.effective_workdir_path())}"
+            if preview_y + 1 < y + rows:
+                self.add_line(preview_y + 1, 2, meta_line, width - 3, preview_text_attr)
+            if preview_y + 2 < y + rows:
+                self.add_line(preview_y + 2, 2, f"Command: {self.command_line()}", width - 3, preview_text_attr)
+            if preview_y + 3 < y + rows:
+                self.add_line(preview_y + 3, 2, "Start new session with current command settings (Enter to run)", width - 3, preview_text_attr)
+            row = preview_y + 4
+            while row < y + rows:
+                self.add_line(row, 0, "", width - 1)
+                row += 1
             return
 
         session_id = str(selected.get("session_id") or "")
@@ -2958,10 +2977,6 @@ class AppRendererMixin:
         turns = str(selected.get("turns") or "0")
         updated_time = short_time(str(selected.get("updated") or ""))
         workdir_path = short(str(selected.get("workdir") or ""))
-
-        preview_attr = self.section_label_attr(active)
-        preview_text_attr = self.subdued_attr(active)
-        self.add_line(preview_y, 0, self.panel_title("SESSION DETAILS", active), width - 1, preview_attr)
 
         meta_line = f"ID: {session_id or '-'}  │  Turns: {turns}  │  Updated: {updated_time}  │  Workdir: {workdir_path}"
         if preview_y + 1 < y + rows:
@@ -3037,16 +3052,17 @@ class AppRendererMixin:
         footer_y = h - 2
         hint_prefix = "Tab cycles Builder/Sessions"
         if active_sec == "profile":
-            action_hint = "Tab cycles profile, Ctrl-A add, Ctrl-D delete"
+            action_hint = "Tab cycles profile, Ctrl-A add, Ctrl-R rename, Ctrl-D delete"
         elif active_sec == "provider":
             action_hint = "Tab cycles provider, Enter: scope"
         elif active_sec == "sessions":
-            action_hint = "↑/↓ select, Tab: details, Enter: resume"
-        elif active_sec == "session":
-            if getattr(self, "indices", {}).get("session", 0) == 0:
-                action_hint = "Tab/←/→ cycle scope, Enter: run new"
+            selected = self.selected_session()
+            if selected and selected.get("_kind") == "new":
+                action_hint = "↑/↓ select, ←/→ scope, Tab: details, Enter: run new"
             else:
-                action_hint = "Tab/←/→ cycle scope, Enter: list"
+                action_hint = "↑/↓ select, ←/→ scope, Tab: details, Enter: resume"
+        elif active_sec == "session":
+            action_hint = "Tab/←/→ cycle scope, Enter: list"
         elif active_sec == "workdir":
             if getattr(self, "workdir_expanded", False):
                 action_hint = "Tab: confirm & close, Esc: cancel"
@@ -3056,7 +3072,7 @@ class AppRendererMixin:
             if getattr(self, "options_expanded", False):
                 action_hint = "←/→ cycle, Ctrl-S: save global, Ctrl-G: modal, Ctrl-E: toml"
             else:
-                action_hint = "Ctrl-O: expand, Ctrl-G: modal, Ctrl-S: save global"
+                action_hint = "Ctrl-O: expand, Enter: scope, Ctrl-G: modal, Ctrl-S: save global"
         else:
             action_hint = "Tab: cycle, Enter: scope"
 
@@ -3218,7 +3234,7 @@ class AppRendererMixin:
             ("Ctrl-A", "Add profile (in Profile panel)"),
             ("Ctrl-D", "Delete profile / session"),
             ("Ctrl-T", "Toggle automated/empty sessions"),
-            ("Ctrl-R", "Refresh sessions from disk"),
+            ("Ctrl-R", "Rename profile (Profile) / Refresh sessions"),
             ("Arrow Keys", "Navigate choices / items"),
             ("Space", "Toggle / cycle options / select directory"),
             "",
@@ -3683,6 +3699,9 @@ class AppControllerMixin:
         self.pending_cmd = list(cmd)
         self.run_confirm_active = True
         
+        if not getattr(self, "stdscr", None):
+            return
+
         cmd_str = " ".join(cmd)
         h, w = self.stdscr.getmaxyx()
         max_width = w - 12
@@ -3767,6 +3786,10 @@ class AppControllerMixin:
 
 
     def command_for_current_focus(self) -> list[str] | None:
+        failure = getattr(self, "profile_discovery_error", (None, ""))
+        if failure[0] == self.current_provider():
+            self.message = failure[1]
+            return None
         if self.section_name() == "workdir" and not self.commit_workdir_text_if_present():
             return None
         if self.section_name() == "sessions":
@@ -4008,9 +4031,6 @@ class AppControllerMixin:
             self.set_section("session")
             return True
         if section == "session":
-            if getattr(self, "indices", {}).get("session", -1) == 0:
-                self.execute_new_session()
-                return True
             self.enter_sessions()
             return True
         if section == "sessions":
@@ -4046,7 +4066,7 @@ class AppControllerMixin:
         sessions = self.session_rows()
         self.restore_session_selection(sessions)
         if self.session_index < 0 and sessions:
-            self.session_index = 0
+            self.session_index = self.first_selectable_session_index(sessions)
         self.session_scroll = max(0, min(self.session_scroll, max(0, len(sessions) - 1)))
 
 
@@ -4122,8 +4142,7 @@ class AppControllerMixin:
     def vertical_action(self, direction: int) -> None:
         section = self.active_section()
         if section == "sessions":
-            first_idx = self.first_selectable_session_index(self.session_rows())
-            if direction < 0 and self.session_index <= first_idx:
+            if direction < 0 and self.session_index <= 0:
                 self.set_section("session")
             else:
                 self.move_selection(direction)
@@ -4229,6 +4248,9 @@ class AppControllerMixin:
         section = self.active_section()
         if section in {"provider", "profile", "session"}:
             self.change_option(section, direction)
+        elif section == "sessions":
+            self.change_option("session", direction)
+            self.needs_erase = True
         elif section == "workdir":
             if direction < 0:
                 self.enter_workdir_parent()
@@ -4456,6 +4478,10 @@ class AppControllerMixin:
                 self.custom_workdir = None
             self.indices["workdir"] = max(0, min(item_idx, len(self.workdirs) - 1))
             self.promote_session_scope("workdir")
+        elif section == "session":
+            self.remember_session_selection()
+            self.indices["session"] = max(0, min(item_idx, len(SESSION_SCOPES) - 1))
+            getattr(self, "session_extra_fields", set()).clear()
             self.invalidate_session_cache(reset=True)
         elif section == "sessions":
             sessions = self.session_rows()
@@ -4578,6 +4604,9 @@ class AppControllerMixin:
                 return None
         if ch == 20:
             self.toggle_empty_sessions()
+            return None
+        if ch == 18 and self.active_section() == "profile":
+            self.rename_profile()
             return None
         if ch == 18:
             self.refresh_sessions(silent=False)
@@ -4770,7 +4799,7 @@ class App(AppRendererMixin, AppControllerMixin, AppStateMixin, AppFormattingMixi
         self.workdir_cursor: tuple[int, int] | None = None
         self.workdir_child_memory: dict[str, str] = {}
         self.last_builder_section = BUILDER_SECTIONS.index("workdir")
-        self.last_command_section = "session"
+        self.last_command_section = "provider"
         self.session_index = -1
         self.session_scroll = 0
         self.session_memory: dict[str, str] = {}

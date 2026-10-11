@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json, os, sys
 from pathlib import Path
+import ai_provider
 import ai_spec, ai_plan, ai_resource
 
 def usage() -> None:
@@ -21,7 +22,7 @@ Core:
 
 Resources:
   ai provider list|show|check
-  ai profile list|show|add|delete
+  ai profile list|show|add|rename|delete
   ai session refresh|list|show|resolve
   ai workdir list|add|archive
   ai features list|enable|disable
@@ -33,13 +34,15 @@ def _require_value(args:list[str], i:int, option:str) -> str:
         raise SystemExit(f"{option} requires a value")
     return args[i + 1]
 
-def parse_common(args:list[str]):
+def parse_common(args:list[str], provider: str | None = None):
     profile="default"; directory=None; session=None; here=False; all_sessions=False; context=None; compact=None; out=[]; i=0
     while i < len(args):
         a=args[i]
         if a in {"-p","--profile"}:
             value=_require_value(args, i, a)
-            if value in {"default", "native"}:
+            if provider == "codex":
+                ai_provider.validate_codex_profile(value)
+            elif value in {"default", "native"}:
                 raise SystemExit(f"invalid or reserved profile name: {value}")
             profile=value; i+=2
         elif a in {"-s","--session"}:
@@ -173,7 +176,7 @@ def run_command(command:str, argv:list[str]) -> int:
     argv = clean
     if not ai_spec.is_provider(provider): print(f"ERROR: unknown provider: {provider}", file=sys.stderr); return 2
     try:
-        profile,directory,session,here,all_sessions,context,compact,rest=parse_common(argv[1:])
+        profile,directory,session,here,all_sessions,context,compact,rest=parse_common(argv[1:], provider)
     except SystemExit as e:
         msg=str(e)
         if msg and msg != "0": print(msg, file=sys.stderr)
@@ -211,12 +214,12 @@ def json_cmd(argv:list[str]) -> int:
         import ai_session
         provider=argv[1] if len(argv)>1 and argv[1] else None
         profile=argv[2] if len(argv)>2 and argv[2] else None
-        scope=argv[3] if len(argv)>3 else "profile"
+        scope=argv[3] if len(argv)>3 else "provider"
         if scope == "new":
             print("[]")
             return 0
         p=provider if scope in {"profile","provider"} else None
-        pr=profile if scope=="profile" else None
+        pr=None
         print(json.dumps(ai_session.recent_sessions(p, pr, None, 80, "strict"), ensure_ascii=False))
         return 0
     if sub=="plan":
@@ -263,4 +266,9 @@ def main(argv:list[str]|None=None) -> int:
 def tui_cmd(argv:list[str]) -> int:
     lib=Path(__file__).resolve().parent; tui=lib/"ai_tui.py"
     os.execv(sys.executable, [sys.executable, str(tui), *argv])
-if __name__ == "__main__": raise SystemExit(main())
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (ValueError, OSError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(1)

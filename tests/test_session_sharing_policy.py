@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
 import ai_plan  # noqa: E402
+import ai_codex_manager
+import ai_provider
+from unittest.mock import patch
 import ai_session  # noqa: E402
 import ai_tui  # noqa: E402
 
@@ -54,7 +57,7 @@ def test_same_provider_profile_share_is_default() -> None:
             os.environ["HOME"] = tmp
             root = Path(tmp)
             source_profile = root / ".codex-profiles" / "source"
-            target_profile = root / ".codex-profiles" / "target"
+            target_profile = ai_codex_manager.create_profile("target")
             source_path = source_profile / "sessions" / "shared.jsonl"
             source_path.parent.mkdir(parents=True)
             source_path.write_text("{}\n", encoding="utf-8")
@@ -63,7 +66,7 @@ def test_same_provider_profile_share_is_default() -> None:
                 encoding="utf-8",
             )
             target_auth = target_profile / "auth.json"
-            target_auth.parent.mkdir(parents=True)
+            target_auth.parent.mkdir(parents=True, exist_ok=True)
             target_auth.write_text(
                 '{"auth_mode":"apikey","OPENAI_API_KEY":"target"}\n',
                 encoding="utf-8",
@@ -71,18 +74,20 @@ def test_same_provider_profile_share_is_default() -> None:
             row = _session("codex", "source", source_path)
 
             ai_session.resolve_session = lambda *args, **kwargs: row
-            plan = ai_plan.build_execution_plan(
-                ai_plan.LaunchSpec(
-                    command="run",
-                    provider="codex",
-                    profile="target",
-                    directory=tmp,
-                    session_ref="shared-ref",
+            with patch.object(ai_plan.ai_provider, "codex_manager_profiles", side_effect=ValueError("manager unavailable")):
+                plan = ai_plan.build_execution_plan(
+                    ai_plan.LaunchSpec(
+                        command="run",
+                        provider="codex",
+                        profile="target",
+                        directory=tmp,
+                        session_ref="shared-ref",
+                    )
                 )
-            )
 
             assert plan.argv == ["codex", "resume", "shared-ref"]
             assert plan.env["CODEX_HOME"] == str(target_profile)
+            assert not (target_profile / "sessions").exists()
             assert target_auth.is_file()
     finally:
         ai_session.resolve_session = original_resolve
@@ -137,3 +142,15 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Sharing runtime state must not delete a unique existing profile database.
+with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'HOME':tmp}):
+    home=Path(tmp);(home/'.local/share/agy').mkdir(parents=True)
+    profile=home/'.agy-profiles/owned';state=profile/'.local/share/agy';state.mkdir(parents=True)
+    database=state/'unique.db';database.write_text('owned-data')
+    inode=database.stat().st_ino
+    try:ai_provider.ensure_agy_profile_runtime(profile)
+    except ValueError as error:assert 'needs migration' in str(error)
+    else:raise AssertionError('unique AGY state was replaced')
+    assert database.read_text()=='owned-data' and database.stat().st_ino==inode
+print('PASS AGY runtime sharing preserves unique profile state')

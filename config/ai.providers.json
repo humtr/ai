@@ -5,9 +5,8 @@
       "binary": "codex",
       "profile": {
         "supported": true,
-        "base_dir": "~/.codex-profiles",
-        "strategy": "env_home",
-        "env_var": "CODEX_HOME",
+        "base_dir": "~/.local/share/codex/manager/profiles",
+        "strategy": "codex_manager",
         "default_uses_native_home": true
       },
       "session": {

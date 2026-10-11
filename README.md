@@ -10,7 +10,7 @@
 ## 2. Supported Providers
 
 1. **`codex`** (OpenAI Codex CLI)
-   - Profile home: `CODEX_HOME` (`~/.codex` or `~/.codex-profiles/<profile>`)
+   - Profiles: `codex termux profile list/create/use`; manager homes are `~/.local/share/codex/manager/profiles/<profile>/home`, with conversations shared through `~/.codex`
    - Session resume: `codex resume <session-ref>`
 2. **`agy`** (Antigravity CLI)
    - Profile home: `AGY_PROFILE_HOME` (`~/.gemini` or `~/.agy-profiles/<profile>/.gemini`)
@@ -37,7 +37,7 @@ ai tui
 ### Resource Management
 ```sh
 ai provider list|show|check
-ai profile list|show|add|delete
+ai profile list|show|add|rename|delete
 ai session refresh|list|show|resolve
 ai workdir list|add|archive
 ```
@@ -99,38 +99,68 @@ their status/mouse settings; global tmux configuration is preserved. Old stored
 true/false preferences become on-hidden/off. This bar switches tmux windows;
 Android Termux terminal selection remains a separate capability.
 
-`codex termux notify set --focus tmux` lets a notification select the existing
-managed pane for its live conversation. Closed, ambiguous or unidentifiable
-targets are left alone. A successful tap selects the already existing originating Android terminal. Repeated taps cannot create windows or attached clients. This uses the optional Termux existing-origin socket protocol; no RunCommandService create-or-reuse path remains.
-`allow-external-apps = true`. `--focus termux` restores ordinary foregrounding.
-Service failures retain ordinary Termux foregrounding. The attach change is
-separate and can be reverted and installed again with `--ai-only`.
+`codex termux notify set --focus window` selects the registered live workload.
+The former tmux value remains a compatibility alias. `--focus termux` brings
+only the app forward. Exact-return failure never automatically changes routes.
+A separate Android terminal may run independent work; requesting another tmux
+container inside tmux is refused.
 
 `bash scripts/install-termux.sh --ai-only` updates only the AI launcher/modules
 atomically per file, without backups or changes to config, profiles, clip or AGY.
 
 
-### Android notification navigation after GitHub Termux restoration
+The TUI Scope choices are New, Provider, and All. Profile selects account credentials;
+it does not filter the session list. The launcher no longer copies individual
+conversations between profiles. Other providers share their upstream conversation
+storage while keeping account files private. Existing nonempty private session
+storage requires a separate migration; the launcher preserves it and reports its path.
 
-Codex Manager uses the AM socket first for ordinary Activity return. This needs no tmux
-and never creates a Codex conversation or resumes one. The installed Termux APK does not
-expose exact arbitrary bare-terminal selection; return therefore preserves Termux's current
-selection. Opted-in tmux focus retains validated existing pane/session reuse and named-window
-deduplication. AI chooses the socket client before an attach request only when the owned
-socket exists; it does not retry an ambiguous execution-service request through another
-transport. Development sources are never substituted for installed provider runtimes.
+Ctrl-R on the Profile row renames profiles; elsewhere it refreshes sessions.
+`ai profile rename PROVIDER OLD NEW` provides the same operation. Codex rename and delete call the manager lifecycle commands and verify the
+result by reloading the manager list. Manager refusal (for example, an active
+or selected default profile) is shown in a popup. Lifecycle operations never
+bypass manager protections through local fallback. Renamed v2 metadata is
+recognized by the read/launch fallback.
 
-Android focus validates tmux identity within two seconds, then permits fifteen seconds
-for the single service reply. It never replays a possibly executed service request.
+After an interactive Codex launch fails with a recognized authentication error,
+ai offers logout, login, and one retry using the same selected profile and session.
+Declining leaves credentials untouched. A workspace routing discovery timeout is
+reported separately because it does not establish authentication expiry.
 
-Tmux focus recognizes the direct installed Codex runtime or the installed ai_run.py
-PTY supervisor of a Codex launch. Supervisor recognition binds its exact interpreter,
-script, Codex launch plan, pane TTY, UID and stable process identity to exactly one
-direct installed native Codex child with a PTY. The qualified installed direct-selection
-preview native is also recognized. Foreign interpreters/scripts/runtimes, ambiguous
-children, changed parents and non-PTY native children refuse focus. No session is resumed
-or started by these checks.
+If the Codex manager is unavailable, fails, times out, or returns an invalid list,
+ai falls back to the same manager profile contract locally: ASCII IDs, private
+0700 directories, exact 0600 `profile.meta`, and `<id>/home` for credentials.
+Listing ignores incomplete profiles; creation publishes a new private profile
+atomically without replacing an existing one. Launch sets the selected
+`CODEX_HOME`, clears manager handoff/SQLite overrides, and invokes the Codex wrapper
+with the original upstream arguments. Default/home clears inherited `CODEX_HOME`.
+Core still prepares the canonical shared conversation topology. A manager handoff
+failure during launch also switches to this fallback once; authentication and
+upstream session failures do not trigger it. Invalid profile/root state remains
+an error. Legacy profiles are registered into manager homes using
+`PYTHONPATH=lib python3 lib/ai_profile_migrate.py`. The transition preserves the
+original directory and file identities, requires legacy sessions to be closed and removes the empty legacy root,
+and checks all profiles for collisions and canonical shared topology before moving.
+ai and its fallback list only registered manager profiles, using one storage tree.
 
-AI-managed tmux sessions forward the selected pane native terminal title to Termux clients. Codex `/title` names follow its upstream title settings; unmanaged sessions and global tmux title options are preserved.
+### Android notification navigation
 
-Launch attaches directly in the terminal where `ai` was invoked. Native return uses Termux's existing-terminal handle plus live PID/start identity, recorded only in the managed session. Names, titles and tmux IDs cannot address Android windows. The optional existing-origin socket capability is required for exact return; unavailable or closed targets never create a replacement. The native app candidate is under `native/termux-origin` and is not a device qualification result.
+Codex uses its qualified Core/Manager route with or without tmux. The installed
+native-origin Termux extension returns to the invoking terminal using live handle,
+PID and kernel start identity. `/title` chooses upstream information fields and
+order; it does not change the terminal address. AI preserves the title selection
+when native foreground identity is supported. The app source belongs to the
+separate `humtr/termux` project.
+
+A confirmed stock APK uses one named dedicated terminal at launch, then reuses
+that window without requiring tmux. Stock has no atomic existing-only selection:
+a manual rename or close race may create an inert empty terminal, never restart
+Codex. Inconclusive AM failure does not become another launch attempt. Each fresh
+notification takes one tap and is consumed by Android.
+
+`codex termux launch` provides profile choice with tmux off by default;
+`codex termux tmux` requests hidden tmux. AI's explicit tmux mode uses the same
+qualified Manager adapter, retaining authentication recovery. A tmux request from
+inside tmux is refused before constructing another session/window/pane. Start
+independent work in another Android terminal. Legacy title-based routing remains
+only for unsupported older frontends.

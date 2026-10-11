@@ -35,14 +35,17 @@ def profile_cmd(argv:list[str]) -> int:
         p, prof=argv[1], argv[2]
         if not ai_spec.is_provider(p):
             print(f"ERROR: unknown provider: {p}", file=sys.stderr); return 1
-        base=ai_provider.profile_base_dir(p); path=(base/prof) if base and prof!="default" else None
+        base=ai_provider.profile_base_dir(p); path=ai_provider.profile_path(p, prof) if base and prof!="default" else None
         print(json.dumps({"provider":p,"profile":prof,"path":str(path or ""),"exists":bool(path and path.exists())}, ensure_ascii=False, indent=2)); return 0
     if sub=="add" and len(argv)>=3:
         p, prof=argv[1], argv[2]
         if not ai_spec.is_provider(p):
             print(f"ERROR: unknown provider: {p}", file=sys.stderr); return 1
         try:
-            ai_provider.validate_profile_name(prof)
+            if p == "codex":
+                ai_provider.ai_codex_manager.validate_id(prof, custom=True)
+            else:
+                ai_provider.validate_profile_name(prof)
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr); return 1
         if not ai_spec.provider_spec(p).get("profile", {}).get("supported", False):
@@ -52,12 +55,18 @@ def profile_cmd(argv:list[str]) -> int:
             print(f"ERROR: provider {p} has no profile base directory configured", file=sys.stderr); return 1
         path=base/prof
         try:
-            path.mkdir(parents=True, exist_ok=True)
-            if p == "agy":
-                ai_provider.ensure_agy_profile_runtime(path)
+            path = ai_provider.create_profile(p, prof)
             print(f"added profile: {p}/{prof} -> {path}")
         except Exception as e:
             print(f"ERROR: failed to create profile directory: {e}", file=sys.stderr); return 1
+        return 0
+    if sub == "rename" and len(argv) == 4:
+        try:
+            ai_provider.rename_profile(argv[1], argv[2], argv[3])
+        except (ValueError, OSError) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
+        print(f"renamed profile: {argv[1]}/{argv[2]} -> {argv[3]}")
         return 0
     if sub in {"delete", "remove"} and len(argv)>=3:
         p, prof=argv[1], argv[2]
@@ -68,17 +77,14 @@ def profile_cmd(argv:list[str]) -> int:
         base=ai_provider.profile_base_dir(p)
         if not base:
             print(f"ERROR: provider {p} has no profile base directory configured", file=sys.stderr); return 1
-        path=base/prof
-        if path.is_dir():
-            try:
-                shutil.rmtree(path)
-                print(f"deleted profile: {p}/{prof}")
-            except Exception as e:
-                print(f"ERROR: failed to delete profile directory: {e}", file=sys.stderr); return 1
-        else:
-            print(f"ERROR: profile not found: {p}/{prof}", file=sys.stderr); return 1
+        try:
+            ai_provider.delete_profile(p, prof)
+            print(f"deleted profile: {p}/{prof}")
+        except Exception as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 1
         return 0
-    print("Usage: ai profile list [PROVIDER] | show PROVIDER PROFILE | add PROVIDER PROFILE | delete PROVIDER PROFILE", file=sys.stderr); return 2
+    print("Usage: ai profile list [PROVIDER] | show PROVIDER PROFILE | add PROVIDER PROFILE | rename PROVIDER OLD NEW | delete PROVIDER PROFILE", file=sys.stderr); return 2
 
 def session_cmd(argv:list[str]) -> int:
     sub=argv[0] if argv else "list"; rest=argv[1:]

@@ -170,16 +170,33 @@ def launch(plan, provider: str) -> int:
     if not shutil.which("tmux"):
         raise SystemExit("ERROR: tmux is not installed")
     if provider == "codex":
+        if plan.argv[1:4] == ["termux", "profile", "use"]:
+            import ai_provider
+            selected = plan.argv[4]
+            home = Path.home() / ".codex" if selected == "default" else ai_provider.profile_path("codex", selected)
+            if selected != "default" and selected not in ai_provider.list_profiles("codex"):
+                raise ValueError(f"codex manager profile is unavailable: {selected}")
+        else:
+            home = Path(plan.env.get("CODEX_HOME") or (os.environ.get("CODEX_HOME") if "CODEX_HOME" not in plan.env_unset else None) or str(Path.home() / ".codex"))
         if not _native_identity(plan):
-            prepare_title(Path(plan.env.get("CODEX_HOME") or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")))
+            prepare_title(home)
     # tmux executes one shell command; quote every argv/environment field.
     environment = {key: os.environ[key] for key in ("HOME", "PATH", "CODEX_HOME", "AI_CONFIG_DIR", "AI_LIB_DIR", *COLOR_ENVIRONMENT) if key in os.environ}
+    for key in plan.env_unset:
+        environment.pop(key, None)
     environment.update(plan.env)
     assignments = [f"{key}={value}" for key, value in environment.items()]
     # A reused server may retain NO_COLOR from a prior noninteractive client.
     # Explicit absence is part of the caller preference; TERM stays tmux-owned.
     unset = [argument for key in ("CODEX_HOME", *COLOR_ENVIRONMENT) if key not in environment for argument in ("-u", key)]
-    command = "exec " + shlex.join(["env", *unset, *assignments, *plan.argv])
+    unset.extend(argument for key in plan.env_unset if key not in {"CODEX_HOME", *COLOR_ENVIRONMENT} for argument in ("-u", key))
+    argv = plan.argv
+    if plan.auth_recovery:
+        import sys
+        from dataclasses import replace
+        argv = [sys.executable, str(Path(__file__).with_name("ai_run.py")),
+                json.dumps(replace(plan, tmux_provider=None).as_dict())]
+    command = "exec " + shlex.join(["env", *unset, *assignments, *argv])
     origin = ai_terminal.resolve()
     # Every allowed launch owns a fresh container in its invoking terminal.
     pane = _tmux(None, "new-session", "-d", "-P", "-F", "#{pane_id}", "-n", "ai-" + provider, "-c", plan.cwd, command)
