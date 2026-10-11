@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass, asdict
 from types import SimpleNamespace
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
@@ -33,7 +34,7 @@ def test_direct_launches_do_not_dispatch_android_creation():
     with tempfile.TemporaryDirectory() as tmp:
         root=Path(tmp);home=root/'home';home.mkdir();(root/'run').mkdir()
         program=root/'codex';marker=root/'runs'
-        program.write_text('#!'+sys.executable+'\nimport os,sys,time\nfrom pathlib import Path\nif sys.argv[1:3]==["termux","__terminal-capabilities-v1"]:print("codex-terminal-capabilities-v1\\nidentity=native");sys.exit(0)\nPath('+repr(str(marker))+').open("a").write("run\\n")\nprint("OWNED_WORKLOAD",flush=True)\ntime.sleep(90)\n');program.chmod(0o755)
+        program.write_text('#!'+sys.executable+'\nimport os,sys,time\nfrom pathlib import Path\nif sys.argv[1:3]==["termux","__terminal-launch-capabilities-v1"]:sys.exit(2)\nif sys.argv[1:3]==["termux","__terminal-capabilities-v1"]:print("codex-terminal-capabilities-v1\\nidentity=native");sys.exit(0)\nPath('+repr(str(marker))+').open("a").write("run\\n")\nprint("OWNED_WORKLOAD",flush=True)\ntime.sleep(90)\n');program.chmod(0o755)
         clients=[];fds=[];socket=str(root/'run'/('tmux-'+str(os.getuid()))/'default')
         def tm(*args):return subprocess.check_output(['tmux','-S',socket,*args],text=True).strip()
         try:
@@ -47,7 +48,11 @@ def test_direct_launches_do_not_dispatch_android_creation():
                 deadline=time.monotonic()+4
                 while not os.readlink('/proc/'+str(process.pid)+'/exe').endswith('/tmux') and time.monotonic()<deadline:time.sleep(.01)
                 assert os.readlink('/proc/'+str(process.pid)+'/exe').endswith('/tmux'),'launcher did not exec attachment in its caller terminal'
-            rows=dict(row.split('\t') for row in tm('list-clients','-F','#{client_tty}\t#{session_id}').splitlines())
+            deadline=time.monotonic()+4
+            while True:
+                rows=dict(row.split('\t') for row in tm('list-clients','-F','#{client_tty}\t#{session_id}').splitlines())
+                if len(rows)==2 or time.monotonic()>=deadline:break
+                time.sleep(.01)
             assert len(rows)==2 and rows[clients[0][1]]!=rows[clients[1][1]]
             sessions=tm('list-sessions','-F','#{session_id}').splitlines();assert len(sessions)==2
             tm('kill-session','-t',rows[clients[1][1]])
@@ -59,6 +64,49 @@ def test_direct_launches_do_not_dispatch_android_creation():
                 except subprocess.TimeoutExpired:process.kill();process.wait()
             for fd in fds:os.close(fd)
 
+def test_manager_launch_preserves_supervisor_plan_and_never_replays():
+    with tempfile.TemporaryDirectory() as tmp:
+        @dataclass
+        class RecoveryPlan:
+            argv: list
+            env: dict
+            env_unset: list
+            cwd: str
+            tmux_provider: str | None = "codex"
+            tmux_status: bool = True
+            auth_recovery: bool = True
+            def as_dict(self): return asdict(self)
+        plan = RecoveryPlan(argv=[sys.executable, "resume", "owned"], env={"OWNED":"selected"}, env_unset=["REMOVE_ME"], cwd=tmp)
+        accepted = subprocess.CompletedProcess([],0,b"codex-terminal-launch-v1\ncontainer=off,hidden,status\n",b"")
+        original = os.getcwd()
+        try:
+            with patch.dict(os.environ,{"REMOVE_ME":"inherited"}), patch.object(ai_tmux.subprocess,'run',return_value=accepted) as query, patch.object(ai_tmux.os,'execvpe',side_effect=RuntimeError("dispatch failed")) as execute:
+                try: ai_tmux._manager_launch(plan)
+                except RuntimeError: pass
+                else: raise AssertionError("failed dispatch unexpectedly returned")
+                assert query.call_args.kwargs['env']['OWNED']=='selected' and 'REMOVE_ME' not in query.call_args.kwargs['env']
+                assert query.call_args.kwargs['cwd']==tmp
+                execute.assert_called_once()
+                _, argv, environment = execute.call_args.args
+                assert argv[1:5] == ["termux","__terminal-launch-command-v1","status","--"]
+                assert Path(argv[5]) == Path(sys.executable).resolve()
+                assert argv[6] == str(Path(ai_tmux.__file__).with_name('ai_run.py'))
+                restored=json.loads(argv[7]);assert restored['argv']==plan.argv and restored['auth_recovery'] and restored['tmux_provider'] is None
+                assert environment['OWNED']=='selected' and 'REMOVE_ME' not in environment
+            legacy = SimpleNamespace(argv=[sys.executable, "owned"], env={}, cwd=tmp, tmux_status=False)
+            with patch.object(ai_tmux.subprocess,'run',return_value=accepted), patch.object(ai_tmux.os,'execvpe',side_effect=RuntimeError("dispatch failed")) as execute:
+                try: ai_tmux._manager_launch(legacy)
+                except RuntimeError: pass
+                else: raise AssertionError("failed dispatch unexpectedly returned")
+                execute.assert_called_once()
+                assert execute.call_args.args[1][1:5]==["termux","__terminal-launch-command-v1","hidden","--"]
+                assert execute.call_args.args[1][6:]==["owned"]
+            for reply in (b"",b"codex-terminal-launch-v1\ncontainer=off,hidden,status\nextra\n"):
+                with patch.object(ai_tmux.subprocess,'run',return_value=subprocess.CompletedProcess([],0,reply,b"")),patch.object(ai_tmux.os,'execvpe') as execute:
+                    assert not ai_tmux._manager_launch(plan);execute.assert_not_called()
+        finally:os.chdir(original)
+
+
 if __name__=='__main__':
- for test in (test_read_only_capability_delegates_exact_plan_and_refuses_invalid_protocol,test_direct_launches_do_not_dispatch_android_creation):
+ for test in (test_read_only_capability_delegates_exact_plan_and_refuses_invalid_protocol,test_direct_launches_do_not_dispatch_android_creation,test_manager_launch_preserves_supervisor_plan_and_never_replays):
   test();print('PASS',test.__name__)

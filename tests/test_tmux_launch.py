@@ -120,7 +120,7 @@ def test_native_status_mouse_switch():
         client = None
         try:
             plan = ai_plan.ExecutionPlan(argv=['sleep', '90'], env={}, cwd=str(root), display='', tmux_status=True)
-            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': socket+',1,0'}):
+            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': socket+',1,0', 'TMUX_PANE': tm('display-message','-p','#{pane_id}')}):
                 assert ai_tmux.launch(plan, 'example') == 0
             second = tm('display-message', '-p', '#{window_id}')
             tm('set-option', '-t', 'humtr-ai', 'status-left', '')
@@ -159,7 +159,7 @@ def test_native_title_forwarding():
         client = None
         try:
             plan = ai_plan.ExecutionPlan(argv=['sleep', '90'], env={}, cwd=str(root), display='')
-            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': socket+',1,0'}):
+            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': socket+',1,0', 'TMUX_PANE': tm('display-message','-p','#{pane_id}')}):
                 ai_tmux.launch(plan, 'example')
             pane = tm('display-message', '-p', '#{pane_id}')
             client = subprocess.Popen(['tmux', '-S', socket, 'attach-session', '-t', 'humtr-ai'], stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env={**os.environ, 'TERM':'xterm-256color', 'TMUX':''})

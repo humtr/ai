@@ -131,7 +131,40 @@ def _native_identity(plan) -> bool:
         return False
 
 
+def _manager_launch(plan) -> bool:
+    """Advertised Manager route; retain AI's selected execution/recovery plan."""
+    environment = dict(os.environ)
+    for key in getattr(plan, "env_unset", ()):
+        environment.pop(key, None)
+    environment.update(plan.env)
+    try:
+        result = subprocess.run([plan.argv[0], "termux", "__terminal-launch-capabilities-v1"],
+                                env=environment, cwd=plan.cwd, stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode or result.stderr or result.stdout != b"codex-terminal-launch-v1\ncontainer=off,hidden,status\n":
+        return False
+    argv = plan.argv
+    if getattr(plan, "auth_recovery", False):
+        import sys
+        from dataclasses import replace
+        argv = [sys.executable, str(Path(__file__).with_name("ai_run.py")),
+                json.dumps(replace(plan, tmux_provider=None).as_dict())]
+    executable = shutil.which(argv[0], path=environment.get("PATH"))
+    if executable is None:
+        raise ValueError("selected executable is unavailable")
+    os.chdir(plan.cwd)
+    mode = "status" if plan.tmux_status else "hidden"
+    # After dispatch begins, failure stays failed: no second Android/tmux launch.
+    os.execvpe(plan.argv[0], [plan.argv[0], "termux", "__terminal-launch-command-v1",
+                            mode, "--", str(Path(executable).resolve()), *argv[1:]], environment)
+    return True
+
+
 def launch(plan, provider: str) -> int:
+    if provider == "codex" and _manager_launch(plan):
+        return 0
     if not shutil.which("tmux"):
         raise SystemExit("ERROR: tmux is not installed")
     if provider == "codex":
