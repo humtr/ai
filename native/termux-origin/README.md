@@ -17,3 +17,7 @@ The candidate retains the installed package ID, variant, version code and upstre
 Github debug signing config. Its certificate must match the installed Github APK
 before any installation. Build/source tests do not constitute Android device
 acceptance. No live APK installation is performed by this build workflow.
+
+Origin ancestry must end at the owning Termux application PID. Android protects
+the application's system parent; resolving a terminal must never read beyond that
+boundary. Detached, cyclic and inaccessible origin chains remain unavailable.

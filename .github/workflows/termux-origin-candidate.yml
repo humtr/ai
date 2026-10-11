@@ -37,8 +37,8 @@ jobs:
       - name: Compile APK and actual focused native-source tests
         shell: bash
         env:
-          TERMUX_APP_VERSION_NAME: 0.118.0+8629e63.origin1
-          TERMUX_APK_VERSION_TAG: origin1
+          TERMUX_APP_VERSION_NAME: 0.118.0+8629e63.origin2
+          TERMUX_APK_VERSION_TAG: origin2
           TERMUX_PACKAGE_VARIANT: apt-android-7
         run: |
           set -euo pipefail
@@ -52,7 +52,7 @@ jobs:
           reports=list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*TerminalProcessIdentityTest.xml'))
           assert len(reports)==1
           report=ET.parse(reports[0]).getroot()
-          assert int(report.attrib['tests'])==3 and int(report.attrib['failures'])==0 and int(report.attrib['errors'])==0
+          assert int(report.attrib['tests'])==6 and int(report.attrib['failures'])==0 and int(report.attrib['errors'])==0
           CHECK
       - name: Qualify same-package same-certificate APK
         shell: bash

@@ -63,11 +63,14 @@ final class TermuxTerminalControl {
     }
     private JSONObject origin(int pid, int uid) throws Exception {
         TerminalProcessIdentity original = TerminalProcessIdentity.read(pid);
-        int cursor = pid;
+        int[] ancestry = TerminalProcessIdentity.ancestry(pid, android.os.Process.myPid(), cursor -> {
+            if (Os.stat("/proc/" + cursor).st_uid != uid)
+                throw new IllegalStateException("origin outside application uid");
+            return TerminalProcessIdentity.read(cursor);
+        });
         TerminalSession found = null;
         long foundStart = 0;
-        for (int depth = 0; depth < 64 && cursor > 0; depth++) {
-            if (Os.stat("/proc/" + cursor).st_uid != uid) break;
+        for (int cursor : ancestry) {
             TerminalProcessIdentity identity = TerminalProcessIdentity.read(cursor);
             for (TermuxSession session : service.getTermuxSessions()) {
                 TerminalSession terminal = session.getTerminalSession();
@@ -76,8 +79,6 @@ final class TermuxTerminalControl {
                     found = terminal; foundStart = identity.start;
                 }
             }
-            if (identity.parent == cursor) throw new IllegalStateException("invalid ancestry");
-            cursor = identity.parent;
         }
         if (found == null || TerminalProcessIdentity.read(pid).start != original.start
             || !found.isRunning() || TerminalProcessIdentity.read(found.getPid()).start != foundStart)

@@ -25,4 +25,31 @@ public class TerminalProcessIdentityTest {
             catch (IllegalArgumentException expected) { }
         }
     }
+    @Test public void originStopsBeforeProtectedApplicationParent() throws Exception {
+        java.util.List<Integer> reads = new java.util.ArrayList<>();
+        int[] chain = TerminalProcessIdentity.ancestry(30, 10, pid -> {
+            reads.add(pid);
+            if (pid == 30) return new TerminalProcessIdentity(20, 301);
+            if (pid == 20) return new TerminalProcessIdentity(10, 201);
+            throw new java.io.IOException("protected Android parent");
+        });
+        assertArrayEquals(new int[]{30, 20}, chain);
+        assertEquals(java.util.Arrays.asList(30, 20), reads);
+    }
+    @Test public void detachedAndCyclicOriginsRemainUnavailable() throws Exception {
+        for (int mode : new int[]{0, 1, 2}) {
+            final int selected = mode;
+            try {
+                TerminalProcessIdentity.ancestry(30, 10, pid -> new TerminalProcessIdentity(
+                    selected == 0 ? 0 : selected == 1 ? pid : pid == 30 ? 20 : 30, 301));
+                fail("unbound origin");
+            } catch (IllegalStateException expected) { }
+        }
+    }
+    @Test public void inaccessibleOriginDoesNotGainAuthority() throws Exception {
+        try {
+            TerminalProcessIdentity.ancestry(30, 10, pid -> { throw new java.io.IOException("denied"); });
+            fail("inaccessible origin");
+        } catch (java.io.IOException expected) { }
+    }
 }

@@ -26,6 +26,21 @@ final class TerminalProcessIdentity {
             return parse(new String(data, 0, length, StandardCharsets.UTF_8));
         }
     }
+    interface Reader { TerminalProcessIdentity read(int pid) throws Exception; }
+    static int[] ancestry(int pid, int applicationPid, Reader reader) throws Exception {
+        if (pid <= 0 || applicationPid <= 0 || pid == applicationPid)
+            throw new IllegalArgumentException("invalid origin ancestry");
+        int[] chain = new int[64];
+        int depth = 0;
+        while (pid > 0 && pid != applicationPid && depth < chain.length) {
+            chain[depth++] = pid;
+            int parent = reader.read(pid).parent;
+            if (parent == pid) throw new IllegalStateException("invalid origin ancestry");
+            pid = parent;
+        }
+        if (pid != applicationPid) throw new IllegalStateException("origin outside application");
+        return java.util.Arrays.copyOf(chain, depth);
+    }
     static long positive(String value) {
         if (!value.matches("[1-9][0-9]*")) throw new IllegalArgumentException("invalid terminal reference");
         long result = Long.parseLong(value);
