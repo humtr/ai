@@ -69,7 +69,6 @@ date
 section "1. Required files"
 
 exists_file "$ROOT/bin/ai"
-exists_file "$ROOT/bin/agy"
 exists_file "$ROOT/bin/clip"
 exists_file "$ROOT/lib/ai_cli.py"
 exists_file "$ROOT/lib/ai_spec.py"
@@ -83,7 +82,7 @@ exists_file "$ROOT/lib/clip_web_fetch.py"
 
 section "2. Syntax checks"
 
-for f in ai agy clip; do
+for f in ai clip; do
   if bash -n "$ROOT/bin/$f"; then
     ok "bash -n bin/$f"
   else

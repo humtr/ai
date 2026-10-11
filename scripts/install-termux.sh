@@ -5,7 +5,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST_BIN="${AI_BIN_DEST:-$HOME/bin/ai}"
 DEST_LIB="${AI_LIB_DEST:-$HOME/.config/ai/lib}"
 DEST_CONFIG="${AI_CONFIG_DEST:-$HOME/.config/ai/config}"
-DEST_AGY="${AI_AGY_DEST:-$HOME/bin/agy}"
 
 # Bounded AI-only runtime update: no backups, provider state, or clip/AGY writes.
 if [ "${1:-}" = "--ai-only" ]; then
@@ -59,14 +58,12 @@ say "backup: $BACKUP_DIR"
 [ -f "$ROOT/lib/clip_agy.py" ] || fail "missing $ROOT/lib/clip_agy.py"
 [ -f "$ROOT/lib/clip_approve.py" ] || fail "missing $ROOT/lib/clip_approve.py"
 [ -f "$ROOT/lib/clip_web_fetch.py" ] || fail "missing $ROOT/lib/clip_web_fetch.py"
-[ -f "$ROOT/bin/agy" ] || fail "missing $ROOT/bin/agy"
 [ -f "$ROOT/lib/ai_cli.py" ] || fail "missing $ROOT/lib/ai_cli.py"
 
 say "-- preflight validation --"
 python3 -m py_compile "$ROOT"/lib/*.py
 bash -n "$ROOT/bin/ai"
 bash -n "$ROOT/bin/clip"
-bash -n "$ROOT/bin/agy"
 
 mkdir -p "$BACKUP_DIR"
 
@@ -101,10 +98,6 @@ if [ -e "$DEST_CLIP_LIB" ]; then
   cp -a "$DEST_CLIP_LIB" "$BACKUP_DIR/clip-lib.bak"
   say "backed up $DEST_CLIP_LIB -> $BACKUP_DIR/clip-lib.bak"
 fi
-if [ -e "$DEST_AGY" ]; then
-  cp -a "$DEST_AGY" "$BACKUP_DIR/agy.bak"
-  say "backed up $DEST_AGY -> $BACKUP_DIR/agy.bak"
-fi
 
 # Back up legacy HGM files if they exist to keep backup safety
 if [ -e "$HOME/bin/hgm" ]; then
@@ -125,8 +118,6 @@ say "-- installing command --"
 mkdir -p "$(dirname "$DEST_BIN")"
 cp -f "$ROOT/bin/ai" "$DEST_BIN"
 chmod +x "$DEST_BIN"
-cp -f "$ROOT/bin/agy" "$DEST_AGY"
-chmod +x "$DEST_AGY"
 
 say "-- installing clip commands & libraries --"
 mkdir -p "$(dirname "$DEST_CLIP")"
@@ -217,7 +208,6 @@ python3 -m py_compile "$DEST_LIB"/*.py
 python3 -m py_compile "$DEST_CLIP_LIB"/*.py
 bash -n "$DEST_BIN"
 bash -n "$DEST_CLIP"
-bash -n "$DEST_AGY"
 
 say "-- resolution --"
 RESOLVED_AI="$(command -v ai || true)"

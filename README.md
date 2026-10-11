@@ -164,3 +164,6 @@ qualified Manager adapter, retaining authentication recovery. A tmux request fro
 inside tmux is refused before constructing another session/window/pane. Start
 independent work in another Android terminal. Legacy title-based routing remains
 only for unsupported older frontends.
+
+AGY owns its public `$PREFIX/bin/agy` launcher and installed runtime. This installer
+does not create a second `~/bin/agy` shim or update AGY support files.

@@ -4,7 +4,7 @@ This repository is a Termux-oriented, config-driven toolkit for launching AI pro
 
 ## Project Structure & Module Organization
 
-- `bin/` contains the executable Bash entrypoints: `ai`, `agy`, and `clip`.
+- `bin/` contains the executable Bash entrypoints: `ai` and `clip`.
 - `lib/` contains the Python CLI, TUI, provider/session/config logic, and `clip` integrations.
 - `code/ai-lib/` contains auxiliary libraries used by the CLI and TUI.
 - `config/` holds versioned provider and command JSON; keep machine-local settings in ignored `config-safe/`.
@@ -16,7 +16,7 @@ There is no separate build system. From the repository root, use:
 
 ```sh
 python3 -m py_compile lib/*.py       # Python syntax check
-bash -n bin/ai                       # Repeat for bin/agy and bin/clip
+bash -n bin/ai                       # Repeat for bin/clip
 for test in tests/test_*.py; do python3 "$test"; done
 bash verify/ai-tui-smoke.sh          # TUI behavior with isolated fixtures
 bash verify/final-verify.sh           # Full syntax, behavior, and integration checks
