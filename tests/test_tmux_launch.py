@@ -82,11 +82,11 @@ def test_native_tmux_color_environment():
             for key in ai_tmux.COLOR_ENVIRONMENT:
                 tm('set-environment', '-g', key, 'stale')
             caller = {k:v for k,v in os.environ.items() if k not in ai_tmux.COLOR_ENVIRONMENT}
-            caller.update(HOME=str(root), TMUX=socket+',1,0', TMUX_PANE='%0', TERM='xterm-256color')
+            caller.update(HOME=str(root), TMUX='', TMUX_PANE='', TERM='xterm-256color')
             for index, preferences in enumerate(({'COLORTERM':'truecolor'}, {'NO_COLOR':'1'}, {'FORCE_COLOR':'1','COLORFGBG':'15;0'})):
                 marker = root / f'color-{index}.json'
                 plan = ai_plan.ExecutionPlan(argv=[str(provider), str(marker)], env={}, cwd=str(root), display='')
-                with patch.dict(os.environ, {**caller, **preferences}, clear=True):
+                with patch.dict(os.environ, {**caller, **preferences}, clear=True), patch.object(ai_tmux, '_tmux', side_effect=lambda _, *args: tm(*args)), patch.object(ai_tmux.os, 'execvp') as attach, patch.object(ai_tmux.ai_terminal, 'resolve', return_value=None):
                     assert ai_tmux.launch(plan, 'example') == 0
                 deadline = time.monotonic() + 3
                 while not marker.exists() and time.monotonic() < deadline: time.sleep(.05)
@@ -95,7 +95,7 @@ def test_native_tmux_color_environment():
                 assert values['TERM'].startswith(('screen', 'tmux')) and values['TERM'] != caller['TERM']
                 assert values['TERM_PROGRAM'] == 'tmux'
                 deadline = time.monotonic() + 3
-                pane = tm('display-message', '-p', '#{pane_id}')
+                pane = tm('display-message','-p','-t',attach.call_args.args[1][-1],'#{pane_id}')
                 while time.monotonic() < deadline:
                     capture = tm('capture-pane', '-p', '-e', '-t', pane)
                     if ('plain' if index == 1 else 'colored') in capture: break
@@ -120,24 +120,27 @@ def test_native_status_mouse_switch():
         client = None
         try:
             plan = ai_plan.ExecutionPlan(argv=['sleep', '90'], env={}, cwd=str(root), display='', tmux_status=True)
-            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': socket+',1,0', 'TMUX_PANE': tm('display-message','-p','#{pane_id}')}):
+            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': '', 'TMUX_PANE': ''}), patch.object(ai_tmux, '_tmux', side_effect=lambda _, *args: tm(*args)), patch.object(ai_tmux.os, 'execvp') as attach, patch.object(ai_tmux.ai_terminal, 'resolve', return_value=None):
                 assert ai_tmux.launch(plan, 'example') == 0
-            second = tm('display-message', '-p', '#{window_id}')
-            tm('set-option', '-t', 'humtr-ai', 'status-left', '')
-            tm('set-option', '-t', 'humtr-ai', 'status-right', '')
-            tm('set-option', '-t', 'humtr-ai', 'status-justify', 'left')
+            session = attach.call_args.args[1][-1]
+            assert tm('show-options','-v','-t',session,'status')=='on' and tm('show-options','-v','-t',session,'mouse')=='on'
+            tm('rename-window','-t',session+':0','first')
+            second = tm('new-window','-d','-P','-F','#{window_id}','-t',session,'-n','second','sleep 90')
+            tm('set-option', '-t', session, 'status-left', '')
+            tm('set-option', '-t', session, 'status-right', '')
+            tm('set-option', '-t', session, 'status-justify', 'left')
             tm('set-window-option', '-g', 'window-status-format', '#I:#W')
             tm('set-window-option', '-g', 'window-status-current-format', '#I:#W')
-            tm('select-window', '-t', 'humtr-ai:0')
-            client = subprocess.Popen(['tmux', '-S', socket, 'attach-session', '-t', 'humtr-ai'], stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env={**os.environ, 'TERM':'xterm-256color', 'TMUX':''})
+            tm('select-window', '-t', session+':0')
+            client = subprocess.Popen(['tmux', '-S', socket, 'attach-session', '-t', session], stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env={**os.environ, 'TERM':'xterm-256color', 'TMUX':''})
             deadline = time.monotonic()+3
             while not tm('list-clients') and time.monotonic()<deadline: time.sleep(.05)
             assert tm('list-clients'), 'attached native client required'
             # SGR mouse press/release at second window label in the native status row.
             os.write(master, b'\x1b[<0;12;24M\x1b[<0;12;24m')
             deadline = time.monotonic()+3
-            while tm('display-message', '-p', '#{window_id}') != second and time.monotonic()<deadline: time.sleep(.05)
-            assert tm('display-message', '-p', '#{window_id}') == second
+            while tm('display-message', '-p', '-t', session, '#{window_id}') != second and time.monotonic()<deadline: time.sleep(.05)
+            assert tm('display-message', '-p', '-t', session, '#{window_id}') == second
         finally:
             subprocess.run(['tmux', '-S', socket, 'kill-server'], capture_output=True)
             if client: client.wait(timeout=3)
@@ -159,10 +162,11 @@ def test_native_title_forwarding():
         client = None
         try:
             plan = ai_plan.ExecutionPlan(argv=['sleep', '90'], env={}, cwd=str(root), display='')
-            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': socket+',1,0', 'TMUX_PANE': tm('display-message','-p','#{pane_id}')}):
+            with patch.dict(os.environ, {'HOME': str(root), 'TMUX': '', 'TMUX_PANE': ''}), patch.object(ai_tmux, '_tmux', side_effect=lambda _, *args: tm(*args)), patch.object(ai_tmux.os, 'execvp') as attach, patch.object(ai_tmux.ai_terminal, 'resolve', return_value=None):
                 ai_tmux.launch(plan, 'example')
-            pane = tm('display-message', '-p', '#{pane_id}')
-            client = subprocess.Popen(['tmux', '-S', socket, 'attach-session', '-t', 'humtr-ai'], stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env={**os.environ, 'TERM':'xterm-256color', 'TMUX':''})
+            session = attach.call_args.args[1][-1]
+            pane = tm('display-message', '-p', '-t', session, '#{pane_id}')
+            client = subprocess.Popen(['tmux', '-S', socket, 'attach-session', '-t', session], stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env={**os.environ, 'TERM':'xterm-256color', 'TMUX':''})
             for title in ('Native thread title', 'Changed /title #{session_name}'):
                 # select-pane -T interprets formats; escape fixture input, as native OSC does not.
                 tm('select-pane', '-t', pane, '-T', title.replace('#', '##'))

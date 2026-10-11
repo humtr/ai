@@ -163,6 +163,8 @@ def _manager_launch(plan) -> bool:
 
 
 def launch(plan, provider: str) -> int:
+    if os.environ.get("TMUX"):
+        raise SystemExit("ERROR: this terminal already uses tmux; use its existing container or a separate terminal")
     if provider == "codex" and _manager_launch(plan):
         return 0
     if not shutil.which("tmux"):
@@ -178,26 +180,12 @@ def launch(plan, provider: str) -> int:
     # Explicit absence is part of the caller preference; TERM stays tmux-owned.
     unset = [argument for key in ("CODEX_HOME", *COLOR_ENVIRONMENT) if key not in environment for argument in ("-u", key)]
     command = "exec " + shlex.join(["env", *unset, *assignments, *plan.argv])
-    inside = bool(os.environ.get("TMUX"))
-    origin = ai_terminal.resolve() if not inside else None
-    if inside:
-        source_pane = os.environ.get("TMUX_PANE")
-        if not source_pane:
-            raise ValueError("missing invoking tmux pane")
-        socket = _tmux(None, "display-message", "-p", "-t", source_pane, "#{socket_path}")
-        session = _tmux(socket, "display-message", "-p", "-t", source_pane, "#{session_id}")
-        inherited = _tmux(socket, "show-options", "-qv", "-t", session, ai_terminal.OPTION)
-        if inherited:
-            origin = ai_terminal.reference(json.loads(inherited))
-            if origin is None or not ai_terminal.validate(origin): raise ValueError("origin terminal is unavailable")
-        pane = _tmux(socket, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", session, "-n", "ai-" + provider, "-c", plan.cwd, command)
-    else:
-        # tmux assigns a fresh session name atomically, including concurrent starts.
-        # A shared session would also share its selected window and Android client.
-        pane = _tmux(None, "new-session", "-d", "-P", "-F", "#{pane_id}", "-n", "ai-" + provider, "-c", plan.cwd, command)
-        _tmux(None, "set-option", "-t", pane, "@humtr_ai_session", "1")
-        socket = _tmux(None, "display-message", "-p", "-t", pane, "#{socket_path}")
-    if not inside and origin is not None:
+    origin = ai_terminal.resolve()
+    # Every allowed launch owns a fresh container in its invoking terminal.
+    pane = _tmux(None, "new-session", "-d", "-P", "-F", "#{pane_id}", "-n", "ai-" + provider, "-c", plan.cwd, command)
+    _tmux(None, "set-option", "-t", pane, "@humtr_ai_session", "1")
+    socket = _tmux(None, "display-message", "-p", "-t", pane, "#{socket_path}")
+    if origin is not None:
         _tmux(socket, "set-option", "-t", pane, ai_terminal.OPTION, json.dumps(origin, separators=(",", ":")))
     if _tmux(socket, "display-message", "-p", "-t", pane, "#{@humtr_ai_session}") == "1":
         _tmux(socket, "set-option", "-t", pane, "set-titles", "on")
@@ -209,9 +197,8 @@ def launch(plan, provider: str) -> int:
     register(socket)
     _tmux(socket, "select-window", "-t", pane)
     _tmux(socket, "select-pane", "-t", pane)
-    if not inside:
-        session = _tmux(socket, "display-message", "-p", "-t", pane, "#{session_id}")
-        os.execvp("tmux", ["tmux", "-S", socket, "attach-session", "-t", session])
+    session = _tmux(socket, "display-message", "-p", "-t", pane, "#{session_id}")
+    os.execvp("tmux", ["tmux", "-S", socket, "attach-session", "-t", session])
     return 0
 
 

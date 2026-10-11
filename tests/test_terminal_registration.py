@@ -107,6 +107,16 @@ def test_manager_launch_preserves_supervisor_plan_and_never_replays():
         finally:os.chdir(original)
 
 
+def test_existing_tmux_refuses_before_any_dispatch():
+    plan=SimpleNamespace(argv=['codex'],env={},cwd='/unused')
+    for provider in ('codex','agy','example'):
+        with patch.dict(os.environ,{'TMUX':'/owned/socket,1,0'}), patch.object(ai_tmux,'_manager_launch') as manager, patch.object(ai_tmux,'_tmux') as container:
+            try: ai_tmux.launch(plan,provider)
+            except SystemExit as error: assert 'already uses tmux' in str(error)
+            else: raise AssertionError('nested launch allowed')
+            manager.assert_not_called();container.assert_not_called()
+
+
 if __name__=='__main__':
- for test in (test_read_only_capability_delegates_exact_plan_and_refuses_invalid_protocol,test_direct_launches_do_not_dispatch_android_creation,test_manager_launch_preserves_supervisor_plan_and_never_replays):
+ for test in (test_read_only_capability_delegates_exact_plan_and_refuses_invalid_protocol,test_direct_launches_do_not_dispatch_android_creation,test_manager_launch_preserves_supervisor_plan_and_never_replays,test_existing_tmux_refuses_before_any_dispatch):
   test();print('PASS',test.__name__)
