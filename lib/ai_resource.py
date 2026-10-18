@@ -88,7 +88,7 @@ def profile_cmd(argv:list[str]) -> int:
 
 def session_cmd(argv:list[str]) -> int:
     sub=argv[0] if argv else "list"; rest=argv[1:]
-    provider=profile=workdir=None; limit=20; ranking="strict"; i=0
+    provider=profile=workdir=None; limit=20; ranking="strict"; i=0; tail=[]
     while i < len(rest):
         a=rest[i]
         if a in {"--provider", "--profile", "-d", "--directory", "--limit", "--rank"}:
@@ -106,8 +106,7 @@ def session_cmd(argv:list[str]) -> int:
                 return 2
             i+=2
         elif a=="--rank": ranking=rest[i+1]; i+=2
-        else: break
-    tail=rest[i:]
+        else: tail.append(a); i+=1
     if sub=="refresh": data=ai_session.refresh_session_index(limit=limit); print(f"indexed sessions: {len(data.get('sessions', []))}"); print(str(ai_store.SESSION_INDEX_FILE)); return 0
     if sub=="list":
         rows=ai_session.recent_sessions(provider,profile,workdir,limit,ranking)
